@@ -1,0 +1,93 @@
+# Discord Account Manager
+
+A web-based Discord account manager built originally as an Electron desktop app, converted to run as a full-stack web application. Developed by **Ahmed Dev** (`@4_3a`).
+
+## Architecture
+
+- **Backend**: Express.js server (`server.js`) on port 5000 serving both the REST API and static frontend files.
+- **Frontend**: Vanilla JS + HTML/CSS with ES modules (`index.html`, `src/`).
+- **Discord integration**: `discord.js-selfbot-v13` — maintains a live multi-client pool in server memory (one client per connected token).
+
+### Key Files
+
+- `server.js` — Express server: multi-client pool, anti-detection helpers, all REST endpoints (presence, bio, avatar, status rotation, activity simulator, messages, reactions).
+- `src/api.js` — Browser-side shim that replaces `window.electronAPI` with fetch calls.
+- `src/main.js` — Frontend entry point, theme + language toggle, mobile drawer.
+- `src/utils/i18n.js` — Bilingual (English / Arabic) translation system with full RTL support. Re-renders all dynamic managers (Tokens / Messages / Reactions / Old) when language is switched.
+- `src/utils/icons.js` — Inline Lucide-style SVG icon set (`icon(name, cls)`); zero network requests, themed via `currentColor`. Replaces all decorative emojis throughout the UI.
+- `src/styles/icons.css` — Icon sizing rules + the lightweight CSS-only **snowfall background** (20 GPU-accelerated particles, respects `prefers-reduced-motion`).
+- `src/components/` — UI managers:
+  - Friends, Servers, DMs, Groups (legacy)
+  - **TokensManager** — multi-account hub. Tabs: Accounts · Presence · Bio · **Avatar** · Rotate Status · **Activity Simulator**. Every tab supports both per-selection and **Apply to ALL connected** actions.
+  - **MessagesManager** — send to server channels / all DMs / all groups, multi-message panels, repeat (fast/natural), schedule. In test mode every action shows a Discord-style preview toast.
+  - **ReactionManager** — auto-react with mirror or specific emojis, auto-click buttons by name. Test mode shows preview toast.
+  - **OldManager** (DM/Group) — message cards include a **Copy Link** button.
+  - **PrivateManager** — real-time chat-style DM viewer. Pick any account, see all DMs with unread red-dot badges, switch accounts on the fly, open chat to type/reply, live-updated via SSE (`/api/private/stream`), bots-only filter and search included.
+  - **StatsManager** — quick analytics dashboard (saved/connected accounts, servers, owned servers, total members, DMs split by humans/bots, groups, recent DM activity).
+  - **LookupManager** — look up any server by ID. Returns full guild details if joined (text/voice channels, owner, your roles + join date, boosts, features, banner) or public preview (members, online, description) if not.
+- All Friends / Servers / DMs / Groups managers now ship with an account-picker dropdown for true multi-account viewing; DMs add a **bots-only** toggle, Groups gracefully fall back to gradient initials when the icon is missing.
+- `src/utils/` — Helpers: `tokenManager`, `messageDeleter` (parallel + adaptive throttle), `ui` (notifications, modals, **showTestPreview**), `i18n`, `taskBar` (global background-task progress bar).
+- `src/components/SearchManager.js` — Find any user by ID/username (even non-friends), shows mutual servers, last message, live voice state with all occupants, "screenshot voice" export.
+- `src/components/MassFriendManager.js` — Bulk add/remove friends from a server with filters and rate-limited background tasks (anti-ban defaults: 7s/req, max 50/run, stops on 5 consecutive failures).
+- Background task system (`server.js`): single task per account, live SSE updates on `/api/features/stream`, ring-buffer of 60 most recent tasks, cancel + clear endpoints.
+- PrivateManager: deleted DM messages now stay visible in red strike-through with `(محذوف)` mark via real-time `messageDelete` SSE event; image attachments are sent with proper extension/mime so Discord renders them as inline previews.
+- Login: luxurious animated screen with Discord logo, floating orbs, animated arrow indicators, support (`discord.gg/ens`) and Instagram (`@a_13qn`) cards. Bottom-right floating hamburger always-on shortcut to support server.
+- `src/styles/managers.css` — Styles for new managers + animations + RTL + responsive + test preview toast.
+- `src/utils/ui.js` — Now exports `showToast`, `pulseButton`, `showConfirm`, and `shakeFail` for unified UX feedback (bottom-right toasts, save-button pulse states, confirmation dialogs, fail-shake animation on invalid clicks).
+- `src/utils/sounds.js` — Refined to elegant, low-volume sine-only tones with low-pass filtering.
+
+## Recent UX/design improvements (Apr 2026)
+
+- Burger features menu (top-right) is hidden until login; duplicate items (Search, Mass Friend, History Log) removed since they're already in the nav sidebar.
+- Save buttons across the app (token save, anti-prune save, pic-capture save) now: confirm before saving, show "Saving…" → "Saved" pulse state, and emit a bottom-right toast (green=success, red=error).
+- "Save Token" renamed to "Save"; saving prompts a confirmation dialog before opening the name input.
+- Scope radios in PicManager and AntiPruneManager use custom-styled circles. Selecting "Specific servers" with no servers loaded shakes the radio and reverts to "All".
+- After picking servers in the chip selector, the list collapses to a one-line summary chip (`N · names · edit`) — clicking expands it back.
+- `setLang()` now re-renders the full set of dynamic managers (was missing Clone / HistoryLog / TokenHealth / Mentions / Pic / AntiPrune / Search / MassFriend).
+- Dark theme palette softened (`#0d1018` / `#141826` / `#1c2030` / accent `#6b78ff`); button hovers, transitions and shadows tuned for a more elegant feel.
+- Sound effects redesigned: chic, quiet, sine-wave only with a low-pass filter — no more harsh square/sawtooth tones.
+- `saved_tokens.json` — Persisted Discord tokens (local file).
+
+## Multi-account / anti-detection
+
+- Multiple tokens can be connected at once. The server keeps a `Map<name, client>` and one `activeName`.
+- Legacy endpoints use the active client; new endpoints accept an optional `tokens[]` array to fan out actions.
+- All sends go through a humanized helper (`sendTyping` + jittered delay) to mimic real users.
+- Message deleter uses a small worker pool with global cooldown on 429s.
+
+## Running
+
+```
+node server.js
+```
+
+The app runs on port 5000. When started outside Replit, it auto-opens the local URL in the default browser.
+
+## Test mode
+
+Type `test` in the login screen to enter offline test mode — credits show "Ahmed (Test)" with a Discord-style avatar so the UI can be explored without a real token.
+
+## Deployment
+
+Uses **VM deployment** (not autoscale) because the Discord clients maintain persistent in-memory state between requests.
+
+## Credits
+
+Developed and maintained by **Ahmed Dev** (`@4_3a`).
+
+## UX update — Apr 2026
+
+- **Burger menu (top-right)** is now the only place to open: History Log, Token Health, Mentions, Pic Capture, Anti-Prune, Sound, Search, Mass Friend. Sidebar focuses on core flows only (login, tokens, friends, servers, dms, private, groups, messages, reactions, history, stats, lookup, clone).
+- **Activity log** — `connect`, `disconnect`, `save_token`, `delete_token`, and `clone_messages` are now persisted via `recordHistory` and shown in the History Log panel with their own icons/colors.
+- **Global custom radios & checkboxes** — `.mm-page input[type=radio|checkbox]:not(.raw)` get the AntiPrune-style circular/square look across all panels. Add `.raw` to opt out.
+- **All native `confirm()` dialogs** in components have been replaced by the styled `showConfirm()` helper.
+
+### Clone — overhaul
+
+- `GET /api/clone/snapshot/server/:guildId?messages=1&perChannel=N` — captures structure + per-text-channel messages (parallel batches of 4 channels). Per-channel cap clamped to 1–200.
+- Channel snapshots now include `permission_overwrites` so role-based channel perms can be cloned.
+- `POST /api/clone/paste/server-build` is fully option-driven:
+  - `accounts: string[]` — pick one or more saved/connected accounts. The first account that owns/admins the target builds the structure; other accounts join in to post messages in parallel via temporary webhooks (each account creates its own webhook per channel; webhooks are deleted after).
+  - `options`: `{ categories, textChannels, voiceChannels, roles, rolePerms, channelPerms, emojis, messages, messageChannelIds, messageGapMs }`.
+  - Messages are restored via webhook (`username` + `avatar_url` preserved) for speed and authenticity.
+- New paste UI in CloneManager: option grid with custom checkboxes, multi-account chip selector, per-channel chooser modal with search and select-all, and a paste-finished report.
