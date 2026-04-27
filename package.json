@@ -10,8 +10,8 @@
     "package": "electron-builder"
   },
   "dependencies": {
-    "axios": "^1.6.7",
-    "discord.js-selfbot-v13": "^3.1.4",
+    "axios": "^1.15.2",
+    "discord.js-selfbot-v13": "^3.7.1",
     "express": "^5.2.1",
     "open": "^11.0.0"
   },

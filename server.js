@@ -450,6 +450,19 @@ app.post('/api/discord/dms/:channelId/close', async (req, res) => {
   } catch (e) { fail(res, e); }
 });
 
+// Open (or find) a DM channel with a user by their userId
+app.post('/api/discord/dm/open', async (req, res) => {
+  try {
+    const c = pickClient(req);
+    if (!c?.user) return fail(res, new Error('Not connected'));
+    const { userId } = req.body || {};
+    if (!userId) return fail(res, new Error('userId required'));
+    const user = await c.users.fetch(userId);
+    const dm = await user.createDM();
+    ok(res, { channelId: dm.id, userId: user.id, username: user.username });
+  } catch (e) { fail(res, e); }
+});
+
 // ═══════════════════════════════════════════════
 //  GROUPS
 // ═══════════════════════════════════════════════
