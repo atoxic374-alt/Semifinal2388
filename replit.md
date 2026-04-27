@@ -99,3 +99,30 @@ Developed and maintained by **Ahmed Dev** (`@4_3a`).
 - **Mass Friend filter** matches username, displayName **and** member ID (multi-token AND).
 - **Test mode (`TEST_RESPONSES` in `src/api.js`)** now ships rich data: 8 friends, 4 servers (with member counts), 7 channels (text+voice+categories), 5 DMs (with previews & unread), 2 groups, 6 sample messages with mentions & emoji, 28 server members for the bulk-friend preview, multiple connected clients, and 3 sample message-search hits — all using inline SVG data-URI avatars/icons so nothing 404s.
 - **Speed**: Send-loop fast gap stays at 500 ms; the new `/api/private/search` endpoint avoids artificial sleeps and only fetches a small slice (50 msgs) per channel for snappy results.
+
+## Apr 27, 2026 (later) — Stronger search + richer server lookup
+
+- **PrivateManager search overhaul** — server endpoint now does TWO passes:
+  1. **Fast pass** scans local message cache instantly (<50 ms response).
+  2. **Deep pass** hits Discord's NATIVE per-channel search API
+     (`GET /channels/:id/messages/search?content=`) for every DM in PARALLEL
+     (concurrency=8, hard 8 s timeout). This covers FULL message history,
+     not just cached messages.
+  3. Per-(account|query) result cache (60 s TTL) for instant repeats.
+  Results are de-duplicated by message id and sorted by recency. Channel
+  hits-by-name are also surfaced so DMs appear even without message matches.
+- **Server lookup overhaul** — `/api/lookup/server/:id` now returns:
+  description, splash/discoverySplash, online presence count (via parallel
+  preview API), maximum members, full channel breakdown (text/voice/cats/
+  announcement/stage/forum), top 8 roles with member counts, my role list +
+  my highest role + my key permissions + my nickname, owner avatar, vanity
+  URL + uses, boost progress to next tier, verification level, content
+  filter, NSFW level, MFA, locale, AFK/system/rules/updates channels,
+  emoji+animated+sticker counts, partnered/verified/community badges.
+  All extra fetches (preview + vanity URL info) run in parallel.
+- **LookupManager UI** rebuilt with: section titles, owner avatar pill,
+  vanity chip, partner/verified/community flags, boost-progress bar,
+  membership card with role chips (colored), permission chips, special
+  channels grid, channel-type tile grid, emoji/sticker stats.
+- **Test mode** for server lookup now returns a fully populated 27-channel
+  community server so the UI variants show real data.

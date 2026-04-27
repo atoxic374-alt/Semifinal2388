@@ -97,6 +97,48 @@ const TEST_RESPONSES = {
   listeners:{ success: true, listeners: [] },
   results:  { success: true, results: [] },
   ok:       { success: true },
+  serverInfo: { success: true, joined: true, server: {
+    id: '999000000000000001', name: 'Replit Builders',
+    icon: _testServerIcon('R', _TEST_PALETTE[0]),
+    banner: 'data:image/svg+xml;utf8,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="600" height="200"><defs><linearGradient id="b" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5865f2"/><stop offset="1" stop-color="#eb459e"/></linearGradient></defs><rect width="600" height="200" fill="url(#b)"/></svg>`),
+    splash: null, discoverySplash: null,
+    createdAt: _now - (1000*60*60*24*365*2), description: 'A community of builders shipping faster on Replit. Bots, full-stack apps, and good vibes.',
+    members: 1843, online: 412, maximum: 500000,
+    visibleText: 12, totalText: 14, totalVoice: 4, totalCats: 5, totalAnn: 1, totalStage: 1, totalForum: 2, totalChannels: 27,
+    totalRoles: 18,
+    topRoles: [
+      { id: 'r1', name: 'Owner',  color: '#eb459e', members: 1   },
+      { id: 'r2', name: 'Admin',  color: '#5865f2', members: 4   },
+      { id: 'r3', name: 'Mod',    color: '#3ba55d', members: 12  },
+      { id: 'r4', name: 'Booster',color: '#f47fff', members: 23  },
+      { id: 'r5', name: 'Member', color: null,      members: 1803 },
+    ],
+    ownerId: '111111111111111111', ownerName: 'ahmed_dev',
+    ownerAvatar: _testAvatar('A', _TEST_PALETTE[0]),
+    myRoles: 3, myRolesList: [
+      { id: 'r2', name: 'Admin',   color: '#5865f2', position: 18 },
+      { id: 'r4', name: 'Booster', color: '#f47fff', position: 12 },
+      { id: 'r5', name: 'Member',  color: null,      position: 1  },
+    ],
+    myHighestRole: { id: 'r2', name: 'Admin', color: '#5865f2', position: 18 },
+    myNickname: 'Ahmed (Test)',
+    myJoinedAt: _now - (1000*60*60*24*180),
+    myPermissions: ['ADMINISTRATOR','MANAGE_GUILD','MANAGE_CHANNELS','BAN_MEMBERS','KICK_MEMBERS'],
+    isOwner: false,
+    boosts: 9, tier: 1, nextTierAt: 14, boostProgress: 9/14, boostBarEnabled: true,
+    verificationLevel: 'MEDIUM', explicitFilter: 'MEMBERS_WITHOUT_ROLES',
+    nsfwLevel: 'DEFAULT', mfaLevel: 'NONE',
+    preferredLocale: 'en-US', region: null,
+    afkChannelId: 'a1', afkChannelName: 'AFK Lounge', afkTimeout: 300,
+    systemChannelId: 'sc1', systemChannelName: 'general',
+    rulesChannelId: 'rc1', rulesChannelName: 'rules',
+    publicUpdatesChannelId: 'pu1', publicUpdatesChannelName: 'mod-log',
+    widgetEnabled: true, widgetChannelId: null,
+    emojiCount: 47, animatedEmojis: 12, stickerCount: 5,
+    vanityCode: 'replit-builders', vanityUses: 1280,
+    features: ['COMMUNITY','NEWS','VANITY_URL','BANNER','ANIMATED_ICON','INVITE_SPLASH','WELCOME_SCREEN_ENABLED','DISCOVERABLE'],
+    partnered: false, verified: false, community: true,
+  }},
   privateSearch: { success: true, total: 3, matches: [
     { channelId: '777000000000000001', channelName: 'Sara Design', channelAvatar: _testAvatar('S', _TEST_PALETTE[1]), messageId: 'm3',  content: 'sounds great, ship it 🚀',                          author: { id: '111111111111111112', username: 'sara_design', avatar: _testAvatar('S', _TEST_PALETTE[1]) }, ts: _now - 1000*60*50 },
     { channelId: '777000000000000002', channelName: 'Omar',        channelAvatar: _testAvatar('O', _TEST_PALETTE[2]), messageId: 'm10', content: 'pushed the fix for the dropdown clipping bug',     author: { id: '111111111111111113', username: 'omar.codes',  avatar: _testAvatar('O', _TEST_PALETTE[2]) }, ts: _now - 1000*60*22 },
@@ -239,7 +281,11 @@ window.electronAPI = {
   getStats:         () => apiCall('GET', '/api/stats/summary'),
 
   // ── Server Lookup
-  lookupServer:     (id) => apiCall('GET', `/api/lookup/server/${encodeURIComponent(id)}`),
+  lookupServer:     (id, account) => {
+    if (window._testMode) return Promise.resolve(TEST_RESPONSES.serverInfo);
+    const q = account ? `?account=${encodeURIComponent(account)}` : '';
+    return apiCall('GET', `/api/lookup/server/${encodeURIComponent(id)}${q}`);
+  },
 
   // ── History Log
   getHistoryLog:    () => apiCall('GET', '/api/history-log'),

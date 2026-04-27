@@ -1331,57 +1331,158 @@ app.post('/api/private/read/:channelId', (req, res) => {
   ok(res);
 });
 
-// Discord-style global search across DMs (and optionally groups). Scans every
-// open DM/GROUP_DM channel's locally-cached messages for the query, returning
-// matches grouped per-channel with snippets.
+// ─── Private Manager: Strong global search ──────────────────────────
+// Strategy (Discord-style):
+//   1) FAST PASS — instantly match against locally-cached messages so the user
+//      gets results in <50ms while the server makes the deeper call.
+//   2) DEEP PASS — call Discord's NATIVE per-channel search API
+//      (`GET /channels/:id/messages/search?content=<q>`) in parallel with a
+//      concurrency cap. This covers the FULL message history for each DM, not
+//      just what's cached. Results are merged + de-duplicated and returned.
+//   3) CACHE — keep a 60-second per-(account|query) result cache so repeated
+//      typing/scrolling reuses the deep results instantly.
+const _pmSearchCache = new Map(); // key = account|q  -> { ts, matches }
+const _PM_SEARCH_TTL = 60 * 1000;
+
+async function _runPoolP(items, limit, fn) {
+  const out = []; let i = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) {
+      const idx = i++; try { out[idx] = await fn(items[idx], idx); }
+      catch (e) { out[idx] = null; }
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
+function _mkMatch(ch, m) {
+  const recip = ch.recipient || (ch.recipients && ch.recipients.first?.());
+  const channelAvatar = recip?.displayAvatarURL?.({ size: 64 })
+    || (m.author?.displayAvatarURL?.({ size: 64 }))
+    || defaultAvatarUrl(recip?.id || ch.id || '0');
+  return {
+    channelId: ch.id,
+    channelType: ch.type,
+    channelName: recip?.username || ch.name || 'DM',
+    channelAvatar,
+    messageId: m.id,
+    content: String(m.content || ''),
+    author: {
+      id: m.author?.id,
+      username: m.author?.username || '',
+      avatar: m.author?.displayAvatarURL?.({ size: 32 })
+        || (m.author?.id ? defaultAvatarUrl(m.author.id) : null),
+    },
+    ts: m.createdTimestamp || (m.timestamp ? new Date(m.timestamp).getTime() : Date.now()),
+  };
+}
+
+// Convert Discord's native search hit (raw API JSON) into our match shape.
+function _mkMatchFromRaw(ch, raw) {
+  const recip = ch.recipient || (ch.recipients && ch.recipients.first?.());
+  const author = raw.author || {};
+  const authorAvatar = author.avatar
+    ? `https://cdn.discordapp.com/avatars/${author.id}/${author.avatar}.${author.avatar.startsWith('a_') ? 'gif' : 'png'}?size=64`
+    : defaultAvatarUrl(author.id || '0');
+  const channelAvatar = recip?.displayAvatarURL?.({ size: 64 })
+    || authorAvatar
+    || defaultAvatarUrl(recip?.id || ch.id || '0');
+  return {
+    channelId: ch.id,
+    channelType: ch.type,
+    channelName: recip?.username || ch.name || 'DM',
+    channelAvatar,
+    messageId: raw.id,
+    content: String(raw.content || ''),
+    author: { id: author.id, username: author.username || '', avatar: authorAvatar },
+    ts: raw.timestamp ? new Date(raw.timestamp).getTime() : Date.now(),
+  };
+}
+
 app.get('/api/private/search', async (req, res) => {
   try {
     const q = (req.query.q || '').toString().trim();
-    if (q.length < 2) return ok(res, { matches: [], total: 0 });
+    if (q.length < 2) return ok(res, { matches: [], total: 0, source: 'short' });
     const account = (req.query.account || '').toString().trim();
     const includeGroups = req.query.groups === '1' || req.query.groups === 'true';
-    const limit = Math.min(50, parseInt(req.query.limit || '20', 10));
+    const limit = Math.min(80, Math.max(5, parseInt(req.query.limit || '40', 10)));
+    const deep = req.query.deep !== '0'; // default: deep search ON
 
-    // Pick the right client
-    const c = account ? getClientByName(account) : discordClient;
-    if (!c) return fail(res, new Error('Not connected'));
+    const c = account ? getClientByName(account) : (discordClient || null);
+    if (!c?.token) return fail(res, new Error('Not connected'));
+
+    const cacheKey = `${account || activeName || '_'}|${q.toLowerCase()}|${includeGroups ? 'g' : ''}`;
+    const cached = _pmSearchCache.get(cacheKey);
+    if (cached && (Date.now() - cached.ts) < _PM_SEARCH_TTL) {
+      return ok(res, { matches: cached.matches.slice(0, limit), total: cached.matches.length, source: 'cache' });
+    }
+
     const ql = q.toLowerCase();
-
-    const matches = [];
     const channels = Array.from(c.channels.cache.values()).filter(ch =>
       ch.type === 'DM' || (includeGroups && ch.type === 'GROUP_DM'));
 
+    // ── 1) FAST PASS: scan local cache (no network) ──────────────────
+    const seen = new Set();
+    const matches = [];
     for (const ch of channels) {
-      // Pull a recent slice (cached + small fetch). We avoid heavy fetching
-      // to keep the search snappy — Discord's own client also only searches
-      // what it has loaded.
-      let msgs = Array.from(ch.messages?.cache?.values?.() || []);
-      if (msgs.length < 25) {
-        try {
-          const fetched = await ch.messages.fetch({ limit: 50 });
-          msgs = Array.from(fetched.values());
-        } catch (e) {}
-      }
-      for (const m of msgs) {
-        const content = String(m.content || '');
-        const author = m.author?.username || '';
-        if (content.toLowerCase().includes(ql) || author.toLowerCase().includes(ql)) {
-          matches.push({
-            channelId: ch.id,
-            channelName: ch.recipient?.username || ch.name || 'DM',
-            channelAvatar: ch.recipient?.displayAvatarURL?.({ size: 64 }) || defaultAvatarUrl(ch.recipient?.id || 0),
-            messageId: m.id,
-            content,
-            author: { id: m.author?.id, username: author, avatar: m.author?.displayAvatarURL?.({ size: 32 }) || null },
-            ts: m.createdTimestamp,
-          });
-          if (matches.length >= limit) break;
+      const recipName = (ch.recipient?.username || ch.name || '').toLowerCase();
+      const recipNick = (ch.recipient?.globalName || '').toLowerCase();
+      // Surface channels matching by name/handle even when they have no message hits
+      const channelHitByName = recipName.includes(ql) || recipNick.includes(ql);
+      const cached = Array.from(ch.messages?.cache?.values?.() || []);
+      for (const m of cached) {
+        const cn = String(m.content || '').toLowerCase();
+        const an = (m.author?.username || '').toLowerCase();
+        if (cn.includes(ql) || an.includes(ql)) {
+          if (seen.has(m.id)) continue;
+          seen.add(m.id);
+          matches.push(_mkMatch(ch, m));
         }
       }
-      if (matches.length >= limit) break;
+      if (channelHitByName && !matches.some(x => x.channelId === ch.id)) {
+        // Synthetic "channel" hit so DM still appears in messages section
+        const last = cached.sort((a, b) => (b.createdTimestamp||0)-(a.createdTimestamp||0))[0];
+        if (last) { seen.add(last.id); matches.push(_mkMatch(ch, last)); }
+      }
     }
+
+    // ── 2) DEEP PASS: native Discord search API in parallel ──────────
+    if (deep && c?.token && channels.length) {
+      const headers = { Authorization: c.token, 'Content-Type': 'application/json' };
+      // Run searches in parallel, with a tight concurrency cap to be polite.
+      const PAR = 8;
+      const perChannelLimit = 25;
+      const t0 = Date.now();
+      const TIMEOUT_MS = 8000; // hard cap so the request stays snappy
+      await _runPoolP(channels, PAR, async (ch) => {
+        if ((Date.now() - t0) > TIMEOUT_MS) return;
+        try {
+          const url = `https://discord.com/api/v9/channels/${ch.id}/messages/search`
+            + `?content=${encodeURIComponent(q)}&limit=${perChannelLimit}`;
+          const r = await axios.get(url, { headers, timeout: 6000, validateStatus: () => true });
+          if (r.status === 429) return;
+          if (r.status >= 400 || !r.data) return;
+          const groups = r.data.messages || [];
+          for (const grp of groups) {
+            const hit = (grp || []).find(x => x?.hit) || (grp || [])[0];
+            if (!hit || seen.has(hit.id)) continue;
+            seen.add(hit.id);
+            matches.push(_mkMatchFromRaw(ch, hit));
+          }
+        } catch (e) {}
+      });
+    }
+
+    // Sort by recency, hard cap, cache
     matches.sort((a, b) => (b.ts || 0) - (a.ts || 0));
-    ok(res, { matches, total: matches.length });
+    const final = matches.slice(0, 200);
+    _pmSearchCache.set(cacheKey, { ts: Date.now(), matches: final });
+    if (_pmSearchCache.size > 200) {
+      const oldest = [..._pmSearchCache.entries()].sort((a,b)=>a[1].ts-b[1].ts)[0]?.[0];
+      if (oldest) _pmSearchCache.delete(oldest);
+    }
+    ok(res, { matches: final.slice(0, limit), total: final.length, source: 'fresh' });
   } catch (e) { fail(res, e); }
 });
 
@@ -1434,56 +1535,198 @@ app.get('/api/stats/summary', async (req, res) => {
 // ═══════════════════════════════════════════════
 //  SERVER LOOKUP
 // ═══════════════════════════════════════════════
+// Boosts required for each tier (Discord constants)
+const _BOOST_TIER_REQ = { 0: 2, 1: 7, 2: 14, 3: 0 };
+function _verifNum(v) {
+  // Discord.js v13 maps strings; handle both
+  const map = { NONE: 0, LOW: 1, MEDIUM: 2, HIGH: 3, VERY_HIGH: 4 };
+  if (typeof v === 'number') return v;
+  return map[v] ?? null;
+}
+function _verifLabel(v) { return ['NONE','LOW','MEDIUM','HIGH','VERY_HIGH'][_verifNum(v) ?? 0] || null; }
+function _filterLabel(v) {
+  if (typeof v === 'number') return ['DISABLED','MEMBERS_WITHOUT_ROLES','ALL_MEMBERS'][v] || null;
+  return v || null;
+}
+function _nsfwLabel(v) {
+  if (typeof v === 'number') return ['DEFAULT','EXPLICIT','SAFE','AGE_RESTRICTED'][v] || null;
+  return v || null;
+}
+
 app.get('/api/lookup/server/:id', async (req, res) => {
   try {
     const c = pickClient(req);
     if (!c?.token) return fail(res, new Error('Not connected'));
     const id = req.params.id;
     const guild = c.guilds.cache.get(id);
+
     if (guild) {
-      // Member channels visible to "me"
       const me = guild.members.cache.get(c.user.id);
-      const visibleText = guild.channels.cache.filter(ch => (ch.type === 'GUILD_TEXT' || ch.type === 0) && ch.viewable).size;
-      const totalText   = guild.channels.cache.filter(ch => ch.type === 'GUILD_TEXT' || ch.type === 0).size;
-      const totalVoice  = guild.channels.cache.filter(ch => ch.type === 'GUILD_VOICE' || ch.type === 2).size;
+      // Channel breakdown
+      const isText  = ch => ch.type === 'GUILD_TEXT'  || ch.type === 0;
+      const isVoice = ch => ch.type === 'GUILD_VOICE' || ch.type === 2;
+      const isCat   = ch => ch.type === 'GUILD_CATEGORY' || ch.type === 4;
+      const isAnn   = ch => ch.type === 'GUILD_NEWS' || ch.type === 5;
+      const isStage = ch => ch.type === 'GUILD_STAGE_VOICE' || ch.type === 13;
+      const isForum = ch => ch.type === 'GUILD_FORUM' || ch.type === 15;
+      const allCh = Array.from(guild.channels.cache.values());
+      const visibleText = allCh.filter(ch => isText(ch) && ch.viewable).length;
+      const totalText   = allCh.filter(isText).length;
+      const totalVoice  = allCh.filter(isVoice).length;
+      const totalCats   = allCh.filter(isCat).length;
+      const totalAnn    = allCh.filter(isAnn).length;
+      const totalStage  = allCh.filter(isStage).length;
+      const totalForum  = allCh.filter(isForum).length;
+
+      // Roles
+      const roles = Array.from(guild.roles.cache.values())
+        .filter(r => r.id !== guild.id)  // exclude @everyone
+        .sort((a, b) => (b.position||0) - (a.position||0));
+      const myRoles = me?.roles?.cache
+        ? Array.from(me.roles.cache.values())
+            .filter(r => r.id !== guild.id)
+            .sort((a, b) => (b.position||0) - (a.position||0))
+            .map(r => ({ id: r.id, name: r.name, color: r.hexColor || null, position: r.position }))
+        : [];
+      const myHighest = myRoles[0] || null;
+
+      // Owner
       const owner = await guild.members.fetch(guild.ownerId).catch(()=>null);
+
+      // Try to get extra preview data (online count, description) in parallel —
+      // even when we're already a member.
+      const headers = { Authorization: c.token };
+      const [previewRes, vanityRes] = await Promise.all([
+        axios.get(`https://discord.com/api/v9/guilds/${guild.id}/preview`, { headers, validateStatus: () => true })
+          .catch(() => ({ status: 0, data: null })),
+        guild.vanityURLCode
+          ? axios.get(`https://discord.com/api/v9/guilds/${guild.id}/vanity-url`, { headers, validateStatus: () => true })
+              .catch(() => ({ status: 0, data: null }))
+          : Promise.resolve({ status: 0, data: null }),
+      ]);
+      const preview = previewRes?.status === 200 ? previewRes.data : null;
+      const vanityData = vanityRes?.status === 200 ? vanityRes.data : null;
+
+      // Boost progress to next tier
+      const tier = guild.premiumTier || 0;
+      const boosts = guild.premiumSubscriptionCount || 0;
+      let nextTierAt = null, boostProgress = null;
+      const tierNum = typeof tier === 'number' ? tier : (parseInt(tier, 10) || 0);
+      if (tierNum < 3) {
+        nextTierAt = _BOOST_TIER_REQ[tierNum];
+        boostProgress = nextTierAt > 0 ? Math.min(1, boosts / nextTierAt) : null;
+      }
+
+      // Resolve special channels by id
+      const _chName = (cid) => cid ? (guild.channels.cache.get(cid)?.name || null) : null;
+
+      // My permissions (admin-style summary)
+      let myPermsList = null;
+      try {
+        if (me?.permissions?.toArray) myPermsList = me.permissions.toArray();
+      } catch (e) {}
+
       ok(res, {
         joined: true,
         server: {
           id: guild.id,
           name: guild.name,
-          icon: guild.iconURL({ size: 256, forceStatic: false }) || null,
+          icon: guild.iconURL?.({ size: 256, forceStatic: false }) || null,
           banner: guild.bannerURL?.({ size: 600 }) || null,
+          splash: guild.splashURL?.({ size: 600 }) || null,
+          discoverySplash: guild.discoverySplashURL?.({ size: 600 }) || null,
           createdAt: guild.createdTimestamp,
-          members: guild.memberCount || 0,
-          visibleText, totalText, totalVoice,
+          description: guild.description || preview?.description || '',
+          // members / presence
+          members: guild.memberCount || preview?.approximate_member_count || 0,
+          online: preview?.approximate_presence_count || null,
+          maximum: guild.maximumMembers || null,
+          // channels
+          visibleText, totalText, totalVoice, totalCats, totalAnn, totalStage, totalForum,
+          totalChannels: allCh.length,
+          // roles
+          totalRoles: roles.length,
+          topRoles: roles.slice(0, 8).map(r => ({ id: r.id, name: r.name, color: r.hexColor || null, members: r.members?.size ?? null })),
+          // owner
           ownerId: guild.ownerId,
           ownerName: owner?.user?.tag || null,
           ownerAvatar: owner?.user?.displayAvatarURL?.({ size: 64 }) || null,
-          myRoles: me?.roles?.cache?.size || 0,
+          // my membership
+          myRoles: myRoles.length,
+          myRolesList: myRoles,
+          myHighestRole: myHighest,
+          myNickname: me?.nickname || null,
           myJoinedAt: me?.joinedTimestamp || null,
-          boosts: guild.premiumSubscriptionCount || 0,
-          tier:   guild.premiumTier || 0,
-          features: guild.features || []
+          myPermissions: myPermsList,
+          isOwner: guild.ownerId === c.user.id,
+          // boosts
+          boosts, tier: tierNum, nextTierAt, boostProgress,
+          boostBarEnabled: guild.premiumProgressBarEnabled ?? null,
+          // settings
+          verificationLevel: _verifLabel(guild.verificationLevel),
+          explicitFilter: _filterLabel(guild.explicitContentFilter),
+          nsfwLevel: _nsfwLabel(guild.nsfwLevel),
+          mfaLevel: typeof guild.mfaLevel === 'number' ? (guild.mfaLevel === 1 ? 'ELEVATED' : 'NONE') : (guild.mfaLevel || null),
+          preferredLocale: guild.preferredLocale || null,
+          region: guild.region || null,
+          // special channels
+          afkChannelId: guild.afkChannelId || null,
+          afkChannelName: _chName(guild.afkChannelId),
+          afkTimeout: guild.afkTimeout || null,
+          systemChannelId: guild.systemChannelId || null,
+          systemChannelName: _chName(guild.systemChannelId),
+          rulesChannelId: guild.rulesChannelId || null,
+          rulesChannelName: _chName(guild.rulesChannelId),
+          publicUpdatesChannelId: guild.publicUpdatesChannelId || null,
+          publicUpdatesChannelName: _chName(guild.publicUpdatesChannelId),
+          widgetEnabled: guild.widgetEnabled ?? null,
+          widgetChannelId: guild.widgetChannelId || null,
+          // emojis / stickers
+          emojiCount:    guild.emojis?.cache?.size ?? null,
+          animatedEmojis: guild.emojis?.cache ? Array.from(guild.emojis.cache.values()).filter(e => e.animated).length : null,
+          stickerCount:  guild.stickers?.cache?.size ?? null,
+          // vanity / invite
+          vanityCode:    guild.vanityURLCode || null,
+          vanityUses:    vanityData?.uses ?? null,
+          // features
+          features: guild.features || [],
+          // partner / verified flags surfaced from features
+          partnered: (guild.features || []).includes('PARTNERED'),
+          verified:  (guild.features || []).includes('VERIFIED'),
+          community: (guild.features || []).includes('COMMUNITY'),
         }
       });
       return;
     }
-    // Not joined — fall back to public preview API
-    const r = await axios.get(`https://discord.com/api/v9/guilds/${id}/preview`, {
-      headers: { Authorization: c.token }
-    });
-    const d = r.data;
+
+    // ── Not joined — public preview + invite info (parallel) ────────
+    const headers = { Authorization: c.token };
+    const [previewRes] = await Promise.all([
+      axios.get(`https://discord.com/api/v9/guilds/${id}/preview`, { headers, validateStatus: () => true }),
+    ]);
+    if (previewRes.status >= 400 || !previewRes.data) {
+      throw new Error(previewRes.data?.message || `Server not found (status ${previewRes.status})`);
+    }
+    const d = previewRes.data;
     ok(res, {
       joined: false,
       server: {
         id: d.id, name: d.name,
         icon: d.icon ? `https://cdn.discordapp.com/icons/${d.id}/${d.icon}.png?size=256` : null,
         banner: d.banner ? `https://cdn.discordapp.com/banners/${d.id}/${d.banner}.png?size=600` : null,
+        splash: d.splash ? `https://cdn.discordapp.com/splashes/${d.id}/${d.splash}.png?size=600` : null,
+        discoverySplash: d.discovery_splash ? `https://cdn.discordapp.com/discovery-splashes/${d.id}/${d.discovery_splash}.png?size=600` : null,
+        createdAt: Number((BigInt(d.id) >> 22n) + 1420070400000n),
         members: d.approximate_member_count || 0,
         online: d.approximate_presence_count || 0,
         description: d.description || '',
-        features: d.features || []
+        emojiCount: (d.emojis || []).length,
+        animatedEmojis: (d.emojis || []).filter(e => e.animated).length,
+        stickerCount: (d.stickers || []).length,
+        features: d.features || [],
+        partnered: (d.features || []).includes('PARTNERED'),
+        verified:  (d.features || []).includes('VERIFIED'),
+        community: (d.features || []).includes('COMMUNITY'),
       }
     });
   } catch (e) { fail(res, e); }
