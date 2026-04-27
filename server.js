@@ -185,6 +185,23 @@ async function connectOne(token, name) {
   try { if (typeof attachPicListener === 'function') attachPicListener(finalName, client); } catch (e) {}
   try { if (typeof attachAntiPruneListener === 'function') attachAntiPruneListener(finalName, client); } catch (e) {}
   try { if (typeof attachDMDeleteListener === 'function') attachDMDeleteListener(finalName, client); } catch (e) {}
+
+  // ── Auto-rejoin voice sessions from previous run ──
+  setTimeout(() => {
+    try {
+      const saved = loadVoicePersist();
+      const mine  = saved.filter(s => s.name === finalName);
+      for (const s of mine) {
+        try {
+          const shard = client.ws?.shards?.first?.() || client.ws?.shards?.get?.(0);
+          if (!shard) continue;
+          shard.send({ op: 4, d: { guild_id: s.guildId, channel_id: s.channelId, self_mute: !!s.selfMute, self_deaf: !!s.selfDeaf, self_video: !!s.selfVideo, self_stream: !!s.selfStream } });
+          voiceSessions.set(voiceSessionKey(finalName, s.guildId), { ...s, joinedAt: Date.now() });
+        } catch (e) { /* skip failed guild */ }
+      }
+    } catch (e) { /* non-fatal */ }
+  }, 3000); // 3s delay — lets the WS connection fully stabilise before sending voice op
+
   return { name: finalName, username: client.user.tag, id: client.user.id };
 }
 
@@ -4393,6 +4410,27 @@ const voiceSessions   = new Map(); // "<name>_<guildId>" -> { name, guildId, cha
 const voiceRotations  = new Map(); // rotationId -> { id, name, guildId, channels, intervalMs, randomOrder, timer, currentIdx, nextAt }
 const voiceStateCycles= new Map(); // cycleId    -> { id, accounts, states, intervalMs, timer, currentIdx, nextAt }
 
+// ── Voice Persistence (auto-rejoin on restart) ──────────────────────────────
+const VOICE_PERSIST_PATH = path.join(__dirname, 'data', 'voice-persist.json');
+
+function persistVoice() {
+  try {
+    const arr = Array.from(voiceSessions.values());
+    fs.writeFileSync(VOICE_PERSIST_PATH, JSON.stringify(arr, null, 2));
+  } catch (e) { /* non-fatal */ }
+}
+
+function loadVoicePersist() {
+  try {
+    if (!fs.existsSync(VOICE_PERSIST_PATH)) return [];
+    return JSON.parse(fs.readFileSync(VOICE_PERSIST_PATH, 'utf8')) || [];
+  } catch (e) { return []; }
+}
+
+// Wrappers that persist on every mutation
+function vsSet(key, val) { voiceSessions.set(key, val); persistVoice(); }
+function vsDel(key)      { voiceSessions.delete(key);   persistVoice(); }
+
 function sendVoiceOp(client, guildId, channelId, selfMute = false, selfDeaf = false, selfVideo = false, selfStream = false) {
   try {
     const shard = client.ws?.shards?.first?.() || client.ws?.shards?.get?.(0);
@@ -4476,7 +4514,7 @@ app.post('/api/voice/join', (req, res) => {
     const sent = sendVoiceOp(client, guildId, channelId, selfMute, selfDeaf, false, false);
     if (sent) {
       const key = voiceSessionKey(name, guildId);
-      voiceSessions.set(key, { name, guildId, channelId, selfMute, selfDeaf, selfVideo: false, selfStream: false, joinedAt: Date.now() });
+      vsSet(key, { name, guildId, channelId, selfMute, selfDeaf, selfVideo: false, selfStream: false, joinedAt: Date.now() });
     }
     results.push({ name, ok: sent, error: sent ? null : 'Failed to send voice op' });
   }
@@ -4493,7 +4531,7 @@ app.post('/api/voice/leave', (req, res) => {
     if (!client) { results.push({ name, ok: false }); continue; }
     const sent = sendVoiceOp(client, guildId, null, false, false, false, false);
     const key = voiceSessionKey(name, guildId);
-    voiceSessions.delete(key);
+    vsDel(key);
     results.push({ name, ok: sent });
   }
   ok(res, { results });
@@ -4515,7 +4553,7 @@ app.post('/api/voice/state', (req, res) => {
     const sv = selfVideo !== undefined ? selfVideo : (sess?.selfVideo || false);
     const ss = selfStream!== undefined ? selfStream: (sess?.selfStream|| false);
     const sent = sendVoiceOp(client, guildId, chId, sm, sd, sv, ss);
-    if (sent && sess) Object.assign(sess, { selfMute: sm, selfDeaf: sd, selfVideo: sv, selfStream: ss });
+    if (sent && sess) { Object.assign(sess, { selfMute: sm, selfDeaf: sd, selfVideo: sv, selfStream: ss }); persistVoice(); }
     results.push({ name, ok: sent });
   }
   ok(res, { results });
@@ -4529,7 +4567,7 @@ app.post('/api/voice/join-all', (req, res) => {
   for (const [name, entry] of clients.entries()) {
     if (!entry?.client?.ws) continue;
     const sent = sendVoiceOp(entry.client, guildId, channelId, selfMute, selfDeaf, false, false);
-    if (sent) voiceSessions.set(voiceSessionKey(name, guildId), { name, guildId, channelId, selfMute, selfDeaf, selfVideo: false, selfStream: false, joinedAt: Date.now() });
+    if (sent) vsSet(voiceSessionKey(name, guildId), { name, guildId, channelId, selfMute, selfDeaf, selfVideo: false, selfStream: false, joinedAt: Date.now() });
     results.push({ name, ok: sent });
   }
   ok(res, { results });
@@ -4547,7 +4585,7 @@ app.post('/api/voice/distribute-random', (req, res) => {
     if (!client) { results.push({ name, ok: false, channelId: null }); return; }
     const channelId = shuffled[i % shuffled.length];
     const sent = sendVoiceOp(client, guildId, channelId, false, false, false, false);
-    if (sent) voiceSessions.set(voiceSessionKey(name, guildId), { name, guildId, channelId, selfMute: false, selfDeaf: false, selfVideo: false, selfStream: false, joinedAt: Date.now() });
+    if (sent) vsSet(voiceSessionKey(name, guildId), { name, guildId, channelId, selfMute: false, selfDeaf: false, selfVideo: false, selfStream: false, joinedAt: Date.now() });
     results.push({ name, ok: sent, channelId });
   });
   ok(res, { results });
@@ -4578,7 +4616,7 @@ app.post('/api/voice/rotation/start', (req, res) => {
       const key = voiceSessionKey(name, guildId);
       const sess = voiceSessions.get(key);
       if (sess) sess.channelId = channelId;
-      else voiceSessions.set(key, { name, guildId, channelId, selfMute: false, selfDeaf: false, selfVideo: false, selfStream: false, joinedAt: Date.now() });
+      else vsSet(key, { name, guildId, channelId, selfMute: false, selfDeaf: false, selfVideo: false, selfStream: false, joinedAt: Date.now() });
     }
   }
 
@@ -4588,7 +4626,7 @@ app.post('/api/voice/rotation/start', (req, res) => {
     const client = getVoiceClient(name);
     if (!client) continue;
     sendVoiceOp(client, guildId, firstChannel, false, false, false, false);
-    voiceSessions.set(voiceSessionKey(name, guildId), { name, guildId, channelId: firstChannel, selfMute: false, selfDeaf: false, selfVideo: false, selfStream: false, joinedAt: Date.now() });
+    vsSet(voiceSessionKey(name, guildId), { name, guildId, channelId: firstChannel, selfMute: false, selfDeaf: false, selfVideo: false, selfStream: false, joinedAt: Date.now() });
   }
 
   rotation.timer = setInterval(doRotate, intervalMs);
