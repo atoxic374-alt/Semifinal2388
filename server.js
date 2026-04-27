@@ -4,9 +4,30 @@ const fs = require('fs');
 const axios = require('axios');
 const { exec } = require('child_process');
 const { Client, RichPresence, CustomStatus } = require('discord.js-selfbot-v13');
+const { getStore } = require('./lib/jsonStore');
 
 const app = express();
 const PORT = 5000;
+
+// Bounded-set helper — prevents Sets used for "first-time-only" warnings or
+// dedupe windows from growing without limit. When the cap is hit we drop the
+// oldest insertion (Set iteration order = insertion order).
+function addBounded(set, value, max) {
+  if (!set.has(value) && set.size >= max) {
+    const oldest = set.values().next().value;
+    if (oldest !== undefined) set.delete(oldest);
+  }
+  set.add(value);
+}
+
+// Bounded-map helper — same idea for Maps with a "ts" field per entry.
+function addBoundedMap(map, key, value, max) {
+  if (!map.has(key) && map.size >= max) {
+    const oldest = map.keys().next().value;
+    if (oldest !== undefined) map.delete(oldest);
+  }
+  map.set(key, value);
+}
 
 app.use(express.json({ limit: '10mb' }));
 
@@ -24,10 +45,11 @@ app.get('/favicon.ico', (req, res) => {
 
 app.use(express.static(path.join(__dirname)));
 
+// ── Persistent stores ────────────────────────────────────────────────
+// Atomic, queued, debounced JSON writes with rolling backups.
+// See lib/jsonStore.js for details.
 const tokensPath = path.join(__dirname, 'saved_tokens.json');
-if (!fs.existsSync(tokensPath)) {
-  fs.writeFileSync(tokensPath, '[]', 'utf8');
-}
+const tokensStore = getStore(tokensPath, []);
 
 // ───────────────────────────────────────────────
 // Multi-token client pool
@@ -266,7 +288,7 @@ app.post('/api/discord/active', (req, res) => {
 // Auto-connect saved tokens that are flagged autoConnect
 async function autoConnectSaved() {
   try {
-    const tokens = JSON.parse(fs.readFileSync(tokensPath, 'utf8'));
+    const tokens = readTokens();
     for (const t of tokens) {
       if (t.autoConnect) {
         try {
@@ -548,8 +570,8 @@ app.delete('/api/discord/groups/:channelId/messages/:messageId', async (req, res
 // ═══════════════════════════════════════════════
 //  TOKEN STORAGE (saved tokens with autoConnect)
 // ═══════════════════════════════════════════════
-function readTokens() { return JSON.parse(fs.readFileSync(tokensPath, 'utf8')); }
-function writeTokens(arr) { fs.writeFileSync(tokensPath, JSON.stringify(arr, null, 2)); }
+function readTokens() { return tokensStore.read(); }
+function writeTokens(arr) { tokensStore.write(arr); }
 
 app.get('/api/tokens', (req, res) => {
   try {
@@ -1413,11 +1435,15 @@ app.get('/api/history/server-first/:serverId', async (req, res) => {
 // ═══════════════════════════════════════════════
 // Per-account in-memory unread/last-message store
 const dmState = new Map(); // key: account|channelId -> { lastMsg, unread, ts }
+const DM_STATE_MAX = 5000; // cap so a 24/7 server with thousands of DMs doesn't leak
 const sseClients = new Set(); // { res, account }
+const SSE_PRIVATE_MAX = 200;  // hard cap on concurrent listeners
 
 function bumpDM(accountName, channelId, msg, fromMe = false) {
   const k = `${accountName}|${channelId}`;
   const prev = dmState.get(k) || { unread: 0 };
+  // Re-insert at the end so LRU eviction below favours dropping cold entries.
+  if (dmState.has(k)) dmState.delete(k);
   dmState.set(k, {
     lastMsg: msg.content || (msg.attachments?.size ? '[attachment]' : ''),
     lastAuthor: msg.author?.id,
@@ -1425,6 +1451,11 @@ function bumpDM(accountName, channelId, msg, fromMe = false) {
     unread: fromMe ? 0 : (prev.unread || 0) + 1,
     ts: msg.createdTimestamp || Date.now()
   });
+  if (dmState.size > DM_STATE_MAX) {
+    const drop = dmState.size - DM_STATE_MAX;
+    const it = dmState.keys();
+    for (let i = 0; i < drop; i++) dmState.delete(it.next().value);
+  }
 }
 
 function attachDMListener(name, client) {
@@ -1473,9 +1504,29 @@ app.get('/api/private/stream', (req, res) => {
   res.write(`: connected\n\n`);
   const account = (req.query.account || '').trim();
   const sc = { res, account };
+
+  // Drop the oldest listener if we're at the cap so a runaway client can't OOM us.
+  if (sseClients.size >= SSE_PRIVATE_MAX) {
+    const oldest = sseClients.values().next().value;
+    if (oldest) {
+      try { oldest.res.end(); } catch {}
+      sseClients.delete(oldest);
+    }
+  }
   sseClients.add(sc);
+
   const ping = setInterval(() => { try { res.write(`: ping\n\n`); } catch (e) {} }, 25000);
-  req.on('close', () => { clearInterval(ping); sseClients.delete(sc); });
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    clearInterval(ping);
+    sseClients.delete(sc);
+  };
+  req.on('close', cleanup);
+  req.on('error', cleanup);
+  res.on('close', cleanup);
+  res.on('error', cleanup);
 });
 
 app.get('/api/private/dms', async (req, res) => {
@@ -2036,10 +2087,11 @@ app.get('/api/lookup/server/:id', async (req, res) => {
 //  APP DATA + FEATURE SSE
 // ═══════════════════════════════════════════════
 const dataPath = path.join(__dirname, 'app_data.json');
-function readData() { try { return JSON.parse(fs.readFileSync(dataPath, 'utf8')); } catch { return {}; } }
-function writeData(d) { try { fs.writeFileSync(dataPath, JSON.stringify(d, null, 2)); } catch (e) {} }
+const dataStore = getStore(dataPath, {});
+function readData() { return dataStore.read(); }
+function writeData(_d) { dataStore.touch(); } // mutations are on the cached object — just mark dirty
 function ensureData() {
-  const d = readData();
+  const d = dataStore.read();
   if (!d.history) d.history = [];
   if (!d.tokenHealth) d.tokenHealth = {};
   if (!d.cloneSnapshots) d.cloneSnapshots = [];
@@ -2050,7 +2102,7 @@ function ensureData() {
   if (!Array.isArray(d.bots)) d.bots = [];
   if (typeof d.botsLastNumber !== 'number') d.botsLastNumber = 0;
   if (!d.botsConfig) d.botsConfig = { captcha2captchaKey: '' };
-  writeData(d);
+  dataStore.touch();
   return d;
 }
 ensureData();
@@ -2419,15 +2471,35 @@ app.post('/api/bots/config', (req, res) => {
   ok(res, { saved: true });
 });
 
+const SSE_FEATURES_MAX = 200;
 app.get('/api/features/stream', (req, res) => {
   res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no' });
   res.flushHeaders?.();
   res.write(`: connected\n\n`);
   const types = (req.query.types || '').split(',').filter(Boolean);
   const sc = { res, types: types.length ? types : null };
+
+  if (featureSSE.size >= SSE_FEATURES_MAX) {
+    const oldest = featureSSE.values().next().value;
+    if (oldest) {
+      try { oldest.res.end(); } catch {}
+      featureSSE.delete(oldest);
+    }
+  }
   featureSSE.add(sc);
+
   const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch (e) {} }, 25000);
-  req.on('close', () => { clearInterval(ping); featureSSE.delete(sc); });
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    clearInterval(ping);
+    featureSSE.delete(sc);
+  };
+  req.on('close', cleanup);
+  req.on('error', cleanup);
+  res.on('close', cleanup);
+  res.on('error', cleanup);
 });
 
 function accountAvatarMap() {
@@ -3481,6 +3553,7 @@ async function tryDmUser(client, userId, content) {
 
 // Track guilds we've already warned the UI about to avoid spamming SSE
 const _antiPruneNoAuditGuilds = new Set();
+const _ANTIPRUNE_WARN_MAX = 500;
 async function isPrunedRecently(client, guildId) {
   // Check audit log for MEMBER_PRUNE (28) within last 10s
   try {
@@ -3496,7 +3569,7 @@ async function isPrunedRecently(client, guildId) {
     // server. Surface ONCE to the UI so the user knows why nothing fires.
     const status = e?.response?.status;
     if ((status === 403 || status === 401) && !_antiPruneNoAuditGuilds.has(guildId)) {
-      _antiPruneNoAuditGuilds.add(guildId);
+      addBounded(_antiPruneNoAuditGuilds, guildId, _ANTIPRUNE_WARN_MAX);
       try {
         const guildName = client.guilds.cache.get(guildId)?.name || guildId;
         sseBroadcast('antiprune_warning', {
@@ -4412,18 +4485,18 @@ const voiceStateCycles= new Map(); // cycleId    -> { id, accounts, states, inte
 
 // ── Voice Persistence (auto-rejoin on restart) ──────────────────────────────
 const VOICE_PERSIST_PATH = path.join(__dirname, 'data', 'voice-persist.json');
+const voicePersistStore = getStore(VOICE_PERSIST_PATH, []);
 
 function persistVoice() {
   try {
-    const arr = Array.from(voiceSessions.values());
-    fs.writeFileSync(VOICE_PERSIST_PATH, JSON.stringify(arr, null, 2));
+    voicePersistStore.write(Array.from(voiceSessions.values()));
   } catch (e) { /* non-fatal */ }
 }
 
 function loadVoicePersist() {
   try {
-    if (!fs.existsSync(VOICE_PERSIST_PATH)) return [];
-    return JSON.parse(fs.readFileSync(VOICE_PERSIST_PATH, 'utf8')) || [];
+    const v = voicePersistStore.read();
+    return Array.isArray(v) ? v : [];
   } catch (e) { return []; }
 }
 
