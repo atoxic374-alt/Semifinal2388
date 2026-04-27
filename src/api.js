@@ -146,8 +146,16 @@ const TEST_RESPONSES = {
   ]},
 };
 
+// Single source of truth for "are we in preview/test mode?". Components MUST
+// gate every side-effect through this rather than reading window._testMode
+// directly — that way a future test harness can override one place and any
+// accidental real-API call from preview mode is short-circuited centrally.
+function isTestMode() {
+  return !!window._testMode;
+}
+window.isTestMode = isTestMode;
 function testOr(fallback) {
-  return window._testMode ? Promise.resolve(fallback) : null;
+  return isTestMode() ? Promise.resolve(fallback) : null;
 }
 
 window.electronAPI = {

@@ -1,10 +1,17 @@
 import { ProgressBar } from '../components/ProgressBar.js';
 
+// Module-scope shared cooldown so concurrent delete sessions across
+// different channels respect the same rate-limit signal. Previously each
+// invocation had its own `globalCooldownUntil`, so opening two delete
+// modals at once would hammer Discord with ~6 parallel deletes.
+let _moduleCooldownUntil = 0;
+
 /**
  * Optimized message deleter:
  *  - Parallel collection from multiple pages (up to a safe concurrency)
  *  - Concurrent deletion with adaptive throttling
- *  - Smart rate-limit handling (respects retry-after; backs off globally)
+ *  - Smart rate-limit handling (respects retry-after; backs off globally
+ *    AND module-globally — see _moduleCooldownUntil above)
  *  - Cancellable
  */
 export async function deleteDMMessages({
@@ -86,12 +93,12 @@ export async function deleteDMMessages({
 
     // Concurrent deletion with adaptive throttle
     let deleted = 0;
-    let globalCooldownUntil = 0;
 
     const deleteOne = async (msg) => {
       if (shouldStop) return;
-      // global cooldown
-      const wait = globalCooldownUntil - Date.now();
+      // Honor BOTH the per-session and the module-global cooldown — covers
+      // the case where a 429 was triggered by another open delete modal.
+      const wait = _moduleCooldownUntil - Date.now();
       if (wait > 0) await sleep(wait);
 
       try {
@@ -104,8 +111,11 @@ export async function deleteDMMessages({
         // Server returns { success: false, error: '...' } — try to detect rate-limit text
         const msgErr = String(err?.message || err);
         if (msgErr.includes('429') || /rate[- ]?limit/i.test(msgErr)) {
-          globalCooldownUntil = Date.now() + 4000;
-          await sleep(4000);
+          // Try to extract retry-after if the server included it; otherwise back off 4s.
+          const m = msgErr.match(/retry[\-_ ]?after[":\s]+(\d+(?:\.\d+)?)/i);
+          const backoffMs = m ? Math.min(15000, Math.ceil(parseFloat(m[1]) * 1000) + 500) : 4000;
+          _moduleCooldownUntil = Math.max(_moduleCooldownUntil, Date.now() + backoffMs);
+          await sleep(backoffMs);
           try {
             if (isGroup) await electronAPI.deleteGroupMessage(channelId, msg.id);
             else         await electronAPI.deleteDMMessage(channelId, msg.id);
@@ -117,11 +127,16 @@ export async function deleteDMMessages({
       }
     };
 
-    // Worker pool
-    const queue = deletable.slice();
+    // Worker pool — atomic index counter (closure-shared) prevents the
+    // theoretical case where two workers pop the same array slot under
+    // weird microtask ordering. `shift()` is synchronous in JS so this is
+    // belt-and-suspenders, but it also lets us track progress more cleanly.
+    let nextIdx = 0;
     const workers = Array.from({ length: Math.max(1, concurrency) }, async () => {
-      while (queue.length && !shouldStop) {
-        const m = queue.shift();
+      while (!shouldStop) {
+        const idx = nextIdx++;
+        if (idx >= deletable.length) break;
+        const m = deletable[idx];
         if (!m) break;
         await deleteOne(m);
         // small jitter between calls per worker

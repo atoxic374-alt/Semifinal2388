@@ -85,3 +85,34 @@ body.light-theme .snow span {
 @media (prefers-reduced-motion: reduce) {
   .snow span { animation: none; opacity: 0; }
 }
+
+/* Small screens: snow eats CPU + obscures content on mobile, hide it. */
+@media (max-width: 768px) {
+  .snow { display: none; }
+}
+
+/* Coarse pointer (touch) devices also benefit from the no-snow path. */
+@media (hover: none) and (pointer: coarse) {
+  .snow { display: none; }
+}
+
+/* Viewport-safe modals on small screens — keep them within the visible area
+ * even when the address bar is showing or the keyboard is open. Uses the
+ * dynamic viewport unit (`dvh`) when supported, with a vh fallback. */
+@media (max-width: 600px) {
+  .modal-content,
+  .modal-content.info-modal {
+    max-height: 90vh;
+    max-height: 90dvh;
+    max-width: 96vw;
+    width: auto;
+    margin: 2vh auto;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  .modal-overlay {
+    padding: 8px;
+    align-items: flex-start;
+  }
+}

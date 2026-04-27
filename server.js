@@ -41,6 +41,15 @@ function getClientByName(name) {
   const entry = clients.get(name);
   return entry ? entry.client : null;
 }
+// True when `userId` belongs to ANY of our currently-connected accounts.
+// Used to skip self-driven loops (mirror reactions, mention echoes…).
+function isOwnConnectedUserId(userId) {
+  if (!userId) return false;
+  for (const e of clients.values()) {
+    if (e?.client?.user?.id === userId) return true;
+  }
+  return false;
+}
 function setActive(name) {
   const entry = clients.get(name);
   if (!entry) return false;
@@ -72,6 +81,37 @@ function jitter(min, max) {
 }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+// Browser-like headers so axios calls blend in with the official Discord client.
+// Used everywhere we hit the REST API directly (instead of going through
+// discord.js-selfbot-v13). Reduces hCaptcha / Cloudflare detection signals.
+const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) discord/1.0.9050 Chrome/124.0.6367.243 Electron/30.2.0 Safari/537.36';
+const SUPER_PROPS_B64 = Buffer.from(JSON.stringify({
+  os: 'Windows', browser: 'Discord Client', release_channel: 'stable',
+  client_version: '1.0.9050', os_version: '10.0.19045', os_arch: 'x64',
+  app_arch: 'x64', system_locale: 'en-US', browser_user_agent: BROWSER_UA,
+  browser_version: '30.2.0', client_build_number: 312855, native_build_number: 50890,
+  client_event_source: null
+})).toString('base64');
+function discordHeaders(token, extra = {}) {
+  return {
+    'Authorization': token,
+    'User-Agent': BROWSER_UA,
+    'Accept': '*/*',
+    'Accept-Language': 'en-US',
+    'Content-Type': 'application/json',
+    'X-Discord-Locale': 'en-US',
+    'X-Discord-Timezone': 'Etc/UTC',
+    'X-Super-Properties': SUPER_PROPS_B64,
+    'X-Debug-Options': 'bugReporterEnabled',
+    'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="124", "Discord Client";v="1"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
+    'Origin': 'https://discord.com',
+    'Referer': 'https://discord.com/channels/@me',
+    ...extra
+  };
+}
+
 async function humanizedSend(channel, text, { typing = true } = {}) {
   if (typing && channel.sendTyping) {
     try {
@@ -90,6 +130,38 @@ function fail(res, err) {
   const msg = err?.response?.data?.message || err?.message || String(err);
   res.json({ success: false, error: msg });
 }
+
+// ───────────────────────────────────────────────
+// Validation helpers (used by token save / bio / avatar)
+// ───────────────────────────────────────────────
+function isLikelyDiscordToken(t) {
+  // Discord tokens are base64-ish, ~70+ chars, with two dots separating
+  // header.payload.signature. Bot tokens start with `Bot ` typically.
+  if (typeof t !== 'string') return false;
+  const s = t.trim();
+  if (s.length < 50 || s.length > 200) return false;
+  // user tokens: 3-part dot-separated, payload ≈ snowflake base64
+  return /^[A-Za-z0-9_\-.]{50,200}$/.test(s);
+}
+function dataUrlSizeBytes(dataUrl) {
+  // returns approx decoded byte count for a base64 data: URL
+  if (typeof dataUrl !== 'string') return 0;
+  const m = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+  if (!m) return 0;
+  const b64 = m[2];
+  // base64 → bytes: floor(len*3/4) minus padding
+  const pad = (b64.endsWith('==') ? 2 : (b64.endsWith('=') ? 1 : 0));
+  return Math.max(0, Math.floor(b64.length * 3 / 4) - pad);
+}
+function dataUrlMime(dataUrl) {
+  if (typeof dataUrl !== 'string') return null;
+  const m = dataUrl.match(/^data:([^;]+);/);
+  return m ? m[1].toLowerCase() : null;
+}
+const ALLOWED_AVATAR_MIMES = ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp'];
+const MAX_AVATAR_BYTES = 8 * 1024 * 1024; // Discord caps avatars at ~10MB; keep safety margin
+const MAX_BIO_LEN = 190;
+const MAX_CUSTOM_STATUS_LEN = 128;
 
 // ═══════════════════════════════════════════════
 //  CONNECT / DISCONNECT (multi-token aware)
@@ -448,13 +520,25 @@ app.get('/api/tokens', (req, res) => {
 app.post('/api/tokens', (req, res) => {
   try {
     const { name, token, autoConnect = false } = req.body;
+    const cleanName = String(name || '').trim();
+    const cleanToken = String(token || '').trim();
+    if (!cleanName) return fail(res, new Error('Name is required'));
+    if (cleanName.length > 64) return fail(res, new Error('Name is too long (max 64 chars)'));
+    if (!cleanToken) return fail(res, new Error('Token is required'));
+    if (!isLikelyDiscordToken(cleanToken)) {
+      return fail(res, new Error('Token does not look like a valid Discord token. Re-copy it from your client/devtools.'));
+    }
     const tokens = readTokens();
-    if (tokens.some(t => t.name === name)) {
+    if (tokens.some(t => t.name === cleanName)) {
       return fail(res, new Error('A token with this name already exists'));
     }
-    tokens.push({ name, token, autoConnect: !!autoConnect });
+    if (tokens.some(t => t.token === cleanToken)) {
+      const dupe = tokens.find(t => t.token === cleanToken);
+      return fail(res, new Error(`This token is already saved under "${dupe.name}". Delete the duplicate first.`));
+    }
+    tokens.push({ name: cleanName, token: cleanToken, autoConnect: !!autoConnect });
     writeTokens(tokens);
-    try { recordHistory({ account: name, type: 'save_token', target: { name }, status: 'success' }); } catch (e) {}
+    try { recordHistory({ account: cleanName, type: 'save_token', target: { name: cleanName }, status: 'success' }); } catch (e) {}
     ok(res);
   } catch (e) { fail(res, e); }
 });
@@ -549,6 +633,11 @@ app.post('/api/presence/set', async (req, res) => {
 app.post('/api/presence/bio', async (req, res) => {
   try {
     const { tokens = [], bio = '' } = req.body;
+    // Discord rejects bios > 190 chars with a 400 — surface a clean error early
+    if (typeof bio !== 'string') return fail(res, new Error('Bio must be a string'));
+    if (bio.length > MAX_BIO_LEN) {
+      return fail(res, new Error(`Bio is too long: ${bio.length}/${MAX_BIO_LEN} chars. Discord rejects anything longer.`));
+    }
     const targets = (tokens.length ? tokens : (activeName ? [activeName] : []));
     const results = [];
     for (const n of targets) {
@@ -557,7 +646,7 @@ app.post('/api/presence/bio', async (req, res) => {
       try {
         await axios.patch('https://discord.com/api/v9/users/@me/profile',
           { bio },
-          { headers: { Authorization: entry.client.token, 'Content-Type': 'application/json' } });
+          { headers: discordHeaders(entry.client.token) });
         results.push({ name: n, ok: true });
       } catch (e) { results.push({ name: n, ok: false, error: e.response?.data?.message || e.message }); }
       await sleep(jitter(300, 800));
@@ -566,32 +655,48 @@ app.post('/api/presence/bio', async (req, res) => {
   } catch (e) { fail(res, e); }
 });
 
-// Status rotation
+// Status rotation — PERSISTED so it survives restarts
+function _persistRotations() {
+  try {
+    const d = readData();
+    const out = {};
+    for (const [n, info] of statusRotations.entries()) {
+      // info may be either the legacy timer id (number) or the new {timer, states, intervalMs} shape
+      if (info && info.states) out[n] = { states: info.states, intervalMs: info.intervalMs };
+    }
+    d.statusRotations = out;
+    writeData(d);
+  } catch (_) {}
+}
+function _startRotationFor(n, states, intervalMs) {
+  const old = statusRotations.get(n);
+  if (old?.timer) clearInterval(old.timer);
+  let i = 0;
+  const tick = async () => {
+    const c = getClientByName(n);
+    if (!c) return;
+    const s = states[i % states.length]; i++;
+    try {
+      if (s.status) c.user.setStatus(resolvePresence(s.status));
+      if (s.customStatus !== undefined) {
+        const cs = new CustomStatus(c).setState(s.customStatus || null);
+        if (s.emoji) cs.setEmoji(s.emoji);
+        c.user.setActivity(cs.toJSON ? cs.toJSON() : cs);
+      }
+    } catch (e) {}
+  };
+  tick();
+  const safe = Math.max(15000, intervalMs); // min 15s to be safe
+  const timer = setInterval(tick, safe);
+  statusRotations.set(n, { timer, states, intervalMs: safe });
+}
 app.post('/api/presence/rotate/start', (req, res) => {
   try {
     const { tokens = [], states = [], intervalMs = 60000 } = req.body;
     if (!states.length) return fail(res, new Error('No states provided'));
     const targets = (tokens.length ? tokens : (activeName ? [activeName] : []));
-    for (const n of targets) {
-      if (statusRotations.has(n)) clearInterval(statusRotations.get(n));
-      let i = 0;
-      const tick = async () => {
-        const c = getClientByName(n);
-        if (!c) return;
-        const s = states[i % states.length]; i++;
-        try {
-          if (s.status) c.user.setStatus(resolvePresence(s.status));
-          if (s.customStatus !== undefined) {
-            const cs = new CustomStatus(c).setState(s.customStatus || null);
-            if (s.emoji) cs.setEmoji(s.emoji);
-            c.user.setActivity(cs.toJSON ? cs.toJSON() : cs);
-          }
-        } catch (e) {}
-      };
-      tick();
-      const id = setInterval(tick, Math.max(15000, intervalMs)); // min 15s to be safe
-      statusRotations.set(n, id);
-    }
+    for (const n of targets) _startRotationFor(n, states, intervalMs);
+    _persistRotations();
     ok(res, { rotating: targets });
   } catch (e) { fail(res, e); }
 });
@@ -601,18 +706,47 @@ app.post('/api/presence/rotate/stop', (req, res) => {
     const { tokens = [] } = req.body;
     const targets = (tokens.length ? tokens : Array.from(statusRotations.keys()));
     for (const n of targets) {
-      const id = statusRotations.get(n);
-      if (id) { clearInterval(id); statusRotations.delete(n); }
+      const info = statusRotations.get(n);
+      if (info?.timer) { clearInterval(info.timer); }
+      statusRotations.delete(n);
     }
+    _persistRotations();
     ok(res, { stopped: targets });
   } catch (e) { fail(res, e); }
 });
+
+// Restore rotations after clients connect (give autoConnect a head start)
+setTimeout(() => {
+  try {
+    const d = readData();
+    const r = d.statusRotations || {};
+    let restored = 0;
+    for (const [name, info] of Object.entries(r)) {
+      if (!info?.states?.length) continue;
+      _startRotationFor(name, info.states, info.intervalMs || 60000);
+      restored++;
+    }
+    if (restored) console.log(`[rotation] restored ${restored} status rotation(s)`);
+  } catch (_) {}
+}, 12000);
 
 // ── Avatar update (single or many tokens)
 app.post('/api/presence/avatar', async (req, res) => {
   try {
     const { tokens = [], avatar } = req.body; // avatar = data URL or http URL
     if (!avatar) return fail(res, new Error('No avatar provided'));
+    // Validate format + size for data URLs (URLs are passed through as-is)
+    if (typeof avatar === 'string' && avatar.startsWith('data:')) {
+      const mime = dataUrlMime(avatar);
+      if (!mime || !ALLOWED_AVATAR_MIMES.includes(mime)) {
+        return fail(res, new Error(`Unsupported image type "${mime || 'unknown'}". Use PNG, JPG, GIF, or WebP.`));
+      }
+      const sz = dataUrlSizeBytes(avatar);
+      if (sz <= 0) return fail(res, new Error('Could not read image data — re-upload the file.'));
+      if (sz > MAX_AVATAR_BYTES) {
+        return fail(res, new Error(`Image is too large: ${(sz / (1024*1024)).toFixed(2)} MB. Max ${(MAX_AVATAR_BYTES/(1024*1024)).toFixed(0)} MB.`));
+      }
+    }
     const targets = (tokens.length ? tokens : (activeName ? [activeName] : []));
     const results = [];
     for (const n of targets) {
@@ -708,6 +842,51 @@ app.get('/api/presence/activity/list', (req, res) => {
 // ═══════════════════════════════════════════════
 const messageJobs = new Map(); // jobId -> { type, timer, info }
 let jobCounter = 1;
+
+// Persisted scheduled jobs survive restarts. Repeating jobs are NOT persisted
+// because they would silently keep running after a crash without the user
+// knowing — schedules are one-shots so we know exactly when they should fire.
+function _persistSchedules() {
+  try {
+    const d = readData();
+    const out = {};
+    for (const [id, j] of messageJobs.entries()) {
+      if (j.type === 'schedule') out[id] = { info: j.info };
+    }
+    d.scheduledJobs = out;
+    writeData(d);
+  } catch (_) {}
+}
+function _restoreSchedules() {
+  try {
+    const d = readData();
+    const sj = d.scheduledJobs || {};
+    let restored = 0, expired = 0;
+    for (const [id, j] of Object.entries(sj)) {
+      const info = j.info;
+      if (!info?.runAt) continue;
+      const ms = new Date(info.runAt).getTime() - Date.now();
+      if (ms < 0) { expired++; continue; }
+      // Re-create the timer on this fresh process
+      const timer = setTimeout(async () => {
+        try {
+          await executeSend({ tokens: info.tokens, scope: info.scope, messages: info.messages, mode: info.mode });
+        } catch (_) {}
+        messageJobs.delete(id);
+        _persistSchedules();
+      }, ms);
+      messageJobs.set(id, { type: 'schedule', timer, info });
+      // Keep id-counter ahead of restored ids so new ones don't collide
+      const n = parseInt(id, 10);
+      if (Number.isFinite(n) && n >= jobCounter) jobCounter = n + 1;
+      restored++;
+    }
+    if (restored || expired) console.log(`[schedule] restored ${restored}, dropped ${expired} expired`);
+    if (expired) _persistSchedules();
+  } catch (_) {}
+}
+// Run once at startup (clients may not be ready yet but executeSend handles that)
+setTimeout(_restoreSchedules, 5000);
 
 async function resolveTargets(client, scope) {
   // scope: { type: 'channel'|'all_channels'|'all_dms'|'all_groups', serverId?, channelIds?[] }
@@ -835,8 +1014,10 @@ app.post('/api/messages/schedule', (req, res) => {
         }
       } catch (e) {}
       messageJobs.delete(id);
+      _persistSchedules();
     }, ms);
     messageJobs.set(id, { type: 'schedule', timer, info: { tokens, scope, messages, mode, runAt } });
+    _persistSchedules();
     ok(res, { jobId: id, runIn: ms });
   } catch (e) { fail(res, e); }
 });
@@ -856,6 +1037,7 @@ app.post('/api/messages/jobs/:id/stop', (req, res) => {
     else clearTimeout(job.timer);
   }
   messageJobs.delete(req.params.id);
+  if (job.type === 'schedule') _persistSchedules();
   ok(res);
 });
 
@@ -889,6 +1071,9 @@ function attachReactionListener({ tokens, scope, mode, emojis = [], buttonNames 
     const onMessage = async (msg) => {
       try {
         if (msg.author?.id === c.user.id) return;
+        // Don't auto-react to messages from any of OUR connected accounts
+        // (otherwise mirror mode creates a self-reinforcing loop)
+        if (isOwnConnectedUserId(msg.author?.id)) return;
         if (!scopeMatches(scope, msg)) return;
 
         if (mode === 'specific' && emojis.length) {
@@ -898,12 +1083,14 @@ function attachReactionListener({ tokens, scope, mode, emojis = [], buttonNames 
           }
         }
 
-        // Auto-click buttons
+        // Auto-click buttons — exact label match (case-insensitive, trimmed)
+        // to avoid clicking unrelated buttons that happen to contain the keyword
         if (buttonNames.length && msg.components?.length) {
+          const wanted = buttonNames.map(n => String(n).trim().toLowerCase()).filter(Boolean);
           for (const row of msg.components) {
             for (const comp of row.components || []) {
-              const label = comp.label || '';
-              if (buttonNames.some(n => label.toLowerCase().includes(n.toLowerCase()))) {
+              const label = String(comp.label || '').trim().toLowerCase();
+              if (label && wanted.includes(label)) {
                 try {
                   if (typeof comp.click === 'function') await comp.click(msg);
                 } catch (e) {}
@@ -919,6 +1106,9 @@ function attachReactionListener({ tokens, scope, mode, emojis = [], buttonNames 
     const onReactionAdd = async (reaction, user) => {
       try {
         if (user.id === c.user.id) return;
+        // Skip if reactor is one of OUR connected accounts → prevents
+        // ping-pong between two accounts watching the same channel.
+        if (isOwnConnectedUserId(user.id)) return;
         if (!scopeMatches(scope, reaction.message)) return;
         if (mode === 'mirror') {
           const em = reaction.emoji.id ? `${reaction.emoji.name}:${reaction.emoji.id}` : reaction.emoji.name;
@@ -1500,13 +1690,20 @@ app.get('/api/stats/summary', async (req, res) => {
     const bots = dms.filter(d => d.recipient?.bot).length;
     // Top DMs by recent unread + activity (from dmState)
     const accountName = (req.query.account || activeName || '').trim();
+    // Live-fallback: if dmState hasn't observed this DM yet (e.g. fresh boot),
+    // use the channel's lastMessage timestamp so the dashboard isn't empty.
     const topDMs = dms.map(d => {
       const k = `${accountName}|${d.id}`;
       const st = dmState.get(k);
+      let ts = st?.ts || 0;
+      if (!ts) {
+        const last = d.lastMessage || d.messages?.cache?.last?.();
+        if (last) ts = last.createdTimestamp || 0;
+      }
       return {
         username: d.recipient?.username || 'unknown',
         avatar: d.recipient?.displayAvatarURL?.({ size: 64 }) || defaultAvatarUrl(d.recipient?.id || '0'),
-        ts: st?.ts || 0,
+        ts,
         unread: st?.unread || 0
       };
     }).filter(x => x.ts > 0).sort((a,b)=>b.ts-a.ts).slice(0, 6);
@@ -1653,7 +1850,10 @@ app.get('/api/lookup/server/:id', async (req, res) => {
           ownerAvatar: owner?.user?.displayAvatarURL?.({ size: 64 }) || null,
           // my membership
           myRoles: myRoles.length,
-          myRolesList: myRoles,
+          // Cap the embedded list at 50 to avoid sending massive payloads
+          // for accounts with hundreds of roles (UI only shows ~10 at a time)
+          myRolesList: myRoles.slice(0, 50),
+          myRolesTruncated: myRoles.length > 50,
           myHighestRole: myHighest,
           myNickname: me?.nickname || null,
           myJoinedAt: me?.joinedTimestamp || null,
@@ -1700,12 +1900,14 @@ app.get('/api/lookup/server/:id', async (req, res) => {
     }
 
     // ── Not joined — public preview + invite info (parallel) ────────
-    const headers = { Authorization: c.token };
+    const headers = discordHeaders(c.token);
     const [previewRes] = await Promise.all([
       axios.get(`https://discord.com/api/v9/guilds/${id}/preview`, { headers, validateStatus: () => true }),
     ]);
     if (previewRes.status >= 400 || !previewRes.data) {
-      throw new Error(previewRes.data?.message || `Server not found (status ${previewRes.status})`);
+      // Uniform "not found" reply — do NOT distinguish 403 (private/non-discoverable)
+      // from 404 (does not exist) so we don't leak guild existence to ID-scrapers.
+      return ok(res, { joined: false, found: false, server: null });
     }
     const d = previewRes.data;
     ok(res, {
@@ -1968,10 +2170,14 @@ async function runBotCreationTask({ ownerName, userToken, count, namePattern, av
     if (botTask.cancelRequested) break;
     const d = ensureData();
     const num = (d.botsLastNumber || 0) + 1;
-    const name = String(namePattern || 'Bot {n}')
+    let name = String(namePattern || 'Bot {n}')
       .replace(/\{n\}/g, String(num).padStart(2, '0'))
       .replace(/\{i\}/g, String(i + 1))
+      .trim()
       .slice(0, 32);
+    // Discord requires application names of length 2..32. If the user-provided
+    // pattern resolved to something too short, pad with the number to keep going.
+    if (name.length < 2) name = `Bot ${String(num).padStart(2, '0')}`.slice(0, 32);
     botTask.current = name;
     pushBotEvent('bot_progress', { msg: `creating ${name}` });
     try {
@@ -2266,7 +2472,18 @@ app.post('/api/token-health/check', async (req, res) => {
   } catch (e) { fail(res, e); }
 });
 
-setInterval(runHealthCheck, 30 * 60 * 1000); // every 30 min
+// Self-rescheduling timer with ±15% jitter so all instances of the app
+// don't hammer Discord at the same wall-clock minute (and to look less
+// botty). Base = 30 min, range ≈ 25.5–34.5 min.
+function _scheduleNextHealthCheck() {
+  const base = 30 * 60 * 1000;
+  const next = base + Math.floor((Math.random() * 0.3 - 0.15) * base);
+  setTimeout(async () => {
+    try { await runHealthCheck(); } catch (_) {}
+    _scheduleNextHealthCheck();
+  }, next);
+}
+_scheduleNextHealthCheck();
 setTimeout(runHealthCheck, 8000); // initial after start
 
 // ═══════════════════════════════════════════════
@@ -2306,7 +2523,9 @@ app.get('/api/clone/snapshot/server/:guildId', async (req, res) => {
     if (!guild) return fail(res, new Error('Server not found in this account'));
 
     const includeMessages = req.query.messages === '1' || req.query.messages === 'true';
-    const perChannel = Math.min(Math.max(parseInt(req.query.perChannel, 10) || 50, 1), 200);
+    // Bumped cap from 200 → 5000 so power users can capture a deeper history
+    // when they really need it; default stays at 50 to keep snapshots quick.
+    const perChannel = Math.min(Math.max(parseInt(req.query.perChannel, 10) || 50, 1), 5000);
 
     const [chRes, roleRes] = await Promise.all([
       axios.get(`https://discord.com/api/v9/guilds/${id}/channels`, { headers: { Authorization: c.token } }),
@@ -2325,7 +2544,12 @@ app.get('/api/clone/snapshot/server/:guildId', async (req, res) => {
     const voiceChans = channels.filter(c => c.type === 2);
     const roles = (roleRes.data || []).map(r => ({
       id: r.id, name: r.name, color: r.color, hoist: r.hoist, permissions: String(r.permissions || '0'),
-      mentionable: r.mentionable, position: r.position
+      mentionable: r.mentionable, position: r.position,
+      // Role icons (Boost-tier 2 feature). icon = custom uploaded image hash,
+      // unicode_emoji = a fallback emoji. Both can be sent back when re-creating.
+      icon: r.icon || null,
+      unicode_emoji: r.unicode_emoji || null,
+      iconUrl: r.icon ? `https://cdn.discordapp.com/role-icons/${r.id}/${r.icon}.png?size=64` : null
     })).sort((a, b) => b.position - a.position);
     const emojis = Array.from(guild.emojis?.cache?.values?.() || []).map(e => ({
       id: e.id, name: e.name, animated: e.animated, url: e.url
@@ -2659,10 +2883,14 @@ app.post('/api/clone/paste/server-build', async (req, res) => {
       voiceChannels: !!options.voiceChannels,
       roles:         !!options.roles,
       rolePerms:     !!options.rolePerms,
+      roleIcons:     !!options.roleIcons,         // NEW: copy role unicode/icon emoji
       channelPerms:  !!options.channelPerms,
       emojis:        !!options.emojis,
       messages:      !!options.messages,
       messageChannelIds: Array.isArray(options.messageChannelIds) ? options.messageChannelIds : null, // null = all
+      // Per-channel cap, configurable. Was hard-coded ~200 elsewhere; we let the
+      // user dial it up to 5000 if they really need a deep clone.
+      messagesPerChannel: Math.min(Math.max(parseInt(options.messagesPerChannel, 10) || 200, 1), 5000),
       messageGapMs: Math.max(parseInt(options.messageGapMs, 10) || 220, 80),
     };
 
@@ -2677,16 +2905,39 @@ app.post('/api/clone/paste/server-build', async (req, res) => {
 
     // ── Roles
     if (opts.roles) {
+      // Pre-fetch role icons (PNG bytes -> base64 data URI) when the user opted
+      // in. Discord ignores `icon` if the target guild's tier is too low so
+      // failures here are non-fatal — we just fall back to a unicode emoji.
+      const _roleIconCache = new Map();
+      if (opts.roleIcons) {
+        for (const r of snapshot.roles || []) {
+          if (!r.iconUrl) continue;
+          try {
+            const ir = await axios.get(r.iconUrl, { responseType: 'arraybuffer', validateStatus: () => true });
+            if (ir.status === 200 && ir.data) {
+              const b64 = Buffer.from(ir.data).toString('base64');
+              _roleIconCache.set(r.id, `data:image/png;base64,${b64}`);
+            }
+          } catch (_) {}
+          await sleep(jitter(120, 220));
+        }
+      }
       for (const r of (snapshot.roles || []).slice().reverse()) {
         if (r.name === '@everyone') continue;
         try {
+          const body = {
+            name: r.name, color: r.color, hoist: r.hoist,
+            permissions: opts.rolePerms ? r.permissions : '0',
+            mentionable: r.mentionable
+          };
+          if (opts.roleIcons) {
+            const ic = _roleIconCache.get(r.id);
+            if (ic) body.icon = ic;
+            else if (r.unicode_emoji) body.unicode_emoji = r.unicode_emoji;
+          }
           const rr = await axios.post(
             `https://discord.com/api/v9/guilds/${targetGuildId}/roles`,
-            {
-              name: r.name, color: r.color, hoist: r.hoist,
-              permissions: opts.rolePerms ? r.permissions : '0',
-              mentionable: r.mentionable
-            },
+            body,
             { headers: { Authorization: builder.token, 'Content-Type': 'application/json' } }
           );
           roleMap.set(r.id, rr.data.id);
@@ -2918,7 +3169,32 @@ app.post('/api/clone/paste/server-build', async (req, res) => {
 // ═══════════════════════════════════════════════
 //  4. MENTIONS TRACKER
 // ═══════════════════════════════════════════════
+// Backed by app_data.json so mentions survive restarts (was in-memory only).
 const mentionsStore = new Map(); // account -> [{...}]
+let _mentionsDirty = false;
+function _loadMentionsFromDisk() {
+  try {
+    const d = readData();
+    const m = d.mentions || {};
+    for (const [name, list] of Object.entries(m)) {
+      if (Array.isArray(list)) mentionsStore.set(name, list);
+    }
+  } catch (_) {}
+}
+function _saveMentionsToDisk() {
+  try {
+    const d = readData();
+    const out = {};
+    for (const [name, list] of mentionsStore.entries()) out[name] = list.slice(0, 200);
+    d.mentions = out;
+    writeData(d);
+    _mentionsDirty = false;
+  } catch (_) {}
+}
+// Coalesce writes — listeners may fire dozens of times per second
+setInterval(() => { if (_mentionsDirty) _saveMentionsToDisk(); }, 4000);
+_loadMentionsFromDisk();
+
 function addMention(account, msg) {
   const arr = mentionsStore.get(account) || [];
   const guild = msg.guild;
@@ -2944,13 +3220,14 @@ function addMention(account, msg) {
   });
   if (arr.length > 200) arr.length = 200;
   mentionsStore.set(account, arr);
+  _mentionsDirty = true;
   sseBroadcast('mention', { account, mention: arr[0] });
 }
 function markMentionDeleted(account, msgId) {
   const arr = mentionsStore.get(account);
   if (!arr) return;
   const it = arr.find(x => x.id === msgId);
-  if (it) { it.deleted = true; sseBroadcast('mention_deleted', { account, id: msgId }); }
+  if (it) { it.deleted = true; _mentionsDirty = true; sseBroadcast('mention_deleted', { account, id: msgId }); }
 }
 
 function attachMentionListener(name, client) {
@@ -2990,6 +3267,8 @@ app.delete('/api/mentions', (req, res) => {
   const { account } = req.body || {};
   if (account) mentionsStore.delete(account);
   else mentionsStore.clear();
+  _mentionsDirty = true;
+  _saveMentionsToDisk();
   ok(res);
 });
 
@@ -3034,11 +3313,17 @@ async function handlePicMessage(name, msg) {
 
     if (cfg.inApp !== false) {
       const buf = d.picBuffer || [];
-      buf.unshift(meta);
-      if (buf.length > 200) buf.length = 200;
-      d.picBuffer = buf;
-      writeData(d);
-      sseBroadcast('pic', { capture: meta });
+      // Dedupe: skip if we already saved this message ID (multiple connected
+      // accounts can both see the same message → previously double-counted)
+      if (buf.some(x => x.id === meta.id && x.account === meta.account)) {
+        // already captured by this account — still mirror to webhook below if configured
+      } else {
+        buf.unshift(meta);
+        if (buf.length > 500) buf.length = 500; // raised cap, was 200
+        d.picBuffer = buf;
+        writeData(d);
+        sseBroadcast('pic', { capture: meta });
+      }
     }
     if (cfg.webhook) {
       const lines = imgs.map(i => i.url).join('\n');
@@ -3096,6 +3381,8 @@ async function tryDmUser(client, userId, content) {
   } catch (e) { return { ok: false, error: e.message }; }
 }
 
+// Track guilds we've already warned the UI about to avoid spamming SSE
+const _antiPruneNoAuditGuilds = new Set();
 async function isPrunedRecently(client, guildId) {
   // Check audit log for MEMBER_PRUNE (28) within last 10s
   try {
@@ -3106,7 +3393,33 @@ async function isPrunedRecently(client, guildId) {
     if (!entry) return false;
     const t = snowflakeToMs(entry.id);
     return (Date.now() - t) < 12000;
-  } catch (e) { return false; }
+  } catch (e) {
+    // 403 = "Missing Permissions" → AntiPrune cannot detect prunes for this
+    // server. Surface ONCE to the UI so the user knows why nothing fires.
+    const status = e?.response?.status;
+    if ((status === 403 || status === 401) && !_antiPruneNoAuditGuilds.has(guildId)) {
+      _antiPruneNoAuditGuilds.add(guildId);
+      try {
+        const guildName = client.guilds.cache.get(guildId)?.name || guildId;
+        sseBroadcast('antiprune_warning', {
+          guildId, guildName,
+          message: `AntiPrune cannot read audit logs for "${guildName}" — needs the View Audit Log permission. Pruned-member alerts will be skipped for this server.`
+        });
+        // Persist to the antiPrune log so the user can see it later
+        try {
+          const d = readData();
+          d.antiPruneLog = d.antiPruneLog || [];
+          d.antiPruneLog.unshift({
+            ts: Date.now(), level: 'warning', guildId, guildName,
+            message: 'Missing View Audit Log permission — prune detection disabled for this server.'
+          });
+          if (d.antiPruneLog.length > 200) d.antiPruneLog.length = 200;
+          writeData(d);
+        } catch (_) {}
+      } catch (_) {}
+    }
+    return false;
+  }
 }
 
 async function findInviteFor(client, guildId) {
@@ -3502,7 +3815,7 @@ async function findLastMessageForUser(userId, accountFilter = null) {
               }
             });
           }
-          await sleep(250); // soft anti-rate
+          await sleep(700 + jitter(0, 400)); // soft anti-rate (raised from 250ms — Discord rate-limits guild search aggressively)
         } catch (e) { /* search not allowed in some guilds */ }
       }
     } catch (e) {}
@@ -3736,6 +4049,22 @@ function applyMemberFilter(members, f = {}) {
 // POST /api/friends/bulk-add
 //   body: { account, ids?:[], serverId?, filter?:{}, throttleMs?: 7000, max?: 50 }
 //   Returns: { taskId }
+// Per-account rolling 1-hour quota of friend-adds. Discord bans accounts
+// that send too many invites — we cap at 30/h regardless of UI input.
+const MASS_FRIEND_HOURLY_CAP = 30;
+const _friendAddHistory = new Map(); // account -> [timestamps]
+function _recordFriendAdd(account) {
+  const arr = _friendAddHistory.get(account) || [];
+  arr.push(Date.now());
+  _friendAddHistory.set(account, arr);
+}
+function _friendAddsInLastHour(account) {
+  const cutoff = Date.now() - 3600 * 1000;
+  const arr = (_friendAddHistory.get(account) || []).filter(t => t >= cutoff);
+  _friendAddHistory.set(account, arr);
+  return arr.length;
+}
+
 app.post('/api/friends/bulk-add', async (req, res) => {
   try {
     const { account, ids = [], serverId, filter = {}, throttleMs = 7000, max = 50 } = req.body || {};
@@ -3748,13 +4077,23 @@ app.post('/api/friends/bulk-add', async (req, res) => {
       targetUsers = ids.map(id => ({ id, username: id }));
     } else if (serverId) {
       const members = await fetchGuildMembers(c, serverId, 2000);
-      const filtered = applyMemberFilter(members, { ...filter, excludeIds: [c.user.id] });
+      // Auto-exclude bots in addition to user filter — adding bots as friends
+      // is impossible and just wastes quota
+      const filtered = applyMemberFilter(members, { excludeBots: true, ...filter, excludeIds: [c.user.id, ...(filter.excludeIds || [])] });
       targetUsers = filtered.map(m => ({ id: m.user.id, username: m.user.username, globalName: m.user.globalName, avatar: m.user.displayAvatarURL?.({ size: 64 }) || defaultAvatarUrl(m.user.id) }));
     } else {
       return fail(res, new Error('Provide ids[] or serverId'));
     }
     if (!targetUsers.length) return fail(res, new Error('No users matched'));
     targetUsers = targetUsers.slice(0, Math.max(1, Math.min(500, max)));
+
+    // Enforce hourly cap up-front: trim the queue to whatever we can still send
+    const usedThisHour = _friendAddsInLastHour(account);
+    const remaining = Math.max(0, MASS_FRIEND_HOURLY_CAP - usedThisHour);
+    if (remaining === 0) {
+      return fail(res, new Error(`Hourly safety cap reached for "${account}" (${MASS_FRIEND_HOURLY_CAP}/hr). Try again later.`));
+    }
+    if (targetUsers.length > remaining) targetUsers = targetUsers.slice(0, remaining);
 
     const t = createTask({
       type: 'friend_add', account,
@@ -3763,12 +4102,19 @@ app.post('/api/friends/bulk-add', async (req, res) => {
     });
 
     (async () => {
-      const delay = Math.max(3000, throttleMs);
+      // Floor delay raised to 5s — sub-3s adds are a major ban signal
+      const delay = Math.max(5000, throttleMs);
       let consecutiveFails = 0;
       for (const u of targetUsers) {
         if (isCancelled(t)) break;
+        // Re-check hourly cap inside the loop in case other tasks ran in parallel
+        if (_friendAddsInLastHour(account) >= MASS_FRIEND_HOURLY_CAP) {
+          t.error = `Hourly safety cap reached (${MASS_FRIEND_HOURLY_CAP}/hr) — stopping early.`;
+          break;
+        }
         try {
           await relationshipPut(c.token, u.id);
+          _recordFriendAdd(account);
           pushTaskItem(t, { ok: true, id: u.id, username: u.username, ts: Date.now() });
           consecutiveFails = 0;
         } catch (e) {
@@ -3778,6 +4124,10 @@ app.post('/api/friends/bulk-add', async (req, res) => {
           if (code === 429) {
             const retry = Number(e.response?.data?.retry_after || 5);
             await sleep((retry + 1) * 1000);
+          } else if (code === 401 || code === 403) {
+            // Account-wide block — stop NOW, don't drain the rest
+            t.error = `Discord blocked friend requests on this account (${code}). Stopping to avoid escalation.`;
+            break;
           } else {
             consecutiveFails++;
             if (consecutiveFails >= 5) {
@@ -3791,7 +4141,7 @@ app.post('/api/friends/bulk-add', async (req, res) => {
       finishTask(t, isCancelled(t) ? 'cancelled' : 'done');
     })().catch(e => finishTask(t, 'failed', e));
 
-    ok(res, { taskId: t.id });
+    ok(res, { taskId: t.id, hourlyCap: MASS_FRIEND_HOURLY_CAP, remainingThisHour: Math.max(0, MASS_FRIEND_HOURLY_CAP - _friendAddsInLastHour(account)) });
   } catch (e) { fail(res, e); }
 });
 

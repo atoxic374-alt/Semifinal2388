@@ -1599,10 +1599,49 @@ export function t(key) {
 export function getLang() { return currentLang; }
 export function isRTL() { return currentLang === 'ar'; }
 
-export function setLang(lang) {
-  if (!DICT[lang]) return;
+// Debounce + form-state preservation for setLang. Switching language used to
+// instantly re-render ~17 managers, blowing away whatever the user had typed
+// into open inputs (token entry, schedule textarea, etc). We now (a) coalesce
+// rapid lang toggles, (b) snapshot every focused/visible <input>/<textarea>
+// before tearing the DOM down, and (c) restore values + caret positions after.
+let _setLangTimer = null;
+let _setLangPending = null;
+function _snapshotForms() {
+  const snap = [];
+  document.querySelectorAll('input, textarea, select').forEach(el => {
+    if (!el.id && !el.name) return; // unidentifiable, skip
+    snap.push({
+      id: el.id || null,
+      name: el.name || null,
+      tag: el.tagName.toLowerCase(),
+      value: el.value,
+      checked: el.type === 'checkbox' || el.type === 'radio' ? el.checked : null,
+      caret: typeof el.selectionStart === 'number' ? [el.selectionStart, el.selectionEnd] : null,
+      focused: document.activeElement === el
+    });
+  });
+  return snap;
+}
+function _restoreForms(snap) {
+  for (const s of snap) {
+    let el = null;
+    if (s.id) el = document.getElementById(s.id);
+    if (!el && s.name) el = document.querySelector(`${s.tag}[name="${s.name}"]`);
+    if (!el) continue;
+    try {
+      if (s.checked !== null) el.checked = s.checked;
+      else if ('value' in el) el.value = s.value;
+      if (s.focused) el.focus();
+      if (s.caret && typeof el.setSelectionRange === 'function') {
+        try { el.setSelectionRange(s.caret[0], s.caret[1]); } catch (_) {}
+      }
+    } catch (_) {}
+  }
+}
+function _doSetLang(lang) {
   currentLang = lang;
   localStorage.setItem('lang', lang);
+  const snap = _snapshotForms();
   applyLang();
   // Re-render dynamic managers
   ['tokensManager', 'messagesManager', 'reactionManager', 'oldManager',
@@ -1621,7 +1660,18 @@ export function setLang(lang) {
       }
     } catch (e) {}
   });
+  // Restore form state on the next tick so re-rendered DOM is in place.
+  setTimeout(() => _restoreForms(snap), 0);
   window.dispatchEvent(new CustomEvent('lang-changed', { detail: { lang } }));
+}
+export function setLang(lang) {
+  if (!DICT[lang]) return;
+  _setLangPending = lang;
+  if (_setLangTimer) clearTimeout(_setLangTimer);
+  _setLangTimer = setTimeout(() => {
+    const next = _setLangPending; _setLangPending = null; _setLangTimer = null;
+    if (next) _doSetLang(next);
+  }, 80);
 }
 
 export function applyLang() {
