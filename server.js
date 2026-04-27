@@ -61,12 +61,12 @@ app.use(session({
   secret: auth.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
-  rolling: true,
+  rolling: true, // every request extends the cookie's expiry
   cookie: {
     httpOnly: true,
     sameSite: 'lax',
     secure: false, // proxy terminates TLS; cookie still flows over HTTPS via proxy
-    maxAge: 7 * 24 * 60 * 60 * 1000,
+    maxAge: 90 * 24 * 60 * 60 * 1000, // 90 days; device-token cookie is 1y
   },
 }));
 
@@ -154,7 +154,7 @@ app.get('/api/auth/status', (req, res) => {
 // the user just authorised in this session (kept in `req.session.pendingDiscord`).
 app.post('/api/auth/signup', async (req, res) => {
   try {
-    const { username, password, remember } = req.body || {};
+    const { username, password } = req.body || {};
     let discord = null;
     if (req.session?.pendingDiscord) discord = req.session.pendingDiscord;
     const u = await users.createUser({ username, password, discord });
@@ -163,12 +163,12 @@ app.post('/api/auth/signup', async (req, res) => {
       if (err) return res.status(500).json({ success: false, error: 'session_error' });
       req.session.user = { id: u.id, username: u.username, loginAt: Date.now() };
       users.touchLogin(u.id);
-      if (remember) {
-        try {
-          const tok = users.issueDeviceToken(u.id, { ua: req.headers['user-agent'], ip: req.ip });
-          auth.setDeviceCookie(res, tok);
-        } catch {}
-      }
+      // Always issue a long-lived device token so the user never has to log in
+      // again from this browser unless they explicitly log out.
+      try {
+        const tok = users.issueDeviceToken(u.id, { ua: req.headers['user-agent'], ip: req.ip });
+        auth.setDeviceCookie(res, tok);
+      } catch {}
       res.json({ success: true, user: users.publicUser(users.findById(u.id)) });
     });
   } catch (e) {
@@ -181,7 +181,7 @@ app.post('/api/auth/login', async (req, res) => {
     const ip = req.ip;
     const delay = auth._failureDelay(ip);
     if (delay) await new Promise(r => setTimeout(r, delay));
-    const { username, password, remember } = req.body || {};
+    const { username, password } = req.body || {};
     const u = await users.verifyPassword(username, password);
     if (!u) {
       auth._noteFailure(ip);
@@ -192,12 +192,12 @@ app.post('/api/auth/login', async (req, res) => {
       if (err) return res.status(500).json({ success: false, error: 'session_error' });
       req.session.user = { id: u.id, username: u.username, loginAt: Date.now() };
       users.touchLogin(u.id);
-      if (remember) {
-        try {
-          const tok = users.issueDeviceToken(u.id, { ua: req.headers['user-agent'], ip: req.ip });
-          auth.setDeviceCookie(res, tok);
-        } catch {}
-      }
+      // Always issue a long-lived device token — once the user logs in here,
+      // this browser stays signed in until they hit Logout.
+      try {
+        const tok = users.issueDeviceToken(u.id, { ua: req.headers['user-agent'], ip: req.ip });
+        auth.setDeviceCookie(res, tok);
+      } catch {}
       res.json({ success: true, user: users.publicUser(users.findById(u.id)) });
     });
   } catch (e) {

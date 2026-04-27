@@ -1,3 +1,24 @@
 {
-  "users": []
+  "users": [
+    {
+      "id": "u_a9c92dbcc123d2e7",
+      "username": "ahmeds",
+      "passwordHash": "$2b$10$vU8ia9hdleRdYLmed3WoNerhXLwYmOfDEegsQmnRQ1AJPVP3rcFTe",
+      "discordId": null,
+      "discordUsername": null,
+      "discordAvatar": null,
+      "createdAt": 1777270331949,
+      "lastLogin": 1777270331950,
+      "deviceTokens": [
+        {
+          "id": "76f9489b6040a9f7",
+          "hash": "b17733ae30122a24a502709c625f8a28d3820d8259fd7b45611b65326d7e158b",
+          "createdAt": 1777270331950,
+          "lastSeen": 1777270331950,
+          "ua": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+          "ip": "10.81.12.248"
+        }
+      ]
+    }
+  ]
 }
