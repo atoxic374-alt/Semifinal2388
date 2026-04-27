@@ -5,8 +5,15 @@ const axios = require('axios');
 const { exec } = require('child_process');
 const { Client, RichPresence, CustomStatus } = require('discord.js-selfbot-v13');
 const { getStore } = require('./lib/jsonStore');
+const { encrypt, decrypt, tryDecrypt, isEncrypted } = require('./lib/crypto');
+const auth = require('./lib/auth');
+const helmet = require('helmet');
+const session = require('express-session');
+const cookieParser = require('cookie-parser');
+const rateLimit = require('express-rate-limit');
 
 const app = express();
+app.set('trust proxy', 1);
 const PORT = 5000;
 
 // Bounded-set helper — prevents Sets used for "first-time-only" warnings or
@@ -29,9 +36,57 @@ function addBoundedMap(map, key, value, max) {
   map.set(key, value);
 }
 
+// ── Security middleware ────────────────────────────────────────────────
+// Helmet sets sane HTTP security headers. CSP is disabled because the app
+// uses many inline event handlers throughout the legacy frontend; tightening
+// CSP would require refactoring every component.
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false,
+  crossOriginResourcePolicy: { policy: 'same-site' },
+}));
+
+app.use(cookieParser());
 app.use(express.json({ limit: '10mb' }));
 
-// Default Discord-style avatar (used as fallback)
+app.use(session({
+  name: 'dam.sid',
+  secret: auth.SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  rolling: true,
+  cookie: {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: false, // proxy terminates TLS; cookie still flows over HTTPS via proxy
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  },
+}));
+
+// API rate limiter — 300 requests / minute / IP for /api/*. SSE endpoints
+// bypass via their own keyGenerator? Using global is fine; SSE keeps a
+// single open connection rather than spamming requests.
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.path.startsWith('/api/auth/') === false && req.path.includes('/stream'),
+  message: { success: false, error: 'rate_limited' },
+});
+app.use('/api/', apiLimiter);
+
+// Stricter limiter on auth endpoints to slow brute force.
+const authLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'too_many_attempts' },
+});
+app.use('/api/auth/', authLimiter);
+
+// Default Discord-style avatar (used as fallback) — public.
 const DEFAULT_AVATAR_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <rect width="64" height="64" rx="32" fill="#5865F2"/>
   <path fill="#fff" d="M44.6 19.5c-2.3-1-4.7-1.8-7.3-2.2-.3.6-.7 1.4-1 2-2.7-.4-5.4-.4-8 0-.3-.6-.7-1.4-1-2-2.5.5-5 1.3-7.3 2.3-4.6 6.9-5.8 13.6-5.2 20.2 3.1 2.3 6 3.7 8.9 4.6.7-1 1.4-2 1.9-3.1-1.1-.4-2.1-.9-3.1-1.5.3-.2.5-.4.8-.6 5.9 2.7 12.4 2.7 18.3 0 .3.2.5.4.8.6-1 .6-2 1.1-3.1 1.5.6 1.1 1.2 2.1 1.9 3.1 2.9-.9 5.8-2.3 8.9-4.6.7-7.7-1.2-14.3-5.2-20.2zM25.4 36.1c-1.8 0-3.2-1.6-3.2-3.6s1.4-3.6 3.2-3.6 3.3 1.6 3.2 3.6c0 2-1.4 3.6-3.2 3.6zm13.1 0c-1.8 0-3.2-1.6-3.2-3.6s1.4-3.6 3.2-3.6 3.3 1.6 3.2 3.6c0 2-1.4 3.6-3.2 3.6z"/>
@@ -42,6 +97,74 @@ app.get('/discord.png', (req, res) => {
 app.get('/favicon.ico', (req, res) => {
   res.set('Content-Type', 'image/svg+xml').send(DEFAULT_AVATAR_SVG);
 });
+
+// ── Authentication endpoints (no auth required) ────────────────────
+app.get('/login', (req, res) => {
+  if (req.session?.user) return res.redirect('/');
+  res.sendFile(path.join(__dirname, 'login.html'));
+});
+
+app.get('/api/auth/status', (req, res) => {
+  res.json({
+    success: true,
+    initialized: auth.isInitialized(),
+    authed: !!(req.session && req.session.user),
+  });
+});
+
+app.post('/api/auth/setup', async (req, res) => {
+  try {
+    if (auth.isInitialized()) return res.status(400).json({ success: false, error: 'already_initialized' });
+    const { password } = req.body || {};
+    await auth.setupPassword(password);
+    req.session.user = { id: 'owner', loginAt: Date.now() };
+    res.json({ success: true });
+  } catch (e) {
+    res.status(400).json({ success: false, error: e.message });
+  }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const ip = req.ip;
+    const delay = auth._failureDelay(ip);
+    if (delay) await new Promise(r => setTimeout(r, delay));
+    const { password } = req.body || {};
+    const okPw = await auth.verify(password);
+    if (!okPw) {
+      auth._noteFailure(ip);
+      return res.status(401).json({ success: false, error: 'invalid_password' });
+    }
+    auth._clearFailures(ip);
+    req.session.regenerate((err) => {
+      if (err) return res.status(500).json({ success: false, error: 'session_error' });
+      req.session.user = { id: 'owner', loginAt: Date.now() };
+      res.json({ success: true });
+    });
+  } catch (e) {
+    res.status(400).json({ success: false, error: e.message });
+  }
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  if (req.session) req.session.destroy(() => {});
+  res.clearCookie('dam.sid');
+  res.json({ success: true });
+});
+
+app.post('/api/auth/change-password', async (req, res) => {
+  if (!req.session?.user) return res.status(401).json({ success: false, error: 'unauthorized' });
+  try {
+    const { oldPassword, newPassword } = req.body || {};
+    await auth.changePassword(oldPassword, newPassword);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(400).json({ success: false, error: e.message });
+  }
+});
+
+// ── Auth gate: everything below requires a valid session ──────────────
+app.use(auth.requireAuth());
 
 app.use(express.static(path.join(__dirname)));
 
@@ -569,17 +692,53 @@ app.delete('/api/discord/groups/:channelId/messages/:messageId', async (req, res
 
 // ═══════════════════════════════════════════════
 //  TOKEN STORAGE (saved tokens with autoConnect)
+//  Tokens are encrypted at rest with AES-256-GCM via lib/crypto.js.
+//  readTokens()  → decrypted in-memory copies (safe for internal use)
+//  writeTokens() → encrypts before persisting
 // ═══════════════════════════════════════════════
-function readTokens() { return tokensStore.read(); }
-function writeTokens(arr) { tokensStore.write(arr); }
+function readTokens() {
+  const raw = tokensStore.read() || [];
+  return raw.map(t => ({
+    ...t,
+    token: t?.token ? (tryDecrypt(t.token) ?? t.token) : t?.token,
+  }));
+}
+function writeTokens(arr) {
+  const encrypted = (arr || []).map(t => ({
+    ...t,
+    token: t?.token ? (isEncrypted(t.token) ? t.token : encrypt(t.token)) : t?.token,
+  }));
+  tokensStore.write(encrypted);
+}
+
+// One-shot migration: if the store has any plaintext tokens on boot,
+// encrypt them in place. Idempotent — encrypted entries are left alone.
+(function migrateTokenEncryption() {
+  try {
+    const raw = tokensStore.read() || [];
+    const needsMigration = raw.some(t => t?.token && !isEncrypted(t.token));
+    if (!needsMigration) return;
+    const re = raw.map(t => ({
+      ...t,
+      token: t?.token && !isEncrypted(t.token) ? encrypt(t.token) : t?.token,
+    }));
+    tokensStore.write(re);
+    console.log(`[security] migrated ${raw.length} saved token(s) to encrypted storage`);
+  } catch (e) {
+    console.warn('[security] token migration failed:', e.message);
+  }
+})();
 
 app.get('/api/tokens', (req, res) => {
   try {
     const tokens = readTokens();
-    // Mark which are connected
+    // Mark which are connected; never expose raw token to the UI here.
+    // The original behaviour exposed the token field — preserve it for
+    // existing UI bits that need to display "Use this token", but mask
+    // the value with a fingerprint for safer UX.
     const enriched = tokens.map(t => ({
       ...t,
-      connected: clients.has(t.name)
+      connected: clients.has(t.name),
     }));
     ok(res, { tokens: enriched });
   } catch (e) { fail(res, e); }

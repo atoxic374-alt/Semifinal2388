@@ -24,6 +24,8 @@ export const showNotification = (message, type = 'info') => {
 };
 
 // Toast (bottom-right). type: 'success' | 'error' | 'info'
+// Includes a 1.2s dedupe window — if the same (type+message) toast fires again,
+// we just bump a counter on the existing card instead of stacking 20 copies.
 let _toastHost = null;
 function getToastHost() {
   if (_toastHost && document.body.contains(_toastHost)) return _toastHost;
@@ -36,20 +38,58 @@ function getToastHost() {
 const ICON_OK   = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
 const ICON_BAD  = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9"  x2="9"  y2="15"/><line x1="9"  y1="9"  x2="15" y2="15"/></svg>';
 const ICON_INFO = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8"  x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
+const _recentToasts = new Map(); // key -> { card, count, ts, timer }
+const _MAX_TOASTS = 6;
+const _DEDUPE_MS = 1500;
 export const showToast = (message, type = 'info', dur = 3000) => {
   const host = getToastHost();
+  const msg = String(message ?? '');
+  const key = `${type}:${msg}`;
+  const now = Date.now();
+
+  // Dedupe window — bump the existing card.
+  const prev = _recentToasts.get(key);
+  if (prev && (now - prev.ts) < _DEDUPE_MS && prev.card.isConnected) {
+    prev.count += 1;
+    prev.ts = now;
+    let badge = prev.card.querySelector('.toast-count');
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.className = 'toast-count';
+      badge.style.cssText = 'margin-left:8px;padding:2px 7px;border-radius:10px;background:rgba(255,255,255,.15);font-size:11px;font-weight:600';
+      prev.card.appendChild(badge);
+    }
+    badge.textContent = `×${prev.count}`;
+    clearTimeout(prev.timer);
+    prev.timer = setTimeout(() => {
+      prev.card.classList.remove('in'); prev.card.classList.add('out');
+      setTimeout(() => prev.card.remove(), 280);
+      _recentToasts.delete(key);
+    }, dur);
+    return;
+  }
+
   const card = document.createElement('div');
   card.className = `toast toast-${type}`;
   const ic = type === 'success' ? ICON_OK : type === 'error' ? ICON_BAD : ICON_INFO;
   card.innerHTML = `<span class="toast-ic">${ic}</span><span class="toast-msg"></span>`;
-  card.querySelector('.toast-msg').textContent = String(message ?? '');
+  card.querySelector('.toast-msg').textContent = msg;
   host.appendChild(card);
+
+  // Cap simultaneous toasts.
+  while (host.children.length > _MAX_TOASTS) host.removeChild(host.firstChild);
+
   if (type === 'success') sfx.success?.();
   else if (type === 'error') sfx.fail?.();
   requestAnimationFrame(() => card.classList.add('in'));
-  const close = () => { card.classList.remove('in'); card.classList.add('out'); setTimeout(() => card.remove(), 280); };
+  const close = () => {
+    card.classList.remove('in'); card.classList.add('out');
+    setTimeout(() => card.remove(), 280);
+    _recentToasts.delete(key);
+  };
   card.addEventListener('click', close);
-  setTimeout(close, dur);
+  const timer = setTimeout(close, dur);
+  _recentToasts.set(key, { card, count: 1, ts: now, timer });
 };
 
 // Button feedback: disables, shows "saving…" then "saved!"/"failed" then restores label.

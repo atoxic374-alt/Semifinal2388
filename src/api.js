@@ -1,7 +1,19 @@
 async function apiCall(method, url, body) {
-  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  const opts = {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+  };
   if (body !== undefined) opts.body = JSON.stringify(body);
   const res = await fetch(url, opts);
+  // If the server says we lost the session, bounce back to the login page so
+  // the user gets a clean re-auth instead of a confusing "401" string.
+  if (res.status === 401 && !url.startsWith('/api/auth/')) {
+    if (window.location.pathname !== '/login') {
+      window.location.href = '/login';
+    }
+    return { success: false, error: 'unauthorized' };
+  }
   return res.json();
 }
 

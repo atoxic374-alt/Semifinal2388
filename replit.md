@@ -7,6 +7,16 @@ A web-based Discord account manager built originally as an Electron desktop app,
 - **Backend**: Express.js server (`server.js`) on port 5000 serving both the REST API and static frontend files.
 - **Frontend**: Vanilla JS + HTML/CSS with ES modules (`index.html`, `src/`).
 - **Discord integration**: `discord.js-selfbot-v13` — maintains a live multi-client pool in server memory (one client per connected token).
+- **Security layer** (Apr 2026):
+  - Master password (bcrypt-hashed in `data/auth.json`) gates the entire app.
+  - First boot redirects to `/login` for setup; subsequent runs redirect to `/login` for sign-in.
+  - Session cookies via `express-session` (7-day rolling, HttpOnly, SameSite=Lax, signed with `data/.session_secret`).
+  - All `/api/*` (except `/api/auth/*`) require an authenticated session — unauthenticated requests get HTTP 401.
+  - Saved Discord tokens are encrypted at rest with **AES-256-GCM** (`lib/crypto.js`); the master key lives in `data/.master_key` (mode 600) or `MASTER_KEY` env. Tokens stored as `v1:iv:tag:ciphertext`.
+  - `helmet` sets standard security headers (HSTS, X-Frame-Options, nosniff, etc).
+  - `express-rate-limit`: 300 req/min per IP for `/api/*`, 30 req/5min for `/api/auth/*` (brute-force defence).
+  - Per-IP login backoff (exponential, max 4 s) on top of the rate limiter.
+- **Storage layer** (`lib/jsonStore.js`): atomic JSON writes (tmp+rename), per-file mutex queue, debounced 250 ms coalescing, in-memory cache, 3 rolling backups (`.bak.0/1/2`), automatic restore from backup on read failure, sync flush on SIGINT/SIGTERM.
 
 ### Key Files
 

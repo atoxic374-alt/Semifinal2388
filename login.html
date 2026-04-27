@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign in — Discord Account Manager</title>
+  <link rel="icon" href="/discord.png">
+  <style>
+    *{box-sizing:border-box}
+    html,body{margin:0;height:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:radial-gradient(circle at 30% 20%,#2b3a78 0%,#0f1428 60%,#0a0d1c 100%);color:#e7e9f4}
+    .wrap{min-height:100%;display:flex;align-items:center;justify-content:center;padding:24px}
+    .card{width:100%;max-width:400px;background:rgba(20,22,38,.85);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,.08);border-radius:18px;padding:36px 32px;box-shadow:0 30px 80px -20px rgba(0,0,0,.6)}
+    .logo{width:56px;height:56px;border-radius:16px;background:linear-gradient(135deg,#5865f2,#7986ff);display:flex;align-items:center;justify-content:center;margin-bottom:18px}
+    .logo svg{width:32px;height:32px}
+    h1{margin:0 0 6px;font-size:22px;font-weight:600}
+    .sub{margin:0 0 26px;font-size:13.5px;color:#a4a9c3;line-height:1.5}
+    label{display:block;margin:14px 0 6px;font-size:12.5px;color:#c2c6dd;letter-spacing:.3px}
+    input[type=password],input[type=text]{width:100%;padding:12px 14px;border-radius:10px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.04);color:#fff;font-size:14px;transition:border .15s}
+    input:focus{outline:none;border-color:#5865f2;background:rgba(88,101,242,.08)}
+    button{width:100%;margin-top:22px;padding:13px;border-radius:10px;border:0;background:linear-gradient(135deg,#5865f2,#4752c4);color:#fff;font-size:14.5px;font-weight:600;cursor:pointer;transition:transform .12s,box-shadow .12s}
+    button:hover{transform:translateY(-1px);box-shadow:0 10px 24px -10px rgba(88,101,242,.7)}
+    button:disabled{opacity:.6;cursor:not-allowed;transform:none}
+    .err{margin-top:14px;padding:10px 12px;border-radius:8px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);color:#fca5a5;font-size:13px;display:none}
+    .err.show{display:block}
+    .ok{margin-top:14px;padding:10px 12px;border-radius:8px;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.3);color:#86efac;font-size:13px;display:none}
+    .ok.show{display:block}
+    .warn{margin-top:18px;padding:10px 12px;border-radius:8px;background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.25);color:#fcd34d;font-size:11.5px;line-height:1.5}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="logo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      </div>
+      <h1 id="title">Welcome back</h1>
+      <p class="sub" id="sub">Enter your password to access the account manager.</p>
+
+      <form id="form">
+        <label for="pw">Password</label>
+        <input id="pw" type="password" autocomplete="current-password" required>
+
+        <div id="confirmWrap" style="display:none">
+          <label for="pw2">Confirm password</label>
+          <input id="pw2" type="password" autocomplete="new-password">
+        </div>
+
+        <button type="submit" id="btn">Sign in</button>
+
+        <div class="err" id="err"></div>
+        <div class="ok" id="ok"></div>
+      </form>
+
+      <div class="warn">
+        Self-bot use violates Discord's Terms of Service. Your accounts may be permanently banned. Use only at your own risk.
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (async () => {
+      const r = await fetch('/api/auth/status').then(x => x.json()).catch(() => ({ initialized: true }));
+      const isSetup = !r.initialized;
+      if (isSetup) {
+        document.getElementById('title').textContent = 'Set master password';
+        document.getElementById('sub').textContent = 'Choose a strong password (min 6 chars). It protects your saved Discord tokens.';
+        document.getElementById('btn').textContent = 'Create account';
+        document.getElementById('confirmWrap').style.display = 'block';
+        document.getElementById('pw').autocomplete = 'new-password';
+      }
+
+      const form = document.getElementById('form');
+      const errEl = document.getElementById('err');
+      const okEl  = document.getElementById('ok');
+      const btn   = document.getElementById('btn');
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        errEl.classList.remove('show'); okEl.classList.remove('show');
+        const pw  = document.getElementById('pw').value;
+        const pw2 = document.getElementById('pw2').value;
+
+        if (isSetup && pw !== pw2) {
+          errEl.textContent = 'Passwords do not match.';
+          errEl.classList.add('show'); return;
+        }
+        if (pw.length < 6) {
+          errEl.textContent = 'Password must be at least 6 characters.';
+          errEl.classList.add('show'); return;
+        }
+
+        btn.disabled = true;
+        try {
+          const url = isSetup ? '/api/auth/setup' : '/api/auth/login';
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: pw }),
+          }).then(x => x.json());
+          if (!res.success) throw new Error(res.error || 'Failed');
+          okEl.textContent = isSetup ? 'Account created. Redirecting…' : 'Welcome back. Redirecting…';
+          okEl.classList.add('show');
+          setTimeout(() => { window.location.href = '/'; }, 600);
+        } catch (e2) {
+          errEl.textContent = e2.message || 'Sign in failed';
+          errEl.classList.add('show');
+          btn.disabled = false;
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -58,6 +58,60 @@ document.getElementById('langToggleBtn')?.addEventListener('click', () => {
   setLang(getLang() === 'ar' ? 'en' : 'ar');
 });
 
+// ── Auth controls (logout + change password) ──
+document.getElementById('logoutBtn')?.addEventListener('click', async () => {
+  try { await fetch('/api/auth/logout', { method: 'POST' }); } catch {}
+  window.location.href = '/login';
+});
+
+document.getElementById('changePwBtn')?.addEventListener('click', async () => {
+  const oldPw = window.prompt('Current password');
+  if (!oldPw) return;
+  const newPw = window.prompt('New password (min 6 chars)');
+  if (!newPw || newPw.length < 6) return;
+  const newPw2 = window.prompt('Confirm new password');
+  if (newPw !== newPw2) { alert('Passwords do not match'); return; }
+  try {
+    const r = await fetch('/api/auth/change-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ oldPassword: oldPw, newPassword: newPw }),
+    }).then(x => x.json());
+    if (!r.success) throw new Error(r.error || 'Failed');
+    alert('Password changed.');
+  } catch (e) { alert('Failed: ' + e.message); }
+});
+
+// ── One-time self-bot warning banner (dismissible) ──
+(function initSelfBotWarning() {
+  if (localStorage.getItem('sb-warn-dismissed') === '1') return;
+  const banner = document.createElement('div');
+  banner.id = 'sb-warning';
+  banner.innerHTML = `
+    <span style="display:inline-flex;align-items:center;gap:8px">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      <span>Self-bot use violates Discord's Terms of Service. Your accounts may be banned.</span>
+    </span>
+    <button aria-label="Dismiss" id="sb-warning-x">×</button>`;
+  Object.assign(banner.style, {
+    position: 'fixed', top: '0', left: '0', right: '0', zIndex: '99999',
+    padding: '8px 16px', background: 'linear-gradient(90deg,#7c2d12,#9a3412)',
+    color: '#fff', fontSize: '12.5px', fontWeight: '500',
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    boxShadow: '0 2px 12px rgba(0,0,0,.4)',
+  });
+  const xBtn = banner.querySelector('#sb-warning-x');
+  Object.assign(xBtn.style, {
+    background: 'transparent', border: '0', color: '#fff', fontSize: '20px',
+    cursor: 'pointer', padding: '0 8px', lineHeight: '1',
+  });
+  xBtn.addEventListener('click', () => {
+    banner.remove();
+    localStorage.setItem('sb-warn-dismissed', '1');
+  });
+  document.body.insertBefore(banner, document.body.firstChild);
+})();
+
 // ── Mobile nav drawer ──
 (function initNavToggle() {
   const sidebar = document.getElementById('navSidebar');
