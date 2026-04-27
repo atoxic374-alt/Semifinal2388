@@ -6,6 +6,7 @@ const { exec } = require('child_process');
 const { Client, RichPresence, CustomStatus } = require('discord.js-selfbot-v13');
 const { getStore } = require('./lib/jsonStore');
 const { encrypt, decrypt, tryDecrypt, isEncrypted } = require('./lib/crypto');
+const { buildProxyAgents, testProxy, maskProxy } = require('./lib/proxy');
 const auth = require('./lib/auth');
 const helmet = require('helmet');
 const session = require('express-session');
@@ -313,16 +314,29 @@ const MAX_CUSTOM_STATUS_LEN = 128;
 //  CONNECT / DISCONNECT (multi-token aware)
 // ═══════════════════════════════════════════════
 
-async function connectOne(token, name) {
+async function connectOne(token, name, proxy) {
   const finalName = (name || `acc_${clients.size + 1}`).trim();
   if (clients.has(finalName)) {
     // disconnect previous before re-binding name
     try { await clients.get(finalName).client.destroy(); } catch (e) {}
     clients.delete(finalName);
   }
-  const client = new Client({ checkUpdate: false, fetchAllMembers: false });
+  const opts = { checkUpdate: false, fetchAllMembers: false };
+  if (proxy) {
+    try {
+      const a = buildProxyAgents(proxy);
+      if (a) {
+        opts.http = { agent: a.http };
+        opts.ws   = { agent: a.ws };
+        console.log(`[proxy] ${finalName} → ${maskProxy(proxy)}`);
+      }
+    } catch (e) {
+      throw new Error(`Proxy invalid for ${finalName}: ${e.message}`);
+    }
+  }
+  const client = new Client(opts);
   await client.login(token);
-  clients.set(finalName, { client, token, name: finalName });
+  clients.set(finalName, { client, token, name: finalName, proxy: proxy || null });
   if (!activeName) setActive(finalName);
   // Auto-bind DM realtime listener for PrivateManager (defined further below)
   try { if (typeof attachDMListener === 'function') attachDMListener(finalName, client); } catch (e) {}
@@ -352,8 +366,8 @@ async function connectOne(token, name) {
 
 app.post('/api/discord/connect', async (req, res) => {
   try {
-    const { token, name } = req.body;
-    const info = await connectOne(token, name);
+    const { token, name, proxy } = req.body;
+    const info = await connectOne(token, name, proxy);
     setActive(info.name);
     try { recordHistory({ account: info.name, type: 'connect', target: { username: info.username, id: info.id }, status: 'success' }); } catch (e) {}
     ok(res, { username: info.username, name: info.name, id: info.id });
@@ -415,7 +429,7 @@ async function autoConnectSaved() {
     for (const t of tokens) {
       if (t.autoConnect) {
         try {
-          await connectOne(t.token, t.name);
+          await connectOne(t.token, t.name, t.proxy);
           console.log(`[auto-connect] ${t.name} ✓`);
         } catch (e) {
           console.log(`[auto-connect] ${t.name} ✗ ${e.message}`);
@@ -701,12 +715,14 @@ function readTokens() {
   return raw.map(t => ({
     ...t,
     token: t?.token ? (tryDecrypt(t.token) ?? t.token) : t?.token,
+    proxy: t?.proxy ? (tryDecrypt(t.proxy) ?? t.proxy) : (t?.proxy || null),
   }));
 }
 function writeTokens(arr) {
   const encrypted = (arr || []).map(t => ({
     ...t,
     token: t?.token ? (isEncrypted(t.token) ? t.token : encrypt(t.token)) : t?.token,
+    proxy: t?.proxy ? (isEncrypted(t.proxy) ? t.proxy : encrypt(t.proxy)) : (t?.proxy || null),
   }));
   tokensStore.write(encrypted);
 }
@@ -732,13 +748,12 @@ function writeTokens(arr) {
 app.get('/api/tokens', (req, res) => {
   try {
     const tokens = readTokens();
-    // Mark which are connected; never expose raw token to the UI here.
-    // The original behaviour exposed the token field — preserve it for
-    // existing UI bits that need to display "Use this token", but mask
-    // the value with a fingerprint for safer UX.
+    // Mark which are connected; mask proxy URL so credentials never reach the UI.
     const enriched = tokens.map(t => ({
       ...t,
       connected: clients.has(t.name),
+      proxy: t.proxy ? maskProxy(t.proxy) : null,
+      hasProxy: !!t.proxy,
     }));
     ok(res, { tokens: enriched });
   } catch (e) { fail(res, e); }
@@ -746,14 +761,19 @@ app.get('/api/tokens', (req, res) => {
 
 app.post('/api/tokens', (req, res) => {
   try {
-    const { name, token, autoConnect = false } = req.body;
+    const { name, token, autoConnect = false, proxy } = req.body;
     const cleanName = String(name || '').trim();
     const cleanToken = String(token || '').trim();
+    const cleanProxy = (proxy ?? '').toString().trim() || null;
     if (!cleanName) return fail(res, new Error('Name is required'));
     if (cleanName.length > 64) return fail(res, new Error('Name is too long (max 64 chars)'));
     if (!cleanToken) return fail(res, new Error('Token is required'));
     if (!isLikelyDiscordToken(cleanToken)) {
       return fail(res, new Error('Token does not look like a valid Discord token. Re-copy it from your client/devtools.'));
+    }
+    if (cleanProxy) {
+      try { buildProxyAgents(cleanProxy); }
+      catch (e) { return fail(res, new Error('Invalid proxy: ' + e.message)); }
     }
     const tokens = readTokens();
     if (tokens.some(t => t.name === cleanName)) {
@@ -763,7 +783,7 @@ app.post('/api/tokens', (req, res) => {
       const dupe = tokens.find(t => t.token === cleanToken);
       return fail(res, new Error(`This token is already saved under "${dupe.name}". Delete the duplicate first.`));
     }
-    tokens.push({ name: cleanName, token: cleanToken, autoConnect: !!autoConnect });
+    tokens.push({ name: cleanName, token: cleanToken, autoConnect: !!autoConnect, proxy: cleanProxy });
     writeTokens(tokens);
     try { recordHistory({ account: cleanName, type: 'save_token', target: { name: cleanName }, status: 'success' }); } catch (e) {}
     ok(res);
@@ -795,9 +815,43 @@ app.post('/api/tokens/:name/connect', async (req, res) => {
   try {
     const t = readTokens().find(x => x.name === req.params.name);
     if (!t) return fail(res, new Error('Token not found'));
-    const info = await connectOne(t.token, t.name);
+    const info = await connectOne(t.token, t.name, t.proxy);
     try { recordHistory({ account: info.name, type: 'connect', target: { username: info.username, id: info.id }, status: 'success' }); } catch (e) {}
     ok(res, info);
+  } catch (e) { fail(res, e); }
+});
+
+// ── Proxy management for a saved account
+app.put('/api/tokens/:name/proxy', (req, res) => {
+  try {
+    const tokens = readTokens();
+    const idx = tokens.findIndex(t => t.name === req.params.name);
+    if (idx === -1) return fail(res, new Error('Token not found'));
+    const raw = (req.body?.proxy ?? '').toString().trim();
+    if (raw) {
+      // Validate by attempting to build the agents (throws on bad URL/scheme).
+      try { buildProxyAgents(raw); }
+      catch (e) { return fail(res, new Error('Invalid proxy: ' + e.message)); }
+      tokens[idx].proxy = raw;
+    } else {
+      tokens[idx].proxy = null;
+    }
+    writeTokens(tokens);
+    ok(res, { proxy: tokens[idx].proxy ? maskProxy(tokens[idx].proxy) : null });
+  } catch (e) { fail(res, e); }
+});
+
+app.post('/api/tokens/:name/proxy/test', async (req, res) => {
+  try {
+    // Allow ad-hoc test (body.proxy) OR test the currently-saved one.
+    let raw = (req.body?.proxy ?? '').toString().trim();
+    if (!raw) {
+      const t = readTokens().find(x => x.name === req.params.name);
+      if (!t || !t.proxy) return fail(res, new Error('No proxy set for this account'));
+      raw = t.proxy;
+    }
+    const r = await testProxy(raw);
+    ok(res, { ok: true, ip: r.ip, masked: maskProxy(raw) });
   } catch (e) { fail(res, e); }
 });
 

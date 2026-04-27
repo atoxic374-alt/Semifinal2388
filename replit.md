@@ -17,6 +17,7 @@ A web-based Discord account manager built originally as an Electron desktop app,
   - `express-rate-limit`: 300 req/min per IP for `/api/*`, 30 req/5min for `/api/auth/*` (brute-force defence).
   - Per-IP login backoff (exponential, max 4 s) on top of the rate limiter.
 - **Storage layer** (`lib/jsonStore.js`): atomic JSON writes (tmp+rename), per-file mutex queue, debounced 250 ms coalescing, in-memory cache, 3 rolling backups (`.bak.0/1/2`), automatic restore from backup on read failure, sync flush on SIGINT/SIGTERM.
+- **Per-account proxy** (`lib/proxy.js`, Apr 2026): Each saved account can route ALL its traffic (REST + WebSocket) through its own proxy. Supports `http://`, `https://`, `socks://`, `socks4://`, `socks5://` (with optional `user:pass@`). Proxy URLs are encrypted at rest alongside the token (AES-256-GCM) and **always masked** when sent to the UI (`http://***:***@host:port`). New endpoints: `PUT /api/tokens/:name/proxy` (set/clear) and `POST /api/tokens/:name/proxy/test` (live egress-IP check via `api.ipify.org` with 8 s timeout). The Tokens UI gained a Proxy button per saved account that prompts, tests, and saves in one flow, plus a purple `PROXY` pill on connected accounts.
 
 ### Key Files
 

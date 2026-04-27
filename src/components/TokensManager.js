@@ -103,6 +103,7 @@ export class TokensManager {
         <div class="mm-row-fields">
           <input id="tk-name"  placeholder="${t('tk.account_name')}">
           <input id="tk-token" placeholder="${t('tk.discord_token')}" type="password">
+          <input id="tk-proxy" placeholder="Proxy (optional) — http://user:pass@host:port or socks5://…">
           <label class="mm-toggle"><input type="checkbox" id="tk-auto"> ${t('tk.auto_connect')}</label>
           <button class="mm-btn primary glow" onclick="window.tokensManager.addToken()">${t('tk.save')}</button>
         </div>
@@ -139,6 +140,7 @@ export class TokensManager {
               ${saved?.autoConnect ? `<span class="tk-pill auto">${t('tk.auto')}</span>` : ''}
               ${isActive ? `<span class="tk-pill act">${t('tk.active')}</span>` : ''}
               ${this.actRunning.includes(name) ? `<span class="tk-pill sim">${t('tk.simulator')}</span>` : ''}
+              ${saved?.hasProxy ? `<span class="tk-pill proxy" title="${this.escHtml(saved.proxy || '')}">PROXY</span>` : ''}
             </div>
             <div class="tk-tag">${showHandle ? `@${this.escHtml(handle)}` : this.escHtml(handle)}</div>
             <div class="tk-status">${this.dotFor(conn?.status)}</div>
@@ -147,6 +149,7 @@ export class TokensManager {
             ${conn ? '' : `<button class="mm-btn primary small" onclick="window.tokensManager.connectSaved('${this.esc(name)}')">${t('tk.connect')}</button>`}
             ${conn && !isActive ? `<button class="mm-btn ghost small" onclick="window.tokensManager.makeActive('${this.esc(name)}')">${t('tk.make_active')}</button>` : ''}
             ${conn ? `<button class="mm-btn warning small" onclick="window.tokensManager.disconnectSaved('${this.esc(name)}')">${t('tk.dc')}</button>` : ''}
+            ${saved ? `<button class="mm-btn ghost small" onclick="window.tokensManager.editProxy('${this.esc(name)}')">${saved.hasProxy ? 'Proxy ✓' : 'Proxy'}</button>` : ''}
             ${saved ? `<button class="mm-btn ghost small" onclick="window.tokensManager.toggleAuto('${this.esc(name)}', ${!saved.autoConnect})">${saved.autoConnect ? t('tk.disable_auto') : t('tk.enable_auto')}</button>` : ''}
             ${saved ? `<button class="mm-btn danger small" onclick="window.tokensManager.deleteToken('${this.esc(name)}')">${t('tk.delete')}</button>` : ''}
           </div>
@@ -164,18 +167,45 @@ export class TokensManager {
   async addToken() {
     const name = document.getElementById('tk-name').value.trim();
     const token = document.getElementById('tk-token').value.trim();
+    const proxy = document.getElementById('tk-proxy')?.value.trim() || null;
     const auto = document.getElementById('tk-auto').checked;
     if (!name || !token) return showNotification('Name and token required');
-    const r = await window.electronAPI.saveToken(name, token, auto);
+    const r = await window.electronAPI.saveToken(name, token, auto, proxy);
     if (!r.success) return showNotification(r.error);
-    showNotification('Saved');
+    showNotification('Saved' + (proxy ? ' (with proxy)' : ''));
     document.getElementById('tk-name').value = '';
     document.getElementById('tk-token').value = '';
+    if (document.getElementById('tk-proxy')) document.getElementById('tk-proxy').value = '';
     document.getElementById('tk-auto').checked = false;
     if (auto) {
       const c = await window.electronAPI.connectSaved(name);
       if (c.success) showNotification(`Connected: ${name}`);
+      else showNotification(`Connect failed: ${c.error || ''}`);
     }
+    await this.refresh(); this.render();
+  }
+
+  // ── Proxy edit/test modal (lightweight, no extra dependencies)
+  async editProxy(name) {
+    const saved = this.tokens.find(x => x.name === name);
+    const current = saved?.proxy || '';
+    const placeholder = 'http://user:pass@host:port  or  socks5://host:port  (leave empty to remove)';
+    const input = window.prompt(
+      `Proxy for "${name}"\n(http / https / socks5 supported, with optional credentials)\n\nCurrent: ${current || '(none)'}\n\nLeave empty to remove the proxy.`,
+      ''
+    );
+    // user hit Cancel
+    if (input === null) return;
+    const next = input.trim();
+    if (next) {
+      showNotification('Testing proxy…');
+      const tr = await window.electronAPI.testProxy(name, next);
+      if (!tr.success) return showNotification('Proxy test failed: ' + (tr.error || 'unknown'));
+      showNotification('Proxy OK — egress IP: ' + (tr.ip || 'unknown'));
+    }
+    const r = await window.electronAPI.setProxy(name, next);
+    if (!r.success) return showNotification('Save failed: ' + (r.error || 'unknown'));
+    showNotification(next ? 'Proxy saved. Reconnect to apply.' : 'Proxy removed.');
     await this.refresh(); this.render();
   }
 

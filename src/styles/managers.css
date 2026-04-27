@@ -524,8 +524,9 @@
   text-transform: uppercase;
 }
 .tk-pill.ok   { background: rgba(39,174,96,0.18); color: #5fdc92; }
-.tk-pill.auto { background: rgba(58,143,209,0.18); color: #7ac3ed; }
-.tk-pill.act  { background: rgba(88,101,242,0.18); color: #a4adff; }
+.tk-pill.auto  { background: rgba(58,143,209,0.18); color: #7ac3ed; }
+.tk-pill.act   { background: rgba(88,101,242,0.18); color: #a4adff; }
+.tk-pill.proxy { background: rgba(155,89,182,0.18); color: #c89bf0; cursor: help; }
 
 .tk-tag { font-size: 12px; color: var(--text-secondary); }
 

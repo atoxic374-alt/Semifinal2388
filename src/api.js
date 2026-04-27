@@ -177,11 +177,13 @@ window.electronAPI = {
 
   // ── Token storage
   getTokens:    ()           => apiCall('GET', '/api/tokens'),
-  saveToken:    (name, token, autoConnect = false) => apiCall('POST', '/api/tokens', { name, token, autoConnect }),
+  saveToken:    (name, token, autoConnect = false, proxy = null) => apiCall('POST', '/api/tokens', { name, token, autoConnect, proxy }),
   updateToken:  (name, patch) => apiCall('PATCH', `/api/tokens/${encodeURIComponent(name)}`, patch),
   deleteToken:  (name)        => apiCall('DELETE', `/api/tokens/${encodeURIComponent(name)}`),
   connectSaved: (name)        => apiCall('POST', `/api/tokens/${encodeURIComponent(name)}/connect`),
   disconnectSaved:(name)      => apiCall('POST', `/api/tokens/${encodeURIComponent(name)}/disconnect`),
+  setProxy:     (name, proxy) => apiCall('PUT',  `/api/tokens/${encodeURIComponent(name)}/proxy`, { proxy }),
+  testProxy:    (name, proxy) => apiCall('POST', `/api/tokens/${encodeURIComponent(name)}/proxy/test`, { proxy }),
 
   checkUpdates:    () => apiCall('GET', '/api/updates'),
   downloadUpdate:  (url) => { window.open(url, '_blank'); },
