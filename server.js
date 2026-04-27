@@ -4088,6 +4088,48 @@ app.get('/api/search/last-message/:userId', async (req, res) => {
   } catch (e) { fail(res, e); }
 });
 
+// Fast user suggest from local cache — zero Discord API calls, <10ms response
+app.get('/api/search/suggest', (req, res) => {
+  const q = (req.query.q || '').trim().toLowerCase();
+  if (!q || q.length < 1) return ok(res, { suggestions: [] });
+  const accountFilter = (req.query.account || '').trim() || null;
+  const accountsToUse = accountFilter ? [accountFilter] : Array.from(clients.keys());
+  const seen = new Map();
+  const tryAdd = (u, displayName) => {
+    if (seen.size >= 25 || !u?.id) return;
+    const uname  = (u.username   || '').toLowerCase();
+    const gname  = (u.globalName || u.global_name || '').toLowerCase();
+    const dname  = (displayName  || gname || uname).toLowerCase();
+    if (!uname.includes(q) && !gname.includes(q) && !dname.includes(q)) return;
+    if (!seen.has(u.id)) {
+      seen.set(u.id, {
+        id: u.id,
+        username:   u.username || '',
+        globalName: u.globalName || u.global_name || u.username || '',
+        avatar: u.avatar
+          ? `https://cdn.discordapp.com/avatars/${u.id}/${u.avatar}.png?size=64`
+          : defaultAvatarUrl(u.id)
+      });
+    }
+  };
+  for (const acct of accountsToUse) {
+    const c = clients.get(acct)?.client;
+    if (!c) continue;
+    for (const ch of c.channels?.cache?.values?.() || []) {
+      if (ch.type !== 'DM' || !ch.recipient) continue;
+      tryAdd(ch.recipient, null);
+    }
+    for (const g of c.guilds?.cache?.values?.() || []) {
+      for (const m of g.members?.cache?.values?.() || []) {
+        if (seen.size >= 25) break;
+        tryAdd(m.user, m.displayName);
+      }
+      if (seen.size >= 25) break;
+    }
+  }
+  ok(res, { suggestions: Array.from(seen.values()).slice(0, 10) });
+});
+
 // ═══════════════════════════════════════════════
 //  8. MASS FRIEND OPERATIONS
 //  All bulk ops run through the task system.

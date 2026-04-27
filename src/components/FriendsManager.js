@@ -9,6 +9,8 @@ export class FriendsManager {
   constructor(contentArea) {
     this.contentArea = contentArea;
     this.account = null;
+    this.filter = '';
+    this.allFriends = [];
   }
 
   async refreshFriendsList() {
@@ -30,6 +32,7 @@ export class FriendsManager {
         </div>
         <div class="mm-body">
           <div class="actions-bar">
+            <input type="text" id="fr-filter" class="list-filter-input" placeholder="${t('common.filter') || 'Filter…'}" value="${this.escAttr(this.filter)}">
             <button id="selectAllFriendsBtn" onclick="window.friendsManager.toggleSelectAll()">${t('fr.select_all')}</button>
             <button id="removeSelectedFriendsBtn" onclick="window.friendsManager.removeSelected()" class="danger-btn" disabled>${t('fr.remove_selected')}</button>
           </div>
@@ -43,7 +46,25 @@ export class FriendsManager {
     toolbar.innerHTML = picker.html;
     picker.bind(toolbar, (val) => { this.account = val; this.loadList(); });
 
+    this.contentArea.querySelector('#fr-filter').addEventListener('input', (e) => {
+      this.filter = e.target.value;
+      this._applyFilter();
+    });
+
     await this.loadList();
+  }
+
+  _applyFilter() {
+    const q = this.filter.toLowerCase();
+    this.contentArea.querySelectorAll('#friendsList .list-item').forEach(row => {
+      const name = (row.dataset.name || '').toLowerCase();
+      row.style.display = (!q || name.includes(q)) ? '' : 'none';
+    });
+    const count = this.allFriends.filter(f =>
+      !q || f.username.toLowerCase().includes(q) || f.displayName.toLowerCase().includes(q)
+    ).length;
+    const counter = this.contentArea.querySelector('#fr-counter');
+    if (counter) counter.textContent = `${count} / ${this.allFriends.length}`;
   }
 
   async loadList() {
@@ -52,12 +73,14 @@ export class FriendsManager {
     list.innerHTML = `<div class="mm-info-row mm-muted">${t('common.loading')}</div>`;
     try {
       const friends = await getFriendsList(this.account);
+      this.allFriends = friends;
       if (!friends.length) {
         list.innerHTML = `<div class="mm-info-row mm-muted">${t('fr.empty')}</div>`;
         return;
       }
-      list.innerHTML = friends.map(f => `
-        <div class="list-item" data-id="${f.id}">
+      const counter = `<div class="list-counter" id="fr-counter">${friends.length} / ${friends.length}</div>`;
+      list.innerHTML = counter + friends.map(f => `
+        <div class="list-item" data-id="${f.id}" data-name="${this.escAttr(f.username + ' ' + f.displayName)}">
           <div class="list-item-left">
             <input type="checkbox" class="friend-checkbox" onchange="window.friendsManager.updateSelectedCount()">
             <img src="${f.avatar}" alt="" onerror="this.src='/discord.png'">
@@ -72,16 +95,17 @@ export class FriendsManager {
           </div>
         </div>
       `).join('');
+      this._applyFilter();
     } catch (e) {
       list.innerHTML = `<p class="error">${t('fr.failed')}</p>`;
     }
   }
 
   toggleSelectAll() {
-    const checkboxes = document.querySelectorAll('.friend-checkbox');
+    const visible = Array.from(document.querySelectorAll('.friend-checkbox')).filter(cb => cb.closest('.list-item').style.display !== 'none');
     const btn = document.getElementById('selectAllFriendsBtn');
     const isAll = btn.textContent === t('fr.select_all');
-    checkboxes.forEach(cb => cb.checked = isAll);
+    visible.forEach(cb => cb.checked = isAll);
     btn.textContent = isAll ? t('fr.deselect_all') : t('fr.select_all');
     this.updateSelectedCount();
   }
@@ -99,6 +123,7 @@ export class FriendsManager {
   async removeFriend(id) {
     try {
       await window.electronAPI.deleteFriend(id);
+      this.allFriends = this.allFriends.filter(f => f.id !== id);
       this.refreshFriendsList();
     } catch (e) {}
   }
@@ -120,4 +145,5 @@ export class FriendsManager {
   }
 
   escHtml(s = '') { return String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
+  escAttr(s = '') { return this.escHtml(s); }
 }

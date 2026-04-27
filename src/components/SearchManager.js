@@ -18,6 +18,7 @@ export class SearchManager {
     this.candidates = null;
     this.loading = false;
     this.poll = null;
+    this._suggTimer = null;
   }
 
   async init() { await this.render(); }
@@ -39,14 +40,15 @@ export class SearchManager {
               <span>${t('sm.search_all_accounts')}</span>
             </label>
           </div>
-          <div class="sm-search">
-            <input type="text" id="sm-query" placeholder="${t('sm.placeholder')}" value="${escapeAttr(this.query)}">
+          <div class="sm-search" style="position:relative">
+            <input type="text" id="sm-query" placeholder="${t('sm.placeholder')}" value="${escapeAttr(this.query)}" autocomplete="off">
             <select id="sm-mode">
               <option value="auto"${this.mode==='auto'?' selected':''}>${t('sm.mode_auto')}</option>
               <option value="id"${this.mode==='id'?' selected':''}>${t('sm.mode_id')}</option>
               <option value="username"${this.mode==='username'?' selected':''}>${t('sm.mode_username')}</option>
             </select>
             <button id="sm-go" class="sm-go-btn">${icon('search')} ${t('sm.go')}</button>
+            <div id="sm-dropdown" class="sm-suggest-dropdown" style="display:none"></div>
           </div>
         </div>
 
@@ -62,10 +64,70 @@ export class SearchManager {
     this.contentArea.querySelector('#sm-all').addEventListener('change', e => { this.allAccounts = e.target.checked; });
     this.contentArea.querySelector('#sm-mode').addEventListener('change', e => { this.mode = e.target.value; });
     const inp = this.contentArea.querySelector('#sm-query');
-    inp.addEventListener('keydown', e => { if (e.key === 'Enter') this.runSearch(); });
-    this.contentArea.querySelector('#sm-go').addEventListener('click', () => this.runSearch());
+    inp.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { this._closeDropdown(); this.runSearch(); }
+      if (e.key === 'Escape') this._closeDropdown();
+    });
+    inp.addEventListener('input', () => this._onQueryInput());
+    inp.addEventListener('focus', () => { if (inp.value.trim()) this._onQueryInput(); });
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.sm-search')) this._closeDropdown();
+    }, { capture: true, once: false });
+    this.contentArea.querySelector('#sm-go').addEventListener('click', () => { this._closeDropdown(); this.runSearch(); });
 
     this.bindResultActions();
+  }
+
+  _closeDropdown() {
+    const d = this.contentArea?.querySelector('#sm-dropdown');
+    if (d) d.style.display = 'none';
+  }
+
+  _onQueryInput() {
+    clearTimeout(this._suggTimer);
+    const inp = this.contentArea?.querySelector('#sm-query');
+    const q = (inp?.value || '').trim();
+    if (!q || q.length < 1 || /^\d{15,22}$/.test(q)) { this._closeDropdown(); return; }
+    this._suggTimer = setTimeout(() => this._fetchSuggestions(q), 160);
+  }
+
+  async _fetchSuggestions(q) {
+    try {
+      const params = new URLSearchParams({ q });
+      if (this.account) params.set('account', this.account);
+      const r = await fetch('/api/search/suggest?' + params).then(x => x.json());
+      this._renderDropdown(r.suggestions || []);
+    } catch (_) {}
+  }
+
+  _renderDropdown(suggestions) {
+    const dd = this.contentArea?.querySelector('#sm-dropdown');
+    if (!dd) return;
+    if (!suggestions.length) { dd.style.display = 'none'; return; }
+    dd.style.display = '';
+    dd.innerHTML = suggestions.map(s => `
+      <button class="sm-suggest-item" data-id="${escapeAttr(s.id)}">
+        <img src="${escapeAttr(s.avatar)}" alt="" onerror="this.src='/discord.png'">
+        <div class="sm-suggest-text">
+          <span class="sm-suggest-name">${escapeHtml(s.globalName || s.username)}</span>
+          <span class="sm-suggest-sub">@${escapeHtml(s.username)}</span>
+        </div>
+      </button>
+    `).join('');
+    dd.querySelectorAll('.sm-suggest-item').forEach(btn => {
+      btn.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        const id = btn.dataset.id;
+        const inp = this.contentArea?.querySelector('#sm-query');
+        if (inp) inp.value = id;
+        this.query = id;
+        this.mode = 'id';
+        const modeEl = this.contentArea?.querySelector('#sm-mode');
+        if (modeEl) modeEl.value = 'id';
+        this._closeDropdown();
+        this.runSearch();
+      });
+    });
   }
 
   renderResultHTML() {

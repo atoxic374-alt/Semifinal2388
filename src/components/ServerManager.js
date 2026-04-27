@@ -8,6 +8,8 @@ export class ServerManager {
   constructor(contentArea) {
     this.contentArea = contentArea;
     this.account = null;
+    this.filter = '';
+    this.allServers = [];
   }
 
   async refreshServersList() {
@@ -29,6 +31,7 @@ export class ServerManager {
         </div>
         <div class="mm-body">
           <div class="actions-bar">
+            <input type="text" id="sv-filter" class="list-filter-input" placeholder="${t('common.filter') || 'Filter…'}" value="${this.escAttr(this.filter)}">
             <button id="selectAllServersBtn" onclick="window.serverManager.toggleSelectAllServers()">${t('sv.select_all')}</button>
             <button id="leaveSelectedServersBtn" onclick="window.serverManager.leaveSelectedServers()" class="danger-btn" disabled>${t('sv.leave_selected')}</button>
             <button id="muteSelectedServersBtn" onclick="window.serverManager.muteSelectedServers()" class="warning-btn" disabled>${t('sv.mute_selected')}</button>
@@ -44,7 +47,23 @@ export class ServerManager {
     toolbar.innerHTML = picker.html;
     picker.bind(toolbar, (val) => { this.account = val; this.loadList(); });
 
+    this.contentArea.querySelector('#sv-filter').addEventListener('input', (e) => {
+      this.filter = e.target.value;
+      this._applyFilter();
+    });
+
     await this.loadList();
+  }
+
+  _applyFilter() {
+    const q = this.filter.toLowerCase();
+    this.contentArea.querySelectorAll('#serversList .list-item').forEach(row => {
+      const name = (row.dataset.name || '').toLowerCase();
+      row.style.display = (!q || name.includes(q)) ? '' : 'none';
+    });
+    const count = this.allServers.filter(s => !q || s.name.toLowerCase().includes(q)).length;
+    const counter = this.contentArea.querySelector('#sv-counter');
+    if (counter) counter.textContent = `${count} / ${this.allServers.length}`;
   }
 
   async loadList() {
@@ -53,16 +72,21 @@ export class ServerManager {
     list.innerHTML = `<div class="mm-info-row mm-muted">${t('common.loading')}</div>`;
     try {
       const servers = await getServersList(this.account);
+      this.allServers = servers;
       if (!servers.length) {
         list.innerHTML = `<div class="mm-info-row mm-muted">${t('sv.empty')}</div>`;
         return;
       }
-      list.innerHTML = servers.map(s => `
-        <div class="list-item" data-id="${s.id}">
+      const counter = `<div class="list-counter" id="sv-counter">${servers.length} / ${servers.length}</div>`;
+      list.innerHTML = counter + servers.map(s => `
+        <div class="list-item" data-id="${s.id}" data-name="${this.escAttr(s.name)}">
           <div class="list-item-left">
             <input type="checkbox" class="server-checkbox" onchange="window.serverManager.updateSelectedServersCount()">
             <img src="${s.icon}" alt="" onerror="this.src='/discord.png'">
-            <span>${this.escHtml(s.name)}</span>
+            <div class="user-info">
+              <span class="display-name">${this.escHtml(s.name)}</span>
+              <span class="username">${s.members ? `${s.members.toLocaleString()} ${t('sv.members') || 'members'}` : ''}</span>
+            </div>
           </div>
           <div class="button-group">
             <button onclick="window.serverManager.copyToClipboard('${s.id}')" class="secondary-btn">${icon('copy')} ${t('common.copy_id')}</button>
@@ -71,6 +95,7 @@ export class ServerManager {
           </div>
         </div>
       `).join('');
+      this._applyFilter();
     } catch (e) {
       list.innerHTML = `<p class="error">${t('sv.failed')}</p>`;
     }
@@ -111,10 +136,10 @@ export class ServerManager {
   }
 
   toggleSelectAllServers() {
-    const checkboxes = document.querySelectorAll('.server-checkbox');
+    const visible = Array.from(document.querySelectorAll('.server-checkbox')).filter(cb => cb.closest('.list-item').style.display !== 'none');
     const btn = document.getElementById('selectAllServersBtn');
     const isAll = btn.textContent === t('sv.select_all');
-    checkboxes.forEach(cb => cb.checked = isAll);
+    visible.forEach(cb => cb.checked = isAll);
     btn.textContent = isAll ? t('sv.deselect_all') : t('sv.select_all');
     this.updateSelectedServersCount();
   }
@@ -158,4 +183,5 @@ export class ServerManager {
   }
 
   escHtml(s = '') { return String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
+  escAttr(s = '') { return this.escHtml(s); }
 }

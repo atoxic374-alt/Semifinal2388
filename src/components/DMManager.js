@@ -12,6 +12,8 @@ export class DMManager {
     this.isDeleting = false;
     this.account = null;
     this.botsOnly = false;
+    this.filter = '';
+    this.allDMs = [];
   }
 
   async refreshDMsList() {
@@ -33,6 +35,7 @@ export class DMManager {
         </div>
         <div class="mm-body">
           <div class="actions-bar">
+            <input type="text" id="dm-filter" class="list-filter-input" placeholder="${t('common.filter') || 'Filter…'}" value="${this.escAttr(this.filter)}">
             <button id="selectAllDMsBtn" onclick="window.dmManager.toggleSelectAllDMs()">${t('dm.select_all')}</button>
             <button id="deleteSelectedMessagesBtn" onclick="window.dmManager.deleteSelectedMessages()" class="warning-btn" disabled>${t('dm.delete_selected')}</button>
             <button id="closeSelectedDMsBtn" onclick="window.dmManager.closeSelectedDMs()" class="danger-btn" disabled>${t('dm.close_selected')}</button>
@@ -42,7 +45,6 @@ export class DMManager {
       </div>
     `;
 
-    // Mount toolbar (account picker + bots-only toggle)
     const toolbar = this.contentArea.querySelector('#dm-toolbar');
     const picker = await buildAccountPicker({ selectId: 'dm-acct', selected: this.account });
     toolbar.innerHTML = `
@@ -60,11 +62,29 @@ export class DMManager {
       this.render();
     });
 
+    this.contentArea.querySelector('#dm-filter').addEventListener('input', (e) => {
+      this.filter = e.target.value;
+      this._applyFilter();
+    });
+
     await this.loadList();
   }
 
   renderLoadingRow() {
     return `<div class="mm-info-row mm-muted">${t('common.loading')}</div>`;
+  }
+
+  _applyFilter() {
+    const q = this.filter.toLowerCase();
+    this.contentArea.querySelectorAll('#dmsList .list-item').forEach(row => {
+      const name = (row.dataset.name || '').toLowerCase();
+      row.style.display = (!q || name.includes(q)) ? '' : 'none';
+    });
+    const count = this.allDMs.filter(d =>
+      !q || d.username.toLowerCase().includes(q) || d.displayName.toLowerCase().includes(q)
+    ).length;
+    const counter = this.contentArea.querySelector('#dm-counter');
+    if (counter) counter.textContent = `${count} / ${this.allDMs.length}`;
   }
 
   async loadList() {
@@ -73,12 +93,14 @@ export class DMManager {
     list.innerHTML = this.renderLoadingRow();
     try {
       const dms = await getDMsList(this.account, this.botsOnly);
+      this.allDMs = dms;
       if (!dms.length) {
         list.innerHTML = `<div class="mm-info-row mm-muted">${t('dm.empty')}</div>`;
         return;
       }
-      list.innerHTML = dms.map(dm => `
-        <div class="list-item" data-id="${dm.id}" data-username="${this.escAttr(dm.username)}">
+      const counter = `<div class="list-counter" id="dm-counter">${dms.length} / ${dms.length}</div>`;
+      list.innerHTML = counter + dms.map(dm => `
+        <div class="list-item" data-id="${dm.id}" data-name="${this.escAttr(dm.username + ' ' + dm.displayName)}" data-username="${this.escAttr(dm.username)}">
           <div class="list-item-left">
             <input type="checkbox" class="dm-checkbox" onchange="window.dmManager.updateSelectedCount()">
             <img src="${dm.avatar}" alt="" onerror="this.src='/discord.png'">
@@ -95,16 +117,17 @@ export class DMManager {
           </div>
         </div>
       `).join('');
+      this._applyFilter();
     } catch (e) {
       list.innerHTML = `<p class="error">${t('dm.failed')}</p>`;
     }
   }
 
   toggleSelectAllDMs() {
-    const checkboxes = document.querySelectorAll('.dm-checkbox');
+    const visibleCheckboxes = Array.from(document.querySelectorAll('.dm-checkbox')).filter(cb => cb.closest('.list-item').style.display !== 'none');
     const selectAllBtn = document.getElementById('selectAllDMsBtn');
     const isSelectAll = selectAllBtn.textContent === t('dm.select_all');
-    checkboxes.forEach(cb => cb.checked = isSelectAll);
+    visibleCheckboxes.forEach(cb => cb.checked = isSelectAll);
     selectAllBtn.textContent = isSelectAll ? t('dm.deselect_all') : t('dm.select_all');
     this.updateSelectedCount();
   }
