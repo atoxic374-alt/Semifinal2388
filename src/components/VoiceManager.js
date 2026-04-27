@@ -3,581 +3,625 @@ import { buildAccountPicker } from '../utils/accountPicker.js';
 import { t } from '../utils/i18n.js';
 import { icon } from '../utils/icons.js';
 
-const VOICE_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>`;
-
-const STATE_PRESETS = [
-  { id: 'unmute',  label: 'Unmuted',     icon: '🎙️',  selfMute: false, selfDeaf: false, selfVideo: false, selfStream: false },
-  { id: 'mute',   label: 'Muted',        icon: '🔇',  selfMute: true,  selfDeaf: false, selfVideo: false, selfStream: false },
-  { id: 'deaf',   label: 'Deafened',     icon: '🔕',  selfMute: true,  selfDeaf: true,  selfVideo: false, selfStream: false },
-  { id: 'cam',    label: 'Camera On',    icon: '📹',  selfMute: false, selfDeaf: false, selfVideo: true,  selfStream: false },
-  { id: 'stream', label: 'Screen Share', icon: '🖥️',  selfMute: false, selfDeaf: false, selfVideo: false, selfStream: true  },
+const STATES = [
+  { id: 'unmute',  key: 'vm.unmute',  ic: 'mic',        color: '#22c55e', selfMute: false, selfDeaf: false, selfVideo: false, selfStream: false },
+  { id: 'mute',   key: 'vm.mute',    ic: 'mic_off',    color: '#f59e0b', selfMute: true,  selfDeaf: false, selfVideo: false, selfStream: false },
+  { id: 'deaf',   key: 'vm.deaf',    ic: 'headphones', color: '#ef4444', selfMute: true,  selfDeaf: true,  selfVideo: false, selfStream: false },
+  { id: 'cam',    key: 'vm.cam',     ic: 'video',      color: '#8b5cf6', selfMute: false, selfDeaf: false, selfVideo: true,  selfStream: false },
+  { id: 'stream', key: 'vm.stream',  ic: 'monitor',    color: '#06b6d4', selfMute: false, selfDeaf: false, selfVideo: false, selfStream: true  },
 ];
 
 export class VoiceManager {
   constructor(contentArea) {
     this.contentArea = contentArea;
-    this.guilds = [];
-    this.sessions = [];
-    this.rotations = [];
-    this.cycles = [];
+    this._view = 'home';
+    this._history = [];
+    this._guilds = [];
+    this._deduped = [];
+    this._sessions = [];
+    this._rotations = [];
+    this._cycles = [];
     this.selectedGuild = null;
+    this.selectedChannel = null;
     this.selectedAccounts = [];
-    this.rotationChannels = [];
-    this.cycleStates = [];
-    this.guildFilter = '';
-    this.channelFilter = '';
-    this._refreshTimer = null;
+    this._rotChannels = [];
+    this._activeAccount = null;
+    this._pickerClients = [];
+    this._timer = null;
   }
 
-  async init() { await this.render(); }
+  async init() {
+    await this._render('home', false);
+    this._autoRefresh();
+  }
 
-  async render() {
-    this.contentArea.innerHTML = `
-      <div class="vm-page">
+  // ── Navigation ──────────────────────────────────
+  async _navigate(view) {
+    this._history.push(this._view);
+    await this._render(view, true);
+  }
+
+  async _back() {
+    const prev = this._history.pop() || 'home';
+    await this._render(prev, false, true);
+  }
+
+  async _render(view, forward = true, backward = false) {
+    this._view = view;
+    const wrap = this.contentArea.querySelector('#vm-wrap');
+    if (wrap) {
+      wrap.classList.remove('vm-slide-in', 'vm-slide-out', 'vm-slide-back-in', 'vm-slide-back-out');
+      void wrap.offsetWidth;
+      if (backward) wrap.classList.add('vm-slide-back-in');
+      else if (forward) wrap.classList.add('vm-slide-in');
+    }
+
+    const html = await this._buildView(view);
+    if (!wrap) {
+      this.contentArea.innerHTML = `<div id="vm-wrap" class="vm-wrap">${html}</div>`;
+    } else {
+      wrap.innerHTML = html;
+      if (backward) wrap.classList.add('vm-slide-back-in');
+      else if (forward) wrap.classList.add('vm-slide-in');
+    }
+    this._bindView(view);
+  }
+
+  async _buildView(view) {
+    switch (view) {
+      case 'home':          return this._homeHTML();
+      case 'server-picker': return this._serverPickerHTML();
+      case 'join':          return this._subHTML('vm.join_title', this._joinHTML());
+      case 'state':         return this._subHTML('vm.state_title', this._stateHTML());
+      case 'rotation':      return this._subHTML('vm.rotation_title', this._rotationHTML());
+      case 'cycle':         return this._subHTML('vm.cycle_title', this._cycleHTML());
+      case 'sessions':      return this._subHTML('vm.sessions_title', this._sessionsHTML());
+      default:              return this._homeHTML();
+    }
+  }
+
+  // ── Home View ────────────────────────────────────
+  _homeHTML() {
+    const ch = this.selectedChannel;
+    const g  = this.selectedGuild;
+    const chLabel = (ch && g) ? `${g.guildName} › ${ch.name}` : t('vm.tap_to_select');
+
+    const sessCount = this._sessions.length;
+    const taskCount = this._rotations.length + this._cycles.length;
+
+    return `
+      <div class="vm-home">
         <div class="mm-header">
           <div class="mm-title-row">
-            <span class="mm-icon vm-header-icon">${VOICE_ICON}</span>
+            <span class="mm-icon vm-accent-icon">${icon('mic')}</span>
             <div>
-              <h2 class="mm-title">Voice Manager</h2>
-              <p class="mm-subtitle">Control accounts in voice channels</p>
+              <h2 class="mm-title">${t('vm.title')}</h2>
+              <p class="mm-subtitle">${t('vm.subtitle')}</p>
             </div>
           </div>
-          <div class="mm-tabs" id="vm-acct-picker"></div>
+          <div id="vm-acct-area" class="mm-tabs"></div>
         </div>
 
-        <div class="vm-body">
-          <!-- LEFT: Guild + Channel Picker -->
-          <div class="vm-panel vm-panel-left">
-            <div class="vm-panel-header">
-              <span class="vm-panel-icon">${icon('shield')}</span>
-              <span>Servers & Channels</span>
+        <div class="vm-home-body">
+          <!-- Channel Selector Card -->
+          <button class="vm-nav-card" onclick="window.voiceManager._navigate('server-picker')">
+            <span class="vm-nav-card-icon">${icon('shield')}</span>
+            <div class="vm-nav-card-body">
+              <div class="vm-nav-card-label">${t('vm.selected_channel')}</div>
+              <div class="vm-nav-card-value ${ch ? '' : 'vm-muted'}">${this._esc(chLabel)}</div>
             </div>
-            <input id="vm-guild-filter" class="vm-search" placeholder="🔍  Search servers…" value="">
-            <div id="vm-guild-list" class="vm-guild-list">
-              <div class="vm-loading">${icon('loader')} Loading…</div>
-            </div>
+            <span class="vm-nav-card-arrow">${icon('chevron_r')}</span>
+          </button>
+
+          <!-- Quick Actions -->
+          <div class="vm-section-label">${t('vm.actions')}</div>
+          <div class="vm-action-grid">
+            <button class="vm-action-btn" onclick="window.voiceManager._navigate('join')">
+              ${icon('log_in')}<span>${t('vm.join')}</span>
+            </button>
+            <button class="vm-action-btn" onclick="window.voiceManager._navigate('state')">
+              ${icon('mic')}<span>${t('vm.state_title')}</span>
+            </button>
+            <button class="vm-action-btn" onclick="window.voiceManager._navigate('rotation')">
+              ${icon('repeat')}<span>${t('vm.rotation_title')}</span>
+            </button>
+            <button class="vm-action-btn" onclick="window.voiceManager._navigate('cycle')">
+              ${icon('rotate_cw')}<span>${t('vm.cycle_title')}</span>
+            </button>
           </div>
 
-          <!-- CENTER: Actions Panel -->
-          <div class="vm-panel vm-panel-center">
-            <!-- Join Controls -->
-            <div class="vm-section">
-              <div class="vm-section-title">
-                <span>🎙️</span> Join Voice Channel
-              </div>
-              <div id="vm-selected-info" class="vm-selected-info">
-                <span class="vm-no-sel">← Select a channel from the list</span>
-              </div>
-              <div class="vm-join-grid">
-                <button class="vm-btn vm-btn-primary" onclick="window.voiceManager.joinSelected()">
-                  ${icon('log_in')} Join
-                </button>
-                <button class="vm-btn vm-btn-warning" onclick="window.voiceManager.joinAllToSelected()">
-                  ${icon('users')} Join All
-                </button>
-                <button class="vm-btn vm-btn-danger" onclick="window.voiceManager.leaveSelected()">
-                  ${icon('log_out')} Leave
-                </button>
-                <button class="vm-btn vm-btn-ghost" onclick="window.voiceManager.distributeRandom()">
-                  🎲 Distribute
-                </button>
+          <!-- Sessions / Tasks summary -->
+          <button class="vm-nav-card vm-nav-card-sm" onclick="window.voiceManager._navigate('sessions')">
+            <span class="vm-nav-card-icon vm-green">${icon('radio')}</span>
+            <div class="vm-nav-card-body">
+              <div class="vm-nav-card-label">${t('vm.sessions_title')}</div>
+              <div class="vm-nav-card-value">
+                ${sessCount ? `${sessCount} ${t('vm.active')}` : t('vm.no_sessions_short')}
+                ${taskCount ? ` · ${taskCount} ${t('vm.tasks_running')}` : ''}
               </div>
             </div>
+            <span class="vm-nav-card-arrow">${icon('chevron_r')}</span>
+          </button>
+        </div>
+      </div>
+    `;
+  }
 
-            <!-- Voice States -->
-            <div class="vm-section">
-              <div class="vm-section-title">
-                <span>🎛️</span> Voice State
-              </div>
-              <div class="vm-state-grid">
-                ${STATE_PRESETS.map(s => `
-                  <button class="vm-state-btn" data-state="${s.id}" onclick="window.voiceManager.applyState('${s.id}')" title="${s.label}">
-                    <span class="vm-state-icon">${s.icon}</span>
-                    <span class="vm-state-label">${s.label}</span>
-                  </button>
-                `).join('')}
-              </div>
-            </div>
+  // ── Sub-view wrapper ──────────────────────────────
+  _subHTML(titleKey, content) {
+    return `
+      <div class="vm-sub">
+        <div class="vm-sub-header">
+          <button class="vm-back-btn" onclick="window.voiceManager._back()">
+            ${icon('arrow_left')}<span>${t('vm.back')}</span>
+          </button>
+          <div class="vm-sub-title">${t(titleKey)}</div>
+        </div>
+        <div class="vm-sub-body">${content}</div>
+      </div>
+    `;
+  }
 
-            <!-- State Cycle -->
-            <div class="vm-section">
-              <div class="vm-section-title">
-                <span>🔄</span> Auto State Cycle
-              </div>
-              <div class="vm-cycle-builder">
-                <div class="vm-field-row">
-                  <label>Interval</label>
-                  <div class="vm-interval-group">
-                    <input type="number" id="vm-cycle-val" class="vm-num-input" value="60" min="1" max="9999">
-                    <select id="vm-cycle-unit" class="vm-select">
-                      <option value="60000">Minutes</option>
-                      <option value="3600000">Hours</option>
-                    </select>
-                  </div>
-                </div>
-                <div class="vm-field-row">
-                  <label>States to cycle</label>
-                </div>
-                <div class="vm-cycle-states">
-                  ${STATE_PRESETS.map(s => `
-                    <label class="vm-chk-label">
-                      <input type="checkbox" class="vm-cycle-check" value="${s.id}"> ${s.icon} ${s.label}
-                    </label>
-                  `).join('')}
-                </div>
-                <button class="vm-btn vm-btn-primary vm-btn-full" onclick="window.voiceManager.startStateCycle()">
-                  ▶ Start Cycle
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <!-- RIGHT: Room Rotation + Active Sessions -->
-          <div class="vm-panel vm-panel-right">
-            <!-- Room Rotation -->
-            <div class="vm-section">
-              <div class="vm-section-title">
-                <span>🔀</span> Room Rotation
-              </div>
-              <div class="vm-field-row">
-                <label>Interval</label>
-                <div class="vm-interval-group">
-                  <input type="number" id="vm-rot-val" class="vm-num-input" value="60" min="1" max="9999">
-                  <select id="vm-rot-unit" class="vm-select">
-                    <option value="60000">Minutes</option>
-                    <option value="3600000">Hours</option>
-                  </select>
-                </div>
-              </div>
-              <div class="vm-field-row vm-toggle-row">
-                <label>Random order</label>
-                <label class="vm-toggle">
-                  <input type="checkbox" id="vm-rot-random">
-                  <span class="vm-toggle-track"><span class="vm-toggle-thumb"></span></span>
-                </label>
-              </div>
-              <div class="vm-rotation-channels" id="vm-rot-channels">
-                <div class="vm-no-sel" style="font-size:12px;padding:8px 0">Select channels from the left panel then click Add</div>
-              </div>
-              <div class="vm-rot-btns">
-                <button class="vm-btn vm-btn-ghost" onclick="window.voiceManager.addRotationChannel()">
-                  + Add Selected
-                </button>
-                <button class="vm-btn vm-btn-primary" onclick="window.voiceManager.startRotation()">
-                  ▶ Start
-                </button>
-              </div>
-            </div>
-
-            <!-- Active Sessions -->
-            <div class="vm-section vm-section-sessions">
-              <div class="vm-section-title">
-                <span>📡</span> Active Sessions
-                <button class="vm-refresh-btn" onclick="window.voiceManager.refreshSessions()" title="Refresh">↺</button>
-              </div>
-              <div id="vm-sessions-list" class="vm-sessions-list">
-                <div class="vm-no-sel">No active sessions</div>
-              </div>
-            </div>
-
-            <!-- Active Rotations & Cycles -->
-            <div class="vm-section">
-              <div class="vm-section-title">
-                <span>⚙️</span> Running Tasks
-              </div>
-              <div id="vm-tasks-list" class="vm-tasks-list">
-                <div class="vm-no-sel">No running tasks</div>
-              </div>
-            </div>
+  // ── Server/Channel Picker ─────────────────────────
+  _serverPickerHTML() {
+    const filtered = this._deduped;
+    return `
+      <div class="vm-sub">
+        <div class="vm-sub-header">
+          <button class="vm-back-btn" onclick="window.voiceManager._back()">
+            ${icon('arrow_left')}<span>${t('vm.back')}</span>
+          </button>
+          <div class="vm-sub-title">${t('vm.select_channel')}</div>
+        </div>
+        <div class="vm-sub-body">
+          <input id="vm-gsearch" class="vm-search-input" placeholder="${t('vm.search_servers')}">
+          <div id="vm-glist" class="vm-server-list">
+            ${filtered.length ? filtered.map(g => this._serverItem(g)).join('') : `<div class="vm-empty">${icon('loader')} ${t('common.loading')}</div>`}
           </div>
         </div>
       </div>
     `;
-
-    // Account picker
-    const pickerEl = this.contentArea.querySelector('#vm-acct-picker');
-    const picker = await buildAccountPicker({ selectId: 'vm-acct' });
-    this._pickerClients = picker.clients || [];
-    this._activeAccount = picker.active || null;
-    pickerEl.innerHTML = picker.html;
-    picker.bind(pickerEl, (val) => {
-      this.selectedAccounts = val ? [val] : [];
-      this.loadGuilds();
-    });
-
-    // Guild filter
-    this.contentArea.querySelector('#vm-guild-filter').addEventListener('input', (e) => {
-      this.guildFilter = e.target.value.toLowerCase();
-      this._renderGuildList();
-    });
-
-    await this.loadGuilds();
-    await this.refreshSessions();
-    this._startAutoRefresh();
   }
 
-  _startAutoRefresh() {
-    if (this._refreshTimer) clearInterval(this._refreshTimer);
-    this._refreshTimer = setInterval(() => this.refreshSessions(), 10000);
+  _serverItem(g) {
+    const open = this.selectedGuild?.guildId === g.guildId;
+    return `
+      <div class="vm-server-item">
+        <button class="vm-server-row ${open ? 'vm-open' : ''}" onclick="window.voiceManager._toggleGuild('${g.guildId}')">
+          <div class="vm-server-icon">${g.guildIcon ? `<img src="${g.guildIcon}" alt="">` : `<span>${g.guildName[0]}</span>`}</div>
+          <div class="vm-server-info">
+            <div class="vm-server-name">${this._esc(g.guildName)}</div>
+            <div class="vm-server-meta">${g.voiceChannels.length} ${t('vm.voice_channels')}</div>
+          </div>
+          <span class="vm-server-arrow ${open ? 'vm-open' : ''}">${icon('chevron_d')}</span>
+        </button>
+        ${open ? `
+          <div class="vm-channel-items">
+            ${g.voiceChannels.map(ch => `
+              <button class="vm-channel-row ${this.selectedChannel?.id === ch.id ? 'vm-active' : ''}"
+                      onclick="window.voiceManager._selectChannel('${g.guildId}','${this._esc(g.guildName)}','${ch.id}','${this._esc(ch.name)}')">
+                ${icon('volume')}<span>${this._esc(ch.name)}</span>
+                <span class="vm-ch-meta">${ch.members > 0 ? `${ch.members} ${icon('users')}` : ''}</span>
+                ${this.selectedChannel?.id === ch.id ? icon('check') : ''}
+              </button>
+            `).join('')}
+          </div>
+        ` : ''}
+      </div>
+    `;
   }
 
-  async loadGuilds() {
-    const listEl = this.contentArea.querySelector('#vm-guild-list');
-    if (!listEl) return;
-    listEl.innerHTML = `<div class="vm-loading">${icon('loader')} Loading…</div>`;
+  // ── Join Sub-view ─────────────────────────────────
+  _joinHTML() {
+    const ch = this.selectedChannel;
+    const g  = this.selectedGuild;
+    return `
+      <div class="vm-info-bar ${ch ? 'vm-info-bar-ok' : ''}">
+        ${icon('volume')} ${ch ? `${this._esc(g.guildName)} › ${this._esc(ch.name)}` : t('vm.no_channel_selected')}
+      </div>
+      <div class="vm-btn-stack">
+        <button class="vm-big-btn vm-green-btn" onclick="window.voiceManager.joinSelected()">
+          ${icon('log_in')} ${t('vm.join_channel')}
+        </button>
+        <button class="vm-big-btn vm-blue-btn" onclick="window.voiceManager.joinAllToSelected()">
+          ${icon('users')} ${t('vm.join_all')}
+        </button>
+        <button class="vm-big-btn vm-orange-btn" onclick="window.voiceManager.distributeRandom()">
+          ${icon('repeat')} ${t('vm.distribute')}
+        </button>
+        <button class="vm-big-btn vm-red-btn" onclick="window.voiceManager.leaveSelected()">
+          ${icon('log_out')} ${t('vm.leave')}
+        </button>
+      </div>
+    `;
+  }
+
+  // ── State Sub-view ────────────────────────────────
+  _stateHTML() {
+    const ch = this.selectedChannel;
+    const g  = this.selectedGuild;
+    return `
+      <div class="vm-info-bar ${ch ? 'vm-info-bar-ok' : ''}">
+        ${icon('volume')} ${ch ? `${this._esc(g.guildName)} › ${this._esc(ch.name)}` : t('vm.no_channel_selected')}
+      </div>
+      <div class="vm-state-list">
+        ${STATES.map(s => `
+          <button class="vm-state-row" onclick="window.voiceManager.applyState('${s.id}')"
+                  style="--sc:${s.color}">
+            <span class="vm-state-ic" style="color:${s.color}">${icon(s.ic)}</span>
+            <span class="vm-state-name">${t(s.key)}</span>
+            <span class="vm-state-arrow">${icon('chevron_r')}</span>
+          </button>
+        `).join('')}
+      </div>
+    `;
+  }
+
+  // ── Rotation Sub-view ─────────────────────────────
+  _rotationHTML() {
+    return `
+      <div class="vm-field-group">
+        <label class="vm-label">${t('vm.interval')}</label>
+        <div class="vm-row-inputs">
+          <input type="number" id="vm-rot-val" class="vm-num" value="60" min="1" max="9999">
+          <select id="vm-rot-unit" class="vm-sel">
+            <option value="60000">${t('vm.minutes')}</option>
+            <option value="3600000">${t('vm.hours')}</option>
+          </select>
+        </div>
+      </div>
+      <div class="vm-toggle-row">
+        <span class="vm-label">${t('vm.random_order')}</span>
+        <label class="vm-sw">
+          <input type="checkbox" id="vm-rot-rand">
+          <span class="vm-sw-track"><span class="vm-sw-thumb"></span></span>
+        </label>
+      </div>
+      <div class="vm-label">${t('vm.channels_for_rotation')}</div>
+      <div id="vm-rot-chs" class="vm-rot-list">
+        ${this._rotChannels.length ? this._rotChannels.map((c,i) => `
+          <div class="vm-rot-item">
+            <span class="vm-rot-num">${i+1}</span>
+            <span class="vm-rot-ch">${icon('volume')} ${this._esc(c.name)}</span>
+            <button class="vm-rot-del" onclick="window.voiceManager.removeRotCh('${c.id}')">✕</button>
+          </div>`).join('') : `<div class="vm-empty">${t('vm.no_rotation_channels')}</div>`}
+      </div>
+      <div class="vm-row-btns">
+        <button class="vm-outline-btn" onclick="window.voiceManager.addRotCh()">
+          ${icon('plus')} ${t('vm.add_channel')}
+        </button>
+        <button class="vm-big-btn vm-green-btn" onclick="window.voiceManager.startRotation()">
+          ${icon('play')} ${t('vm.start')}
+        </button>
+      </div>
+      ${this._rotations.length ? `
+        <div class="vm-label" style="margin-top:16px">${t('vm.running_tasks')}</div>
+        ${this._rotations.map(r => this._taskCard(r, 'rotation')).join('')}
+      ` : ''}
+    `;
+  }
+
+  // ── Cycle Sub-view ────────────────────────────────
+  _cycleHTML() {
+    return `
+      <div class="vm-field-group">
+        <label class="vm-label">${t('vm.interval')}</label>
+        <div class="vm-row-inputs">
+          <input type="number" id="vm-cyc-val" class="vm-num" value="60" min="1" max="9999">
+          <select id="vm-cyc-unit" class="vm-sel">
+            <option value="60000">${t('vm.minutes')}</option>
+            <option value="3600000">${t('vm.hours')}</option>
+          </select>
+        </div>
+      </div>
+      <div class="vm-label">${t('vm.states_to_cycle')}</div>
+      <div class="vm-state-checks">
+        ${STATES.map(s => `
+          <label class="vm-chk-row" style="--sc:${s.color}">
+            <input type="checkbox" class="vm-cyc-chk" value="${s.id}">
+            <span class="vm-chk-ic" style="color:${s.color}">${icon(s.ic)}</span>
+            <span>${t(s.key)}</span>
+          </label>
+        `).join('')}
+      </div>
+      <button class="vm-big-btn vm-green-btn" style="margin-top:8px" onclick="window.voiceManager.startCycle()">
+        ${icon('play')} ${t('vm.start')}
+      </button>
+      ${this._cycles.length ? `
+        <div class="vm-label" style="margin-top:16px">${t('vm.running_tasks')}</div>
+        ${this._cycles.map(c => this._taskCard(c, 'cycle')).join('')}
+      ` : ''}
+    `;
+  }
+
+  // ── Sessions Sub-view ─────────────────────────────
+  _sessionsHTML() {
+    const sessions = this._sessions;
+    const tasks = [...this._rotations.map(r => ({...r, type:'rotation'})), ...this._cycles.map(c => ({...c, type:'cycle'}))];
+    return `
+      <div class="vm-label">${t('vm.active_sessions')}</div>
+      <div class="vm-session-list">
+        ${sessions.length ? sessions.map(s => `
+          <div class="vm-sess-row">
+            <div class="vm-sess-av">${(s.name[0]||'?').toUpperCase()}</div>
+            <div class="vm-sess-info">
+              <div class="vm-sess-name">${this._esc(s.name)}</div>
+              <div class="vm-sess-state">
+                ${s.selfMute ? `<span>${icon('mic_off')}</span>` : `<span>${icon('mic')}</span>`}
+                ${s.selfDeaf ? `<span>${icon('headphones')}</span>` : ''}
+                ${s.selfVideo ? `<span>${icon('video')}</span>` : ''}
+                ${s.selfStream ? `<span>${icon('monitor')}</span>` : ''}
+              </div>
+            </div>
+            <button class="vm-sess-leave" onclick="window.voiceManager._quickLeave('${s.name}','${s.guildId}')">
+              ${icon('log_out')}
+            </button>
+          </div>
+        `).join('') : `<div class="vm-empty">${t('vm.no_sessions')}</div>`}
+      </div>
+      ${tasks.length ? `
+        <div class="vm-label" style="margin-top:16px">${t('vm.running_tasks')}</div>
+        ${tasks.map(task => this._taskCard(task, task.type)).join('')}
+      ` : ''}
+    `;
+  }
+
+  _taskCard(task, type) {
+    const label = type === 'rotation' ? t('vm.rotation_title') : t('vm.cycle_title');
+    const accts = (task.accounts || []).length;
+    const mins = Math.round((task.intervalMs || 0) / 60000);
+    const nextIn = task.nextAt ? Math.max(0, Math.round((task.nextAt - Date.now()) / 1000)) : null;
+    return `
+      <div class="vm-task-row">
+        <div class="vm-task-info">
+          <div class="vm-task-name">${icon(type === 'rotation' ? 'repeat' : 'rotate_cw')} ${label}</div>
+          <div class="vm-task-meta">${accts} ${t('vm.accounts')} · ${mins}${t('vm.min_abbr')} ${nextIn !== null ? `· ${t('vm.next')}: ${nextIn}s` : ''}</div>
+        </div>
+        <button class="vm-stop-btn" onclick="window.voiceManager.stopTask('${type}','${task.id}')">
+          ${icon('stop')} ${t('vm.stop')}
+        </button>
+      </div>
+    `;
+  }
+
+  // ── Bind event listeners after render ─────────────
+  async _bindView(view) {
+    if (view === 'home') {
+      const acctArea = this.contentArea.querySelector('#vm-acct-area');
+      if (acctArea) {
+        const picker = await buildAccountPicker({ selectId: 'vm-acct' });
+        this._pickerClients = picker.clients || [];
+        this._activeAccount = picker.active || null;
+        acctArea.innerHTML = picker.html;
+        picker.bind(acctArea, (val) => {
+          this.selectedAccounts = val ? [val] : [];
+          this._refreshSessions();
+        });
+      }
+      await this._loadGuilds();
+      await this._refreshSessions();
+    }
+
+    if (view === 'server-picker') {
+      if (!this._deduped.length) await this._loadGuilds();
+      const gsearch = this.contentArea.querySelector('#vm-gsearch');
+      if (gsearch) {
+        gsearch.addEventListener('input', (e) => {
+          const q = e.target.value.toLowerCase();
+          this.contentArea.querySelectorAll('.vm-server-item').forEach(el => {
+            const name = el.querySelector('.vm-server-name')?.textContent?.toLowerCase() || '';
+            el.style.display = (!q || name.includes(q)) ? '' : 'none';
+          });
+        });
+      }
+    }
+  }
+
+  // ── Data Loading ──────────────────────────────────
+  async _loadGuilds() {
     try {
       const acct = this.selectedAccounts[0] || null;
       const data = await window.electronAPI.voiceGetGuilds(acct);
-      this.guilds = data.guilds || [];
-
-      // Deduplicate guilds by guildId (show once per guild, listing all accounts)
-      const guildMap = new Map();
-      for (const g of this.guilds) {
-        if (!guildMap.has(g.guildId)) guildMap.set(g.guildId, { ...g, accountList: [g.account] });
-        else guildMap.get(g.guildId).accountList.push(g.account);
+      this._guilds = data.guilds || [];
+      const map = new Map();
+      for (const g of this._guilds) {
+        if (!map.has(g.guildId)) map.set(g.guildId, { ...g, accountList: [g.account] });
+        else map.get(g.guildId).accountList.push(g.account);
       }
-      this._deduped = Array.from(guildMap.values());
-      this._renderGuildList();
-    } catch (e) {
-      if (listEl) listEl.innerHTML = `<div class="vm-error">Failed to load servers</div>`;
-    }
+      this._deduped = Array.from(map.values());
+
+      if (this._view === 'server-picker') {
+        const list = this.contentArea.querySelector('#vm-glist');
+        if (list) list.innerHTML = this._deduped.map(g => this._serverItem(g)).join('');
+      }
+    } catch (e) {}
   }
 
-  _renderGuildList() {
-    const listEl = this.contentArea.querySelector('#vm-guild-list');
-    if (!listEl) return;
-    const filtered = (this._deduped || []).filter(g =>
-      !this.guildFilter || g.guildName.toLowerCase().includes(this.guildFilter)
-    );
-    if (!filtered.length) {
-      listEl.innerHTML = `<div class="vm-no-sel">No servers with voice channels found</div>`;
-      return;
-    }
-    listEl.innerHTML = filtered.map(g => `
-      <div class="vm-guild-item ${this.selectedGuild?.guildId === g.guildId ? 'active' : ''}"
-           data-guildid="${g.guildId}" onclick="window.voiceManager.selectGuild('${g.guildId}')">
-        <div class="vm-guild-icon">
-          ${g.guildIcon
-            ? `<img src="${g.guildIcon}" alt="" onerror="this.style.display='none';this.nextSibling.style.display=''">
-               <span style="display:none">${g.guildName[0]}</span>`
-            : `<span>${g.guildName[0]}</span>`}
-        </div>
-        <div class="vm-guild-info">
-          <div class="vm-guild-name">${this._esc(g.guildName)}</div>
-          <div class="vm-guild-sub">${g.voiceChannels.length} voice channels</div>
-        </div>
-        <span class="vm-guild-arrow">›</span>
-      </div>
-      ${this.selectedGuild?.guildId === g.guildId ? `
-        <div class="vm-channel-list" id="vm-ch-${g.guildId}">
-          <input class="vm-search vm-ch-search" placeholder="🔍 Search channels…"
-                 oninput="window.voiceManager.filterChannels(this.value, '${g.guildId}')">
-          ${g.voiceChannels.map(ch => `
-            <div class="vm-channel-item ${this.selectedChannel?.id === ch.id ? 'active' : ''}"
-                 data-chid="${ch.id}" data-chname="${this._esc(ch.name)}"
-                 onclick="window.voiceManager.selectChannel('${g.guildId}','${this._esc(g.guildName)}','${ch.id}','${this._esc(ch.name)}')">
-              <span class="vm-ch-icon">🔊</span>
-              <span class="vm-ch-name">${this._esc(ch.name)}</span>
-              <span class="vm-ch-meta">${ch.members > 0 ? `👥 ${ch.members}` : ''} ${ch.bitrate}kbps</span>
-            </div>
-          `).join('')}
-        </div>
-      ` : ''}
-    `).join('');
+  async _refreshSessions() {
+    try {
+      const [sd, rd, cd] = await Promise.all([
+        window.electronAPI.voiceGetSessions(),
+        window.electronAPI.voiceGetRotations(),
+        window.electronAPI.voiceGetStateCycles(),
+      ]);
+      this._sessions  = sd.sessions  || [];
+      this._rotations = rd.rotations || [];
+      this._cycles    = cd.cycles    || [];
+    } catch (e) {}
   }
 
-  selectGuild(guildId) {
-    const g = (this._deduped || []).find(x => x.guildId === guildId);
+  _autoRefresh() {
+    if (this._timer) clearInterval(this._timer);
+    this._timer = setInterval(() => this._refreshSessions(), 10000);
+  }
+
+  // ── Interactions ──────────────────────────────────
+  _toggleGuild(guildId) {
+    const g = this._deduped.find(x => x.guildId === guildId);
     if (!g) return;
-    this.selectedGuild = g;
+    this.selectedGuild = (this.selectedGuild?.guildId === guildId) ? null : g;
     this.selectedChannel = null;
-    this._updateSelectedInfo();
-    this._renderGuildList();
+    const list = this.contentArea.querySelector('#vm-glist');
+    if (list) list.innerHTML = this._deduped.map(x => this._serverItem(x)).join('');
   }
 
-  selectChannel(guildId, guildName, channelId, channelName) {
-    this.selectedGuild = (this._deduped || []).find(x => x.guildId === guildId) || { guildId, guildName };
+  _selectChannel(guildId, guildName, channelId, channelName) {
+    const g = this._deduped.find(x => x.guildId === guildId);
+    this.selectedGuild = g || { guildId, guildName, voiceChannels: [] };
     this.selectedChannel = { id: channelId, name: channelName };
-    this._updateSelectedInfo();
-    this._renderGuildList();
+    showNotification(`${t('vm.selected')}: ${channelName}`, 'success');
+    setTimeout(() => this._back(), 350);
   }
 
-  filterChannels(q, guildId) {
-    const container = this.contentArea.querySelector(`#vm-ch-${guildId}`);
-    if (!container) return;
-    container.querySelectorAll('.vm-channel-item').forEach(el => {
-      el.style.display = (!q || el.dataset.chname.toLowerCase().includes(q.toLowerCase())) ? '' : 'none';
-    });
-  }
-
-  _updateSelectedInfo() {
-    const el = this.contentArea.querySelector('#vm-selected-info');
-    if (!el) return;
-    if (this.selectedGuild && this.selectedChannel) {
-      el.innerHTML = `
-        <div class="vm-sel-detail">
-          <div class="vm-sel-server">🛡️ <strong>${this._esc(this.selectedGuild.guildName)}</strong></div>
-          <div class="vm-sel-channel">🔊 ${this._esc(this.selectedChannel.name)}</div>
-        </div>`;
-    } else if (this.selectedGuild) {
-      el.innerHTML = `<span class="vm-no-sel">← Select a channel in <strong>${this._esc(this.selectedGuild.guildName)}</strong></span>`;
-    } else {
-      el.innerHTML = `<span class="vm-no-sel">← Select a channel from the list</span>`;
-    }
-  }
-
-  _getAccounts() {
+  _accounts() {
     if (this.selectedAccounts.length) return this.selectedAccounts;
     if (this._activeAccount) return [this._activeAccount];
     return [];
   }
 
+  _needChannel() {
+    if (!this.selectedGuild || !this.selectedChannel) {
+      showNotification(t('vm.select_channel_first'), 'error');
+      return false;
+    }
+    return true;
+  }
+
+  _needAccounts() {
+    if (!this._accounts().length) {
+      showNotification(t('vm.select_account_first'), 'error');
+      return false;
+    }
+    return true;
+  }
+
   async joinSelected() {
-    if (!this._checkChannelSelected()) return;
-    const accounts = this._getAccounts();
-    if (!accounts.length) { showNotification('Select at least one account', 'error'); return; }
+    if (!this._needChannel() || !this._needAccounts()) return;
     try {
-      const r = await window.electronAPI.voiceJoin({ accounts, guildId: this.selectedGuild.guildId, channelId: this.selectedChannel.id });
-      const ok = (r.results || []).filter(x => x.ok).length;
-      showNotification(`Joined ${ok}/${accounts.length} accounts to ${this.selectedChannel.name}`, ok > 0 ? 'success' : 'error');
-      setTimeout(() => this.refreshSessions(), 1000);
-    } catch (e) { showNotification('Failed to join', 'error'); }
+      const r = await window.electronAPI.voiceJoin({ accounts: this._accounts(), guildId: this.selectedGuild.guildId, channelId: this.selectedChannel.id });
+      const ok = (r.results||[]).filter(x=>x.ok).length;
+      showNotification(`${t('vm.joined')} ${ok}/${this._accounts().length}`, ok ? 'success' : 'error');
+    } catch(e) { showNotification(t('vm.error'), 'error'); }
   }
 
   async joinAllToSelected() {
-    if (!this._checkChannelSelected()) return;
+    if (!this._needChannel()) return;
     try {
       const r = await window.electronAPI.voiceJoinAll({ guildId: this.selectedGuild.guildId, channelId: this.selectedChannel.id });
-      const ok = (r.results || []).filter(x => x.ok).length;
-      showNotification(`Joined all ${ok} accounts to ${this.selectedChannel.name}`, 'success');
-      setTimeout(() => this.refreshSessions(), 1000);
-    } catch (e) { showNotification('Failed', 'error'); }
+      const ok = (r.results||[]).filter(x=>x.ok).length;
+      showNotification(`${t('vm.joined_all')} ${ok}`, 'success');
+    } catch(e) { showNotification(t('vm.error'), 'error'); }
   }
 
   async leaveSelected() {
-    if (!this.selectedGuild) { showNotification('Select a server first', 'error'); return; }
-    const accounts = this._getAccounts();
-    if (!accounts.length) { showNotification('Select at least one account', 'error'); return; }
+    if (!this.selectedGuild) { showNotification(t('vm.select_server_first'), 'error'); return; }
+    if (!this._needAccounts()) return;
     try {
-      await window.electronAPI.voiceLeave({ accounts, guildId: this.selectedGuild.guildId });
-      showNotification('Left voice channel', 'success');
-      setTimeout(() => this.refreshSessions(), 1000);
-    } catch (e) { showNotification('Failed', 'error'); }
+      await window.electronAPI.voiceLeave({ accounts: this._accounts(), guildId: this.selectedGuild.guildId });
+      showNotification(t('vm.left'), 'success');
+    } catch(e) { showNotification(t('vm.error'), 'error'); }
   }
 
   async distributeRandom() {
-    if (!this.selectedGuild) { showNotification('Select a server first', 'error'); return; }
-    const channelIds = this.selectedGuild.voiceChannels?.map(c => c.id);
-    if (!channelIds?.length) { showNotification('No voice channels available', 'error'); return; }
-    const accounts = this._getAccounts();
-    if (!accounts.length) { showNotification('Select at least one account', 'error'); return; }
+    if (!this.selectedGuild) { showNotification(t('vm.select_server_first'), 'error'); return; }
+    if (!this._needAccounts()) return;
+    const channelIds = this.selectedGuild.voiceChannels?.map(c=>c.id);
+    if (!channelIds?.length) { showNotification(t('vm.no_voice_channels'), 'error'); return; }
     try {
-      const r = await window.electronAPI.voiceDistributeRandom({ accounts, guildId: this.selectedGuild.guildId, channelIds });
-      const ok = (r.results || []).filter(x => x.ok).length;
-      showNotification(`Distributed ${ok} accounts randomly`, 'success');
-      setTimeout(() => this.refreshSessions(), 1000);
-    } catch (e) { showNotification('Failed', 'error'); }
+      const r = await window.electronAPI.voiceDistributeRandom({ accounts: this._accounts(), guildId: this.selectedGuild.guildId, channelIds });
+      const ok = (r.results||[]).filter(x=>x.ok).length;
+      showNotification(`${t('vm.distributed')} ${ok}`, 'success');
+    } catch(e) { showNotification(t('vm.error'), 'error'); }
   }
 
   async applyState(stateId) {
-    const state = STATE_PRESETS.find(s => s.id === stateId);
+    const state = STATES.find(s=>s.id===stateId);
     if (!state) return;
-    if (!this.selectedGuild) { showNotification('Select a server first', 'error'); return; }
-    const accounts = this._getAccounts();
-    if (!accounts.length) { showNotification('Select at least one account', 'error'); return; }
-
-    // Animate active state button
-    this.contentArea.querySelectorAll('.vm-state-btn').forEach(b => b.classList.remove('active'));
-    this.contentArea.querySelector(`[data-state="${stateId}"]`)?.classList.add('active');
-
+    if (!this.selectedGuild) { showNotification(t('vm.select_server_first'), 'error'); return; }
+    if (!this._needAccounts()) return;
+    this.contentArea.querySelectorAll('.vm-state-row').forEach(b => b.classList.remove('vm-active'));
+    this.contentArea.querySelector(`[onclick*="applyState('${stateId}')"]`)?.classList.add('vm-active');
     try {
-      await window.electronAPI.voiceSetState({
-        accounts, guildId: this.selectedGuild.guildId,
-        selfMute: state.selfMute, selfDeaf: state.selfDeaf,
-        selfVideo: state.selfVideo, selfStream: state.selfStream
-      });
-      showNotification(`Applied "${state.label}" to ${accounts.length} account(s)`, 'success');
-      setTimeout(() => this.refreshSessions(), 1000);
-    } catch (e) { showNotification('Failed to set state', 'error'); }
+      await window.electronAPI.voiceSetState({ accounts: this._accounts(), guildId: this.selectedGuild.guildId, ...state });
+      showNotification(`${t(state.key)} ${t('vm.applied')}`, 'success');
+    } catch(e) { showNotification(t('vm.error'), 'error'); }
   }
 
-  addRotationChannel() {
-    if (!this.selectedChannel) { showNotification('Select a channel first', 'error'); return; }
-    const exists = this.rotationChannels.find(c => c.id === this.selectedChannel.id);
-    if (exists) { showNotification('Channel already added', 'error'); return; }
-    this.rotationChannels.push({ ...this.selectedChannel, guildId: this.selectedGuild.guildId });
-    this._renderRotationChannels();
+  addRotCh() {
+    if (!this.selectedChannel) { showNotification(t('vm.select_channel_first'), 'error'); return; }
+    if (this._rotChannels.find(c=>c.id===this.selectedChannel.id)) { showNotification(t('vm.already_added'), 'error'); return; }
+    this._rotChannels.push({ ...this.selectedChannel, guildId: this.selectedGuild?.guildId });
+    const list = this.contentArea.querySelector('#vm-rot-chs');
+    if (list) list.innerHTML = this._rotChannels.length ? this._rotChannels.map((c,i) => `
+      <div class="vm-rot-item">
+        <span class="vm-rot-num">${i+1}</span>
+        <span class="vm-rot-ch">${icon('volume')} ${this._esc(c.name)}</span>
+        <button class="vm-rot-del" onclick="window.voiceManager.removeRotCh('${c.id}')">✕</button>
+      </div>`).join('') : `<div class="vm-empty">${t('vm.no_rotation_channels')}</div>`;
   }
 
-  removeRotationChannel(id) {
-    this.rotationChannels = this.rotationChannels.filter(c => c.id !== id);
-    this._renderRotationChannels();
-  }
-
-  _renderRotationChannels() {
-    const el = this.contentArea.querySelector('#vm-rot-channels');
-    if (!el) return;
-    if (!this.rotationChannels.length) {
-      el.innerHTML = `<div class="vm-no-sel" style="font-size:12px;padding:8px 0">Select channels and click Add</div>`;
-      return;
-    }
-    el.innerHTML = this.rotationChannels.map((c, i) => `
-      <div class="vm-rot-ch-item">
-        <span class="vm-rot-ch-num">${i + 1}</span>
-        <span class="vm-rot-ch-name">🔊 ${this._esc(c.name)}</span>
-        <button class="vm-rot-ch-del" onclick="window.voiceManager.removeRotationChannel('${c.id}')">✕</button>
-      </div>
-    `).join('');
+  removeRotCh(id) {
+    this._rotChannels = this._rotChannels.filter(c=>c.id!==id);
+    const list = this.contentArea.querySelector('#vm-rot-chs');
+    if (list) list.innerHTML = this._rotChannels.length ? this._rotChannels.map((c,i) => `
+      <div class="vm-rot-item">
+        <span class="vm-rot-num">${i+1}</span>
+        <span class="vm-rot-ch">${icon('volume')} ${this._esc(c.name)}</span>
+        <button class="vm-rot-del" onclick="window.voiceManager.removeRotCh('${c.id}')">✕</button>
+      </div>`).join('') : `<div class="vm-empty">${t('vm.no_rotation_channels')}</div>`;
   }
 
   async startRotation() {
-    if (this.rotationChannels.length < 2) { showNotification('Add at least 2 channels for rotation', 'error'); return; }
-    const accounts = this._getAccounts();
-    if (!accounts.length) { showNotification('Select at least one account', 'error'); return; }
-    const guildId = this.rotationChannels[0].guildId;
-    const guildName = this.selectedGuild?.guildName || guildId;
-    const val = parseInt(this.contentArea.querySelector('#vm-rot-val')?.value || '60');
+    if (this._rotChannels.length < 2) { showNotification(t('vm.need_2_channels'), 'error'); return; }
+    if (!this._needAccounts()) return;
+    const guildId = this._rotChannels[0].guildId;
+    const val  = parseInt(this.contentArea.querySelector('#vm-rot-val')?.value || '60');
     const unit = parseInt(this.contentArea.querySelector('#vm-rot-unit')?.value || '60000');
-    const randomOrder = this.contentArea.querySelector('#vm-rot-random')?.checked || false;
-    const intervalMs = val * unit;
+    const rand = this.contentArea.querySelector('#vm-rot-rand')?.checked || false;
     try {
-      await window.electronAPI.voiceStartRotation({
-        accounts, guildId, guildName,
-        channelIds: this.rotationChannels.map(c => c.id),
-        intervalMs, randomOrder
-      });
-      showNotification('Room rotation started!', 'success');
-      this.rotationChannels = [];
-      this._renderRotationChannels();
-      setTimeout(() => this.refreshTasks(), 1000);
-    } catch (e) { showNotification('Failed to start rotation', 'error'); }
+      await window.electronAPI.voiceStartRotation({ accounts: this._accounts(), guildId, guildName: this.selectedGuild?.guildName || guildId, channelIds: this._rotChannels.map(c=>c.id), intervalMs: val*unit, randomOrder: rand });
+      showNotification(t('vm.rotation_started'), 'success');
+      this._rotChannels = [];
+      await this._refreshSessions();
+      await this._render('rotation', false);
+    } catch(e) { showNotification(t('vm.error'), 'error'); }
   }
 
-  async startStateCycle() {
-    if (!this.selectedGuild) { showNotification('Select a server first', 'error'); return; }
-    const accounts = this._getAccounts();
-    if (!accounts.length) { showNotification('Select at least one account', 'error'); return; }
-    const checked = Array.from(this.contentArea.querySelectorAll('.vm-cycle-check:checked')).map(el => el.value);
-    if (checked.length < 2) { showNotification('Select at least 2 states to cycle', 'error'); return; }
-    const states = checked.map(id => STATE_PRESETS.find(s => s.id === id)).filter(Boolean).map(s => ({
-      selfMute: s.selfMute, selfDeaf: s.selfDeaf, selfVideo: s.selfVideo, selfStream: s.selfStream
-    }));
-    const val = parseInt(this.contentArea.querySelector('#vm-cycle-val')?.value || '60');
-    const unit = parseInt(this.contentArea.querySelector('#vm-cycle-unit')?.value || '60000');
-    const intervalMs = val * unit;
+  async startCycle() {
+    if (!this.selectedGuild) { showNotification(t('vm.select_server_first'), 'error'); return; }
+    if (!this._needAccounts()) return;
+    const checked = Array.from(this.contentArea.querySelectorAll('.vm-cyc-chk:checked')).map(el=>el.value);
+    if (checked.length < 2) { showNotification(t('vm.need_2_states'), 'error'); return; }
+    const states = checked.map(id=>STATES.find(s=>s.id===id)).filter(Boolean).map(s=>({ selfMute:s.selfMute, selfDeaf:s.selfDeaf, selfVideo:s.selfVideo, selfStream:s.selfStream }));
+    const val  = parseInt(this.contentArea.querySelector('#vm-cyc-val')?.value || '60');
+    const unit = parseInt(this.contentArea.querySelector('#vm-cyc-unit')?.value || '60000');
     try {
-      await window.electronAPI.voiceStartStateCycle({ accounts, guildId: this.selectedGuild.guildId, states, intervalMs });
-      showNotification('State cycle started!', 'success');
-      this.contentArea.querySelectorAll('.vm-cycle-check').forEach(el => el.checked = false);
-      setTimeout(() => this.refreshTasks(), 1000);
-    } catch (e) { showNotification('Failed to start cycle', 'error'); }
-  }
-
-  async refreshSessions() {
-    try {
-      const data = await window.electronAPI.voiceGetSessions();
-      this.sessions = data.sessions || [];
-      this._renderSessions();
-    } catch (e) {}
-    await this.refreshTasks();
-  }
-
-  async refreshTasks() {
-    try {
-      const [rData, cData] = await Promise.all([
-        window.electronAPI.voiceGetRotations(),
-        window.electronAPI.voiceGetStateCycles()
-      ]);
-      this.rotations = rData.rotations || [];
-      this.cycles = cData.cycles || [];
-      this._renderTasks();
-    } catch (e) {}
-  }
-
-  _renderSessions() {
-    const el = this.contentArea.querySelector('#vm-sessions-list');
-    if (!el) return;
-    if (!this.sessions.length) { el.innerHTML = `<div class="vm-no-sel">No active sessions</div>`; return; }
-    el.innerHTML = this.sessions.map(s => {
-      const stateIcons = [
-        s.selfMute ? '🔇' : '🎙️',
-        s.selfDeaf ? '🔕' : '',
-        s.selfVideo ? '📹' : '',
-        s.selfStream ? '🖥️' : ''
-      ].filter(Boolean).join('');
-      return `
-        <div class="vm-session-item">
-          <div class="vm-session-avatar">${s.name[0]?.toUpperCase()}</div>
-          <div class="vm-session-info">
-            <div class="vm-session-name">${this._esc(s.name)}</div>
-            <div class="vm-session-ch">🔊 ch:${s.channelId?.slice(-4)} ${stateIcons}</div>
-          </div>
-          <button class="vm-session-leave" title="Leave"
-                  onclick="window.voiceManager._quickLeave('${s.name}','${s.guildId}')">✕</button>
-        </div>
-      `;
-    }).join('');
-  }
-
-  async _quickLeave(name, guildId) {
-    try {
-      await window.electronAPI.voiceLeave({ accounts: [name], guildId });
-      setTimeout(() => this.refreshSessions(), 800);
-    } catch (e) {}
-  }
-
-  _renderTasks() {
-    const el = this.contentArea.querySelector('#vm-tasks-list');
-    if (!el) return;
-    const items = [
-      ...this.rotations.map(r => ({
-        type: 'rotation',
-        id: r.id,
-        label: `🔀 Room Rotation`,
-        sub: `${r.accounts?.length || 0} account(s) • ${Math.round(r.intervalMs / 60000)}m interval`,
-        nextIn: r.nextAt ? Math.max(0, Math.round((r.nextAt - Date.now()) / 1000)) : null
-      })),
-      ...this.cycles.map(c => ({
-        type: 'cycle',
-        id: c.id,
-        label: `🔄 State Cycle`,
-        sub: `${c.accounts?.length || 0} account(s) • ${Math.round(c.intervalMs / 60000)}m interval`,
-        nextIn: c.nextAt ? Math.max(0, Math.round((c.nextAt - Date.now()) / 1000)) : null
-      }))
-    ];
-    if (!items.length) { el.innerHTML = `<div class="vm-no-sel">No running tasks</div>`; return; }
-    el.innerHTML = items.map(item => `
-      <div class="vm-task-item">
-        <div class="vm-task-info">
-          <div class="vm-task-label">${item.label}</div>
-          <div class="vm-task-sub">${item.sub}</div>
-          ${item.nextIn !== null ? `<div class="vm-task-next">Next: ${item.nextIn}s</div>` : ''}
-        </div>
-        <button class="vm-task-stop" onclick="window.voiceManager.stopTask('${item.type}','${item.id}')">■ Stop</button>
-      </div>
-    `).join('');
+      await window.electronAPI.voiceStartStateCycle({ accounts: this._accounts(), guildId: this.selectedGuild.guildId, states, intervalMs: val*unit });
+      showNotification(t('vm.cycle_started'), 'success');
+      await this._refreshSessions();
+      await this._render('cycle', false);
+    } catch(e) { showNotification(t('vm.error'), 'error'); }
   }
 
   async stopTask(type, id) {
     try {
       if (type === 'rotation') await window.electronAPI.voiceStopRotation({ id });
       else await window.electronAPI.voiceStopStateCycle({ id });
-      showNotification('Task stopped', 'success');
-      await this.refreshTasks();
-    } catch (e) { showNotification('Failed to stop task', 'error'); }
+      showNotification(t('vm.stopped'), 'success');
+      await this._refreshSessions();
+      await this._render(this._view, false);
+    } catch(e) { showNotification(t('vm.error'), 'error'); }
   }
 
-  _checkChannelSelected() {
-    if (!this.selectedGuild || !this.selectedChannel) {
-      showNotification('Select a server and voice channel first', 'error');
-      return false;
-    }
-    return true;
+  async _quickLeave(name, guildId) {
+    try {
+      await window.electronAPI.voiceLeave({ accounts: [name], guildId });
+      await this._refreshSessions();
+      await this._render('sessions', false);
+    } catch(e) {}
   }
 
-  _esc(str) { return String(str || '').replace(/[<>&"']/g, c => ({ '<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;' }[c])); }
+  _esc(str) { return String(str||'').replace(/[<>&"']/g, c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c])); }
 
-  destroy() {
-    if (this._refreshTimer) { clearInterval(this._refreshTimer); this._refreshTimer = null; }
-  }
+  destroy() { if (this._timer) { clearInterval(this._timer); this._timer = null; } }
 }
