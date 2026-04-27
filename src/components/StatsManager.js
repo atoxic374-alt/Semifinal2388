@@ -124,8 +124,8 @@ export class StatsManager {
   fmtTime(ts) {
     if (!ts) return '';
     const d = new Date(ts);
-    const t = new Date();
-    if (d.toDateString() === t.toDateString()) return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    const now = new Date();
+    if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   }
   escHtml(s = '') { return String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }

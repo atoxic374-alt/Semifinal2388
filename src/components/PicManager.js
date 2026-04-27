@@ -120,7 +120,7 @@ export class PicManager {
           ${c.content ? `<div class="pc-card-text">${this.escHtml(c.content.slice(0, 200))}</div>` : ''}
           <div class="pc-card-foot">
             <span>${this.fmtTime(c.ts)}</span>
-            <button class="mm-btn ghost small" onclick="navigator.clipboard.writeText('${c.images[0].url}');window.sfx?.click()">${icon('copy')} URL</button>
+            <button class="mm-btn ghost small" data-url="${this.escAttr(c.images[0].url)}" onclick="navigator.clipboard.writeText(this.dataset.url);window.sfx?.click()">${icon('copy')} URL</button>
           </div>
         </div>
       </div>

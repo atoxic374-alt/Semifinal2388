@@ -560,7 +560,6 @@ export class PrivateManager {
     }
     // Ensure ascending order (oldest first → newest last) so newest appears at bottom.
     const sorted = this.messages.slice().sort((a, b) => (a.ts || 0) - (b.ts || 0));
-    this.messages = sorted;
     const oldest = sorted[0];
     const loadMore = oldest ? `<button class="pm-load-more" onclick="window.privateManager.loadOlder('${oldest.id}')">${t('pm.load_more')}</button>` : '';
     const byId = new Map(sorted.map(m => [m.id, m]));
