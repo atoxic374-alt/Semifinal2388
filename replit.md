@@ -7,15 +7,17 @@ A web-based Discord account manager built originally as an Electron desktop app,
 - **Backend**: Express.js server (`server.js`) on port 5000 serving both the REST API and static frontend files.
 - **Frontend**: Vanilla JS + HTML/CSS with ES modules (`index.html`, `src/`).
 - **Discord integration**: `discord.js-selfbot-v13` — maintains a live multi-client pool in server memory (one client per connected token).
-- **Security layer** (Apr 2026):
-  - Master password (bcrypt-hashed in `data/auth.json`) gates the entire app.
-  - First boot redirects to `/login` for setup; subsequent runs redirect to `/login` for sign-in.
-  - Session cookies via `express-session` (7-day rolling, HttpOnly, SameSite=Lax, signed with `data/.session_secret`).
-  - All `/api/*` (except `/api/auth/*`) require an authenticated session — unauthenticated requests get HTTP 401.
-  - Saved Discord tokens are encrypted at rest with **AES-256-GCM** (`lib/crypto.js`); the master key lives in `data/.master_key` (mode 600) or `MASTER_KEY` env. Tokens stored as `v1:iv:tag:ciphertext`.
-  - `helmet` sets standard security headers (HSTS, X-Frame-Options, nosniff, etc).
-  - `express-rate-limit`: 300 req/min per IP for `/api/*`, 30 req/5min for `/api/auth/*` (brute-force defence).
-  - Per-IP login backoff (exponential, max 4 s) on top of the rate limiter.
+- **Multi-user platform** (Apr 2026 — refactored from single-master-password):
+  - Username + password signup (bcrypt) — each user gets a fully isolated dashboard.
+  - **Discord OAuth signup/login** — manual implementation (`lib/oauth.js`); requires `DISCORD_CLIENT_ID` + `DISCORD_CLIENT_SECRET` env vars. Without them, the Discord button is hidden and the route returns 503.
+  - Discord avatar shown in the title-bar user chip (CDN URL based on stored Discord id/avatar hash).
+  - **Device "remember me" tokens** (`lib/users.js`) — 1-year SHA-256-hashed tokens stored per user; cookie `dam.dev` restores the session automatically.
+  - **Per-user data isolation** — each user's tokens, history, voice persistence, and app data live under `data/users/<userId>/` via a scoped JsonStore (`lib/userScope.js`).
+  - **AsyncLocalStorage scoping** — the global `clients` Map and "active client" pointer are now namespaced by user id implicitly. Existing `clients.get(name)`/`activeRef.get()` calls Just Work without per-call uid threading.
+  - Listeners and timers attached during `connectOne()` capture the owner uid and run inside `withUser(uid, ...)` so async events still resolve to the correct user.
+  - `helmet`, `express-rate-limit` (300 req/min `/api/*`, 30 req/5min `/api/auth/*`), per-IP exponential login back-off retained.
+  - Tokens encrypted at rest with **AES-256-GCM** per user (`lib/crypto.js`, master key in `data/.master_key`).
+- **Auto-reconnect on proxy change** — `PUT /api/tokens/:name/proxy` now transparently destroys + re-logs-in the connected client through the new proxy (no manual disconnect/reconnect step).
 - **Storage layer** (`lib/jsonStore.js`): atomic JSON writes (tmp+rename), per-file mutex queue, debounced 250 ms coalescing, in-memory cache, 3 rolling backups (`.bak.0/1/2`), automatic restore from backup on read failure, sync flush on SIGINT/SIGTERM.
 - **Per-account proxy** (`lib/proxy.js`, Apr 2026): Each saved account can route ALL its traffic (REST + WebSocket) through its own proxy. Supports `http://`, `https://`, `socks://`, `socks4://`, `socks5://` (with optional `user:pass@`). Proxy URLs are encrypted at rest alongside the token (AES-256-GCM) and **always masked** when sent to the UI (`http://***:***@host:port`). New endpoints: `PUT /api/tokens/:name/proxy` (set/clear) and `POST /api/tokens/:name/proxy/test` (live egress-IP check via `api.ipify.org` with 8 s timeout). The Tokens UI gained a Proxy button per saved account that prompts, tests, and saves in one flow, plus a purple `PROXY` pill on connected accounts.
 

@@ -8,6 +8,12 @@ const { getStore } = require('./lib/jsonStore');
 const { encrypt, decrypt, tryDecrypt, isEncrypted } = require('./lib/crypto');
 const { buildProxyAgents, testProxy, maskProxy } = require('./lib/proxy');
 const auth = require('./lib/auth');
+const users = require('./lib/users');
+const oauth = require('./lib/oauth');
+const {
+  ctx: userCtx, runWithUser, withUser, currentUserId,
+  scopedStore, clientsPool, activeRef, SYSTEM_UID,
+} = require('./lib/userScope');
 const helmet = require('helmet');
 const session = require('express-session');
 const cookieParser = require('cookie-parser');
@@ -101,25 +107,46 @@ app.get('/favicon.ico', (req, res) => {
 
 // ── Authentication endpoints (no auth required) ────────────────────
 app.get('/login', (req, res) => {
+  // Try device-token restore so a returning user lands straight on /
+  try { auth.tryRestoreFromDeviceToken(req); } catch {}
   if (req.session?.user) return res.redirect('/');
   res.sendFile(path.join(__dirname, 'login.html'));
 });
+app.get('/signup', (req, res) => res.redirect('/login?mode=signup'));
 
 app.get('/api/auth/status', (req, res) => {
+  try { auth.tryRestoreFromDeviceToken(req); } catch {}
   res.json({
     success: true,
-    initialized: auth.isInitialized(),
+    initialized: users.count() > 0,
     authed: !!(req.session && req.session.user),
+    user: req.session?.user ? users.publicUser(users.findById(req.session.user.id)) : null,
+    discordOAuth: oauth.isConfigured(),
   });
 });
 
-app.post('/api/auth/setup', async (req, res) => {
+// Sign up: create a new account with username + password.
+// Optionally include `linkPendingDiscord: true` to link a Discord identity
+// the user just authorised in this session (kept in `req.session.pendingDiscord`).
+app.post('/api/auth/signup', async (req, res) => {
   try {
-    if (auth.isInitialized()) return res.status(400).json({ success: false, error: 'already_initialized' });
-    const { password } = req.body || {};
-    await auth.setupPassword(password);
-    req.session.user = { id: 'owner', loginAt: Date.now() };
-    res.json({ success: true });
+    const { username, password, remember } = req.body || {};
+    let discord = null;
+    if (req.session?.pendingDiscord) discord = req.session.pendingDiscord;
+    const u = await users.createUser({ username, password, discord });
+    delete req.session.pendingDiscord;
+    req.session.regenerate((err) => {
+      if (err) return res.status(500).json({ success: false, error: 'session_error' });
+      req.session.user = { id: u.id, username: u.username, loginAt: Date.now() };
+      users.touchLogin(u.id);
+      if (remember) {
+        try {
+          const tok = users.issueDeviceToken(u.id, { ua: req.headers['user-agent'], ip: req.ip });
+          auth.setDeviceCookie(res, tok);
+        } catch {}
+      }
+      res.json({ success: true, user: users.publicUser(users.findById(u.id)) });
+    });
   } catch (e) {
     res.status(400).json({ success: false, error: e.message });
   }
@@ -130,17 +157,24 @@ app.post('/api/auth/login', async (req, res) => {
     const ip = req.ip;
     const delay = auth._failureDelay(ip);
     if (delay) await new Promise(r => setTimeout(r, delay));
-    const { password } = req.body || {};
-    const okPw = await auth.verify(password);
-    if (!okPw) {
+    const { username, password, remember } = req.body || {};
+    const u = await users.verifyPassword(username, password);
+    if (!u) {
       auth._noteFailure(ip);
-      return res.status(401).json({ success: false, error: 'invalid_password' });
+      return res.status(401).json({ success: false, error: 'invalid_credentials' });
     }
     auth._clearFailures(ip);
     req.session.regenerate((err) => {
       if (err) return res.status(500).json({ success: false, error: 'session_error' });
-      req.session.user = { id: 'owner', loginAt: Date.now() };
-      res.json({ success: true });
+      req.session.user = { id: u.id, username: u.username, loginAt: Date.now() };
+      users.touchLogin(u.id);
+      if (remember) {
+        try {
+          const tok = users.issueDeviceToken(u.id, { ua: req.headers['user-agent'], ip: req.ip });
+          auth.setDeviceCookie(res, tok);
+        } catch {}
+      }
+      res.json({ success: true, user: users.publicUser(users.findById(u.id)) });
     });
   } catch (e) {
     res.status(400).json({ success: false, error: e.message });
@@ -149,45 +183,160 @@ app.post('/api/auth/login', async (req, res) => {
 
 app.post('/api/auth/logout', (req, res) => {
   if (req.session) req.session.destroy(() => {});
+  auth.clearDeviceCookie(res);
   res.clearCookie('dam.sid');
   res.json({ success: true });
 });
 
+// Change password (requires current session)
 app.post('/api/auth/change-password', async (req, res) => {
   if (!req.session?.user) return res.status(401).json({ success: false, error: 'unauthorized' });
   try {
     const { oldPassword, newPassword } = req.body || {};
-    await auth.changePassword(oldPassword, newPassword);
+    await users.changePassword(req.session.user.id, oldPassword, newPassword);
+    // Revoke all device tokens on password change for safety
+    users.revokeAllDevices(req.session.user.id);
+    auth.clearDeviceCookie(res);
     res.json({ success: true });
   } catch (e) {
     res.status(400).json({ success: false, error: e.message });
   }
 });
 
+// ── Discord OAuth ────────────────────────────────────────────────
+// Two intents: 'signup' (start signup-via-Discord), 'login' (sign in if linked),
+// 'link' (attach Discord to current account).
+app.get('/api/auth/discord/start', (req, res) => {
+  if (!oauth.isConfigured()) {
+    return res.status(503).send('Discord OAuth not configured. Set DISCORD_CLIENT_ID and DISCORD_CLIENT_SECRET.');
+  }
+  const intent = ['signup', 'login', 'link'].includes(req.query.intent) ? req.query.intent : 'login';
+  if (intent === 'link' && !req.session?.user) {
+    return res.status(401).send('Sign in first to link Discord.');
+  }
+  const state = oauth.newState();
+  req.session.oauthState = state;
+  req.session.oauthIntent = intent;
+  const url = oauth.authorizeUrl(req, state);
+  res.redirect(url);
+});
+
+app.get('/api/auth/discord/callback', async (req, res) => {
+  try {
+    const { code, state, error } = req.query || {};
+    if (error) return res.redirect(`/login?error=${encodeURIComponent(String(error))}`);
+    if (!code || !state || state !== req.session?.oauthState) {
+      return res.redirect('/login?error=invalid_state');
+    }
+    const intent = req.session.oauthIntent || 'login';
+    delete req.session.oauthState;
+    delete req.session.oauthIntent;
+
+    const tokenResp = await oauth.exchangeCode(req, String(code));
+    const me = await oauth.fetchMe(tokenResp.access_token);
+    const discordIdentity = { id: me.id, username: me.username, avatar: me.avatar };
+
+    // If a user with this Discord account already exists, sign them in regardless of intent
+    const existing = users.findByDiscordId(me.id);
+    if (existing) {
+      // Refresh stored discord profile (avatar may have changed)
+      users.linkDiscord(existing.id, discordIdentity);
+      return req.session.regenerate((err) => {
+        if (err) return res.redirect('/login?error=session_error');
+        req.session.user = { id: existing.id, username: existing.username, loginAt: Date.now() };
+        users.touchLogin(existing.id);
+        try {
+          const tok = users.issueDeviceToken(existing.id, { ua: req.headers['user-agent'], ip: req.ip });
+          auth.setDeviceCookie(res, tok);
+        } catch {}
+        res.redirect('/');
+      });
+    }
+
+    if (intent === 'link' && req.session?.user) {
+      try {
+        users.linkDiscord(req.session.user.id, discordIdentity);
+        return res.redirect('/?linked=discord');
+      } catch (e) {
+        return res.redirect(`/?error=${encodeURIComponent(e.message)}`);
+      }
+    }
+
+    // signup flow: stash the Discord identity in session, send back to login page
+    // to finish the username+password step. (Intent 'login' for an unknown Discord
+    // account also lands here so the user can complete signup.)
+    req.session.pendingDiscord = discordIdentity;
+    return res.redirect('/login?mode=signup&discord=1');
+  } catch (e) {
+    return res.redirect(`/login?error=${encodeURIComponent(e.message || 'oauth_failed')}`);
+  }
+});
+
+app.post('/api/auth/discord/unlink', (req, res) => {
+  if (!req.session?.user) return res.status(401).json({ success: false, error: 'unauthorized' });
+  try { users.unlinkDiscord(req.session.user.id); res.json({ success: true }); }
+  catch (e) { res.status(400).json({ success: false, error: e.message }); }
+});
+
 // ── Auth gate: everything below requires a valid session ──────────────
 app.use(auth.requireAuth());
 
+// Attach user context (AsyncLocalStorage) so per-user storage and the
+// scoped client pool resolve to the right namespace inside every handler.
+app.use((req, res, next) => {
+  const uid = req.session?.user?.id || SYSTEM_UID;
+  userCtx.run({ userId: uid }, next);
+});
+
+// /api/me — current authenticated user (with Discord link, if any)
+app.get('/api/me', (req, res) => {
+  const u = users.findById(req.session.user.id);
+  if (!u) return res.status(401).json({ success: false, error: 'unauthorized' });
+  res.json({
+    success: true,
+    user: users.publicUser(u),
+    devices: users.listDevices(u.id),
+    discordOAuth: oauth.isConfigured(),
+  });
+});
+
 app.use(express.static(path.join(__dirname)));
 
-// ── Persistent stores ────────────────────────────────────────────────
-// Atomic, queued, debounced JSON writes with rolling backups.
-// See lib/jsonStore.js for details.
-const tokensPath = path.join(__dirname, 'saved_tokens.json');
-const tokensStore = getStore(tokensPath, []);
+// ── Persistent stores (per-user, scoped via AsyncLocalStorage) ─────────
+// Each user's data lives under data/users/<userId>/. The scoped wrappers
+// transparently resolve to the right per-user JsonStore based on the
+// current user context (lib/userScope.js).
+const tokensStore = scopedStore('saved_tokens.json', []);
 
 // ───────────────────────────────────────────────
-// Multi-token client pool
+// Multi-token client pool — scoped per user (AsyncLocalStorage)
+// `clients` is the per-user namespaced view of the global pool. The same
+// Map-like API as before, but the current user's id is implicit.
 // ───────────────────────────────────────────────
-const clients = new Map();              // name -> { client, token, name }
-let activeName = null;                  // name of the active client
-let discordClient = null;               // alias to active client (for legacy endpoints)
+const clients = clientsPool;            // scoped wrapper, see lib/userScope.js
 
-function getActive() { return discordClient; }
+// Per-user "active client name" backed by AsyncLocalStorage.
+const _activeProxy = new Proxy({}, {});
+// Use accessors instead of bare variable references — required because
+// "active" is now per-user. We keep `activeName` and `discordClient`
+// identifiers as no-op writable bindings so legacy code that *assigns*
+// to them still parses, but reads route through the helpers below.
+let activeName = null;                  // legacy mirror — DO NOT READ DIRECTLY
+let discordClient = null;               // legacy mirror — DO NOT READ DIRECTLY
+function _clearActive() { activeRef.set(null); }
+
+function getActive() { return getActiveClient(); }
+function getActiveClient() {
+  const n = activeRef.get();
+  if (!n) return null;
+  const entry = clients.get(n);
+  return entry ? entry.client : null;
+}
 function getClientByName(name) {
   const entry = clients.get(name);
   return entry ? entry.client : null;
 }
-// True when `userId` belongs to ANY of our currently-connected accounts.
+// True when `userId` belongs to ANY of THIS USER's currently-connected accounts.
 // Used to skip self-driven loops (mirror reactions, mention echoes…).
 function isOwnConnectedUserId(userId) {
   if (!userId) return false;
@@ -199,8 +348,7 @@ function isOwnConnectedUserId(userId) {
 function setActive(name) {
   const entry = clients.get(name);
   if (!entry) return false;
-  activeName = name;
-  discordClient = entry.client;
+  activeRef.set(name);
   return true;
 }
 // Helper: pick client from `?account=NAME` or `req.body.account`, fall back to active.
@@ -210,7 +358,7 @@ function pickClient(req) {
     const c = getClientByName(name);
     if (c) return c;
   }
-  return discordClient;
+  return getActiveClient();
 }
 
 // Default avatar fallback URL Discord uses (based on discriminator/index).
@@ -315,6 +463,9 @@ const MAX_CUSTOM_STATUS_LEN = 128;
 // ═══════════════════════════════════════════════
 
 async function connectOne(token, name, proxy) {
+  // Capture the owning user once so all derived listeners/timers can run
+  // inside this user's AsyncLocalStorage scope.
+  const ownerUid = currentUserId();
   const finalName = (name || `acc_${clients.size + 1}`).trim();
   if (clients.has(finalName)) {
     // disconnect previous before re-binding name
@@ -336,17 +487,18 @@ async function connectOne(token, name, proxy) {
   }
   const client = new Client(opts);
   await client.login(token);
-  clients.set(finalName, { client, token, name: finalName, proxy: proxy || null });
-  if (!activeName) setActive(finalName);
-  // Auto-bind DM realtime listener for PrivateManager (defined further below)
-  try { if (typeof attachDMListener === 'function') attachDMListener(finalName, client); } catch (e) {}
-  try { if (typeof attachMentionListener === 'function') attachMentionListener(finalName, client); } catch (e) {}
-  try { if (typeof attachPicListener === 'function') attachPicListener(finalName, client); } catch (e) {}
-  try { if (typeof attachAntiPruneListener === 'function') attachAntiPruneListener(finalName, client); } catch (e) {}
-  try { if (typeof attachDMDeleteListener === 'function') attachDMDeleteListener(finalName, client); } catch (e) {}
+  clients.set(finalName, { client, token, name: finalName, proxy: proxy || null, ownerUid });
+  if (!activeRef.get()) setActive(finalName);
+  // Auto-bind realtime listeners — wrapped so async events keep user scope.
+  // Each attach* helper closes over the captured ownerUid via withUser() inside.
+  try { if (typeof attachDMListener === 'function') attachDMListener(finalName, client, ownerUid); } catch (e) {}
+  try { if (typeof attachMentionListener === 'function') attachMentionListener(finalName, client, ownerUid); } catch (e) {}
+  try { if (typeof attachPicListener === 'function') attachPicListener(finalName, client, ownerUid); } catch (e) {}
+  try { if (typeof attachAntiPruneListener === 'function') attachAntiPruneListener(finalName, client, ownerUid); } catch (e) {}
+  try { if (typeof attachDMDeleteListener === 'function') attachDMDeleteListener(finalName, client, ownerUid); } catch (e) {}
 
   // ── Auto-rejoin voice sessions from previous run ──
-  setTimeout(() => {
+  setTimeout(() => withUser(ownerUid, () => {
     try {
       const saved = loadVoicePersist();
       const mine  = saved.filter(s => s.name === finalName);
@@ -359,7 +511,7 @@ async function connectOne(token, name, proxy) {
         } catch (e) { /* skip failed guild */ }
       }
     } catch (e) { /* non-fatal */ }
-  }, 3000); // 3s delay — lets the WS connection fully stabilise before sending voice op
+  }), 3000); // 3s delay — lets the WS connection fully stabilise before sending voice op
 
   return { name: finalName, username: client.user.tag, id: client.user.id };
 }
@@ -376,12 +528,12 @@ app.post('/api/discord/connect', async (req, res) => {
 
 app.post('/api/discord/disconnect', async (req, res) => {
   try {
-    if (discordClient && activeName) {
-      const wasName = activeName;
-      try { await discordClient.destroy(); } catch (e) {}
-      clients.delete(activeName);
-      activeName = null;
-      discordClient = null;
+    if (getActiveClient() && activeRef.get()) {
+      const wasName = activeRef.get();
+      try { await getActiveClient().destroy(); } catch (e) {}
+      clients.delete(activeRef.get());
+      activeRef.set(null);
+      /* getActiveClient() cleared via activeRef */;
       // promote first remaining client
       const next = clients.keys().next().value;
       if (next) setActive(next);
@@ -397,8 +549,8 @@ app.post('/api/discord/disconnect-all', async (req, res) => {
       try { await entry.client.destroy(); } catch (e) {}
     }
     clients.clear();
-    discordClient = null;
-    activeName = null;
+    /* getActiveClient() cleared via activeRef */;
+    activeRef.set(null);
     ok(res);
   } catch (e) { fail(res, e); }
 });
@@ -411,30 +563,41 @@ app.get('/api/discord/clients', (req, res) => {
     id: e.client.user?.id || null,
     avatar: e.client.user?.displayAvatarURL?.() || null,
     status: e.client.user?.presence?.status || 'unknown',
-    active: name === activeName
+    active: name === activeRef.get()
   }));
-  ok(res, { clients: list, active: activeName });
+  ok(res, { clients: list, active: activeRef.get() });
 });
 
 app.post('/api/discord/active', (req, res) => {
   const { name } = req.body;
-  if (setActive(name)) return ok(res, { active: activeName });
+  if (setActive(name)) return ok(res, { active: activeRef.get() });
   fail(res, new Error('Client not found'));
 });
 
-// Auto-connect saved tokens that are flagged autoConnect
+// Auto-connect saved tokens that are flagged autoConnect — for ALL users.
+// Each user's tokens are processed inside their own AsyncLocalStorage scope
+// so per-user storage and the scoped client pool resolve correctly.
 async function autoConnectSaved() {
   try {
-    const tokens = readTokens();
-    for (const t of tokens) {
-      if (t.autoConnect) {
+    const ids = users.allUserIds();
+    for (const uid of ids) {
+      await runWithUser(uid, async () => {
         try {
-          await connectOne(t.token, t.name, t.proxy);
-          console.log(`[auto-connect] ${t.name} ✓`);
-        } catch (e) {
-          console.log(`[auto-connect] ${t.name} ✗ ${e.message}`);
-        }
-      }
+          // Lazy migration of any plaintext-stored tokens for this user.
+          migrateTokenEncryptionForCurrentUser();
+          const tokens = readTokens();
+          for (const t of tokens) {
+            if (t.autoConnect) {
+              try {
+                await connectOne(t.token, t.name, t.proxy);
+                console.log(`[auto-connect] ${uid}/${t.name} ✓`);
+              } catch (e) {
+                console.log(`[auto-connect] ${uid}/${t.name} ✗ ${e.message}`);
+              }
+            }
+          }
+        } catch (e) { /* per-user errors should not abort the loop */ }
+      });
     }
   } catch (e) {}
 }
@@ -727,9 +890,10 @@ function writeTokens(arr) {
   tokensStore.write(encrypted);
 }
 
-// One-shot migration: if the store has any plaintext tokens on boot,
-// encrypt them in place. Idempotent — encrypted entries are left alone.
-(function migrateTokenEncryption() {
+// One-shot migration runs lazily, the first time a user touches their
+// own tokens store. With per-user storage the migration is per-user and
+// idempotent (encrypted entries are left alone).
+function migrateTokenEncryptionForCurrentUser() {
   try {
     const raw = tokensStore.read() || [];
     const needsMigration = raw.some(t => t?.token && !isEncrypted(t.token));
@@ -743,7 +907,7 @@ function writeTokens(arr) {
   } catch (e) {
     console.warn('[security] token migration failed:', e.message);
   }
-})();
+}
 
 app.get('/api/tokens', (req, res) => {
   try {
@@ -822,7 +986,9 @@ app.post('/api/tokens/:name/connect', async (req, res) => {
 });
 
 // ── Proxy management for a saved account
-app.put('/api/tokens/:name/proxy', (req, res) => {
+// If the account is currently connected, transparently reconnect through the
+// new proxy so the user does not need to manually disconnect/reconnect.
+app.put('/api/tokens/:name/proxy', async (req, res) => {
   try {
     const tokens = readTokens();
     const idx = tokens.findIndex(t => t.name === req.params.name);
@@ -837,7 +1003,27 @@ app.put('/api/tokens/:name/proxy', (req, res) => {
       tokens[idx].proxy = null;
     }
     writeTokens(tokens);
-    ok(res, { proxy: tokens[idx].proxy ? maskProxy(tokens[idx].proxy) : null });
+
+    // ── Auto-reconnect if the account is currently connected ──
+    let reconnected = false;
+    const entry = clients.get(req.params.name);
+    if (entry?.client) {
+      const wasActive = activeRef.get() === req.params.name;
+      try { await entry.client.destroy(); } catch (e) {}
+      clients.delete(req.params.name);
+      try {
+        const decryptedToken = isEncrypted(tokens[idx].token) ? decrypt(tokens[idx].token) : tokens[idx].token;
+        await connectOne(decryptedToken, tokens[idx].name, tokens[idx].proxy);
+        if (wasActive) setActive(tokens[idx].name);
+        reconnected = true;
+      } catch (e) {
+        console.warn(`[proxy] auto-reconnect failed for ${tokens[idx].name}: ${e.message}`);
+      }
+    }
+    ok(res, {
+      proxy: tokens[idx].proxy ? maskProxy(tokens[idx].proxy) : null,
+      reconnected,
+    });
   } catch (e) { fail(res, e); }
 });
 
@@ -862,8 +1048,8 @@ app.post('/api/tokens/:name/disconnect', async (req, res) => {
     try { await entry.client.destroy(); } catch (e) {}
     clients.delete(req.params.name);
     if (activeName === req.params.name) {
-      activeName = null;
-      discordClient = null;
+      activeRef.set(null);
+      /* getActiveClient() cleared via activeRef */;
       const next = clients.keys().next().value;
       if (next) setActive(next);
     }
@@ -886,7 +1072,7 @@ function resolvePresence(s) {
 app.post('/api/presence/set', async (req, res) => {
   try {
     const { tokens = [], status, customStatus, activity, emoji } = req.body;
-    const targets = (tokens.length ? tokens : (activeName ? [activeName] : []));
+    const targets = (tokens.length ? tokens : (activeRef.get() ? [activeRef.get()] : []));
     const results = [];
     for (const n of targets) {
       const c = getClientByName(n);
@@ -919,7 +1105,7 @@ app.post('/api/presence/bio', async (req, res) => {
     if (bio.length > MAX_BIO_LEN) {
       return fail(res, new Error(`Bio is too long: ${bio.length}/${MAX_BIO_LEN} chars. Discord rejects anything longer.`));
     }
-    const targets = (tokens.length ? tokens : (activeName ? [activeName] : []));
+    const targets = (tokens.length ? tokens : (activeRef.get() ? [activeRef.get()] : []));
     const results = [];
     for (const n of targets) {
       const entry = clients.get(n);
@@ -975,7 +1161,7 @@ app.post('/api/presence/rotate/start', (req, res) => {
   try {
     const { tokens = [], states = [], intervalMs = 60000 } = req.body;
     if (!states.length) return fail(res, new Error('No states provided'));
-    const targets = (tokens.length ? tokens : (activeName ? [activeName] : []));
+    const targets = (tokens.length ? tokens : (activeRef.get() ? [activeRef.get()] : []));
     for (const n of targets) _startRotationFor(n, states, intervalMs);
     _persistRotations();
     ok(res, { rotating: targets });
@@ -1028,7 +1214,7 @@ app.post('/api/presence/avatar', async (req, res) => {
         return fail(res, new Error(`Image is too large: ${(sz / (1024*1024)).toFixed(2)} MB. Max ${(MAX_AVATAR_BYTES/(1024*1024)).toFixed(0)} MB.`));
       }
     }
-    const targets = (tokens.length ? tokens : (activeName ? [activeName] : []));
+    const targets = (tokens.length ? tokens : (activeRef.get() ? [activeRef.get()] : []));
     const results = [];
     for (const n of targets) {
       const c = getClientByName(n);
@@ -1061,7 +1247,7 @@ app.post('/api/presence/banner', async (req, res) => {
         return fail(res, new Error(`Banner is too large: ${(sz / (1024*1024)).toFixed(2)} MB. Max ${(MAX_BANNER_BYTES/(1024*1024)).toFixed(0)} MB.`));
       }
     }
-    const targets = (tokens.length ? tokens : (activeName ? [activeName] : []));
+    const targets = (tokens.length ? tokens : (activeRef.get() ? [activeRef.get()] : []));
     const results = [];
     for (const n of targets) {
       const entry = clients.get(n);
@@ -1120,7 +1306,7 @@ app.post('/api/presence/activity/start', (req, res) => {
     const { tokens = [], modes = ['online','idle','invisible'], minSec = 60, maxSec = 600 } = req.body;
     const minMs = Math.max(15, parseInt(minSec)) * 1000;
     const maxMs = Math.max(minMs + 1000, parseInt(maxSec) * 1000);
-    const targets = (tokens.length ? tokens : (activeName ? [activeName] : []));
+    const targets = (tokens.length ? tokens : (activeRef.get() ? [activeRef.get()] : []));
     for (const n of targets) {
       const old = activitySims.get(n);
       if (old?.timer) clearTimeout(old.timer);
@@ -1243,7 +1429,7 @@ async function resolveTargets(client, scope) {
 
 async function executeSend({ tokens, scope, messages, mode }) {
   // mode: { type: 'fast'|'natural', perMessageDelayMs?, betweenMessagesMs? }
-  const targets = (tokens?.length ? tokens : (activeName ? [activeName] : []));
+  const targets = (tokens?.length ? tokens : (activeRef.get() ? [activeRef.get()] : []));
   const results = [];
   for (const tName of targets) {
     const client = getClientByName(tName);
@@ -1279,7 +1465,7 @@ app.post('/api/messages/send', async (req, res) => {
     const { tokens = [], scope, messages = [], mode = { type: 'natural' } } = req.body;
     if (!scope || !messages.length) return fail(res, new Error('scope and messages required'));
     const results = await executeSend({ tokens, scope, messages, mode });
-    const targets = (tokens?.length ? tokens : (activeName ? [activeName] : []));
+    const targets = (tokens?.length ? tokens : (activeRef.get() ? [activeRef.get()] : []));
     for (const tn of targets) {
       const tr = results.filter(r => r.token === tn);
       recordHistory({
@@ -1324,7 +1510,7 @@ app.post('/api/messages/schedule', (req, res) => {
     const ms = new Date(runAt).getTime() - Date.now();
     if (ms < 0) return fail(res, new Error('runAt is in the past'));
     const id = String(jobCounter++);
-    const targets = (tokens?.length ? tokens : (activeName ? [activeName] : []));
+    const targets = (tokens?.length ? tokens : (activeRef.get() ? [activeRef.get()] : []));
     for (const tn of targets) {
       recordHistory({ account: tn, type: 'schedule', target: scope, messages: messages.length, status: 'pending', runAt });
     }
@@ -1465,7 +1651,7 @@ app.post('/api/reactions/start', (req, res) => {
   try {
     const { tokens = [], scope, mode = 'mirror', emojis = [], buttonNames = [] } = req.body;
     if (!scope) return fail(res, new Error('scope required'));
-    const targets = (tokens.length ? tokens : (activeName ? [activeName] : []));
+    const targets = (tokens.length ? tokens : (activeRef.get() ? [activeRef.get()] : []));
     const id = attachReactionListener({ tokens: targets, scope, mode, emojis, buttonNames });
     ok(res, { listenerId: id });
   } catch (e) { fail(res, e); }
@@ -1671,10 +1857,11 @@ function bumpDM(accountName, channelId, msg, fromMe = false) {
   }
 }
 
-function attachDMListener(name, client) {
+function attachDMListener(name, client, ownerUid) {
+  ownerUid = ownerUid || currentUserId();
   if (client.__dmListenerBound) return;
   client.__dmListenerBound = true;
-  client.on('messageCreate', (msg) => {
+  client.on('messageCreate', (msg) => withUser(ownerUid, () => {
     try {
       if (!msg.channel || msg.channel.type !== 'DM') return;
       const fromMe = msg.author?.id === client.user.id;
@@ -1700,11 +1887,13 @@ function attachDMListener(name, client) {
         }
       }
     } catch (e) {}
-  });
+  }));
 }
 
-// Bind listeners for any clients already connected (auto-connect path)
-for (const [n, e] of clients.entries()) attachDMListener(n, e.client);
+// NOTE: skipping "bind for already-connected clients" auto-loop —
+// listeners are bound during connectOne() which is the only entry point now,
+// and attempting to iterate the scoped pool here (outside any user ctx)
+// would resolve to an empty namespace anyway.
 
 app.get('/api/private/stream', (req, res) => {
   res.set({
@@ -1746,7 +1935,7 @@ app.get('/api/private/dms', async (req, res) => {
   try {
     const c = pickClient(req);
     if (!c?.user) return fail(res, new Error('Not connected'));
-    const accountName = (req.query.account || activeName || '').trim();
+    const accountName = (req.query.account || activeRef.get() || '').trim();
     const dms = Array.from(c.channels.cache.values())
       .filter(ch => ch.type === 'DM' && ch.recipient)
       .map(d => {
@@ -1876,7 +2065,7 @@ app.post('/api/private/react', async (req, res) => {
 });
 
 app.post('/api/private/read/:channelId', (req, res) => {
-  const accountName = (req.body?.account || activeName || '').trim();
+  const accountName = (req.body?.account || activeRef.get() || '').trim();
   const k = `${accountName}|${req.params.channelId}`;
   const st = dmState.get(k);
   if (st) { st.unread = 0; dmState.set(k, st); }
@@ -1961,10 +2150,10 @@ app.get('/api/private/search', async (req, res) => {
     const limit = Math.min(80, Math.max(5, parseInt(req.query.limit || '40', 10)));
     const deep = req.query.deep !== '0'; // default: deep search ON
 
-    const c = account ? getClientByName(account) : (discordClient || null);
+    const c = account ? getClientByName(account) : (getActiveClient() || null);
     if (!c?.token) return fail(res, new Error('Not connected'));
 
-    const cacheKey = `${account || activeName || '_'}|${q.toLowerCase()}|${includeGroups ? 'g' : ''}`;
+    const cacheKey = `${account || activeRef.get() || '_'}|${q.toLowerCase()}|${includeGroups ? 'g' : ''}`;
     const cached = _pmSearchCache.get(cacheKey);
     if (cached && (Date.now() - cached.ts) < _PM_SEARCH_TTL) {
       return ok(res, { matches: cached.matches.slice(0, limit), total: cached.matches.length, source: 'cache' });
@@ -2051,7 +2240,7 @@ app.get('/api/stats/summary', async (req, res) => {
     const owned = guilds.filter(g => g.ownerId === c.user.id);
     const bots = dms.filter(d => d.recipient?.bot).length;
     // Top DMs by recent unread + activity (from dmState)
-    const accountName = (req.query.account || activeName || '').trim();
+    const accountName = (req.query.account || activeRef.get() || '').trim();
     // Live-fallback: if dmState hasn't observed this DM yet (e.g. fresh boot),
     // use the channel's lastMessage timestamp so the dashboard isn't empty.
     const topDMs = dms.map(d => {
@@ -2299,8 +2488,9 @@ app.get('/api/lookup/server/:id', async (req, res) => {
 // ═══════════════════════════════════════════════
 //  APP DATA + FEATURE SSE
 // ═══════════════════════════════════════════════
-const dataPath = path.join(__dirname, 'app_data.json');
-const dataStore = getStore(dataPath, {});
+// Per-user app data store — see lib/userScope.js. Resolves to
+// data/users/<currentUserId>/app_data.json based on async context.
+const dataStore = scopedStore('app_data.json', {});
 function readData() { return dataStore.read(); }
 function writeData(_d) { dataStore.touch(); } // mutations are on the cached object — just mark dirty
 function ensureData() {
@@ -3236,7 +3426,7 @@ app.post('/api/clone/paste/server-build', async (req, res) => {
 
     const accountList = Array.isArray(rawAccounts) && rawAccounts.length
       ? rawAccounts
-      : [account || activeName].filter(Boolean);
+      : [account || activeRef.get()].filter(Boolean);
     if (!accountList.length) return fail(res, new Error('No accounts specified'));
 
     // The "structure builder" must own (or have admin on) the target server.
@@ -3613,10 +3803,11 @@ function markMentionDeleted(account, msgId) {
   if (it) { it.deleted = true; _mentionsDirty = true; sseBroadcast('mention_deleted', { account, id: msgId }); }
 }
 
-function attachMentionListener(name, client) {
+function attachMentionListener(name, client, ownerUid) {
+  ownerUid = ownerUid || currentUserId();
   if (client.__mentionListenerBound) return;
   client.__mentionListenerBound = true;
-  client.on('messageCreate', (msg) => {
+  client.on('messageCreate', (msg) => withUser(ownerUid, () => {
     try {
       if (msg.author?.id === client.user.id) return;
       const mentioned = msg.mentions?.users?.has?.(client.user.id) ||
@@ -3625,15 +3816,15 @@ function attachMentionListener(name, client) {
       if (!mentioned) return;
       addMention(name, msg);
     } catch (e) {}
-  });
-  client.on('messageDelete', (msg) => {
+  }));
+  client.on('messageDelete', (msg) => withUser(ownerUid, () => {
     try { markMentionDeleted(name, msg.id); } catch (e) {}
-  });
+  }));
 }
-for (const [n, e] of clients.entries()) attachMentionListener(n, e.client);
+// Listeners are bound during connectOne(); no need to re-iterate here.
 
 app.get('/api/mentions', (req, res) => {
-  const account = (req.query.account || activeName || '').trim();
+  const account = (req.query.account || activeRef.get() || '').trim();
   const all = req.query.all === '1' || req.query.all === 'true';
   let list = [];
   if (all) {
@@ -3722,12 +3913,13 @@ async function handlePicMessage(name, msg) {
   } catch (e) {}
 }
 
-function attachPicListener(name, client) {
+function attachPicListener(name, client, ownerUid) {
+  ownerUid = ownerUid || currentUserId();
   if (client.__picListenerBound) return;
   client.__picListenerBound = true;
-  client.on('messageCreate', (msg) => handlePicMessage(name, msg));
+  client.on('messageCreate', (msg) => withUser(ownerUid, () => handlePicMessage(name, msg)));
 }
-for (const [n, e] of clients.entries()) attachPicListener(n, e.client);
+// Listeners are bound during connectOne(); no need to re-iterate here.
 
 app.get('/api/pic/config', (req, res) => {
   const d = readData();
@@ -3881,12 +4073,13 @@ async function handleAntiPrune(name, member) {
   } catch (e) {}
 }
 
-function attachAntiPruneListener(name, client) {
+function attachAntiPruneListener(name, client, ownerUid) {
+  ownerUid = ownerUid || currentUserId();
   if (client.__antipruneBound) return;
   client.__antipruneBound = true;
-  client.on('guildMemberRemove', (member) => handleAntiPrune(name, member));
+  client.on('guildMemberRemove', (member) => withUser(ownerUid, () => handleAntiPrune(name, member)));
 }
-for (const [n, e] of clients.entries()) attachAntiPruneListener(n, e.client);
+// Listeners are bound during connectOne(); no need to re-iterate here.
 
 app.get('/api/antiprune/config', (req, res) => {
   const d = readData();
@@ -4664,10 +4857,11 @@ app.get('/api/discord/servers/:serverId/members', async (req, res) => {
 // ═══════════════════════════════════════════════
 //  9. PRIVATE MESSAGE DELETE TRACKING (real-time)
 // ═══════════════════════════════════════════════
-function attachDMDeleteListener(name, client) {
+function attachDMDeleteListener(name, client, ownerUid) {
+  ownerUid = ownerUid || currentUserId();
   if (client.__dmDeleteListenerBound) return;
   client.__dmDeleteListenerBound = true;
-  client.on('messageDelete', (msg) => {
+  client.on('messageDelete', (msg) => withUser(ownerUid, () => {
     try {
       if (!msg.channel || msg.channel.type !== 'DM') return;
       const payload = JSON.stringify({
@@ -4683,9 +4877,9 @@ function attachDMDeleteListener(name, client) {
         }
       }
     } catch (e) {}
-  });
+  }));
 }
-for (const [n, e] of clients.entries()) attachDMDeleteListener(n, e.client);
+// Listeners are bound during connectOne(); no need to re-iterate here.
 
 // ═══════════════════════════════════════════════
 //  10. VOICE MANAGER
@@ -4697,8 +4891,8 @@ const voiceRotations  = new Map(); // rotationId -> { id, name, guildId, channel
 const voiceStateCycles= new Map(); // cycleId    -> { id, accounts, states, intervalMs, timer, currentIdx, nextAt }
 
 // ── Voice Persistence (auto-rejoin on restart) ──────────────────────────────
-const VOICE_PERSIST_PATH = path.join(__dirname, 'data', 'voice-persist.json');
-const voicePersistStore = getStore(VOICE_PERSIST_PATH, []);
+// Per-user voice persistence — voice sessions auto-rejoin on restart.
+const voicePersistStore = scopedStore('voice-persist.json', []);
 
 function persistVoice() {
   try {

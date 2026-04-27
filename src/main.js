@@ -64,6 +64,34 @@ document.getElementById('logoutBtn')?.addEventListener('click', async () => {
   window.location.href = '/login';
 });
 
+// ── Populate header user chip from /api/me ──────────────────────
+// Shows the current user's username + Discord avatar (if linked).
+(async function loadMe() {
+  try {
+    const r = await fetch('/api/me').then(x => x.json());
+    if (!r?.success || !r.user) return;
+    const me = r.user;
+    const chip = document.getElementById('headerUser');
+    const img  = document.getElementById('headerUserAvatar');
+    const nm   = document.getElementById('headerUserName');
+    if (!chip) return;
+    nm.textContent = me.username || 'user';
+    if (me.discord?.id) {
+      img.src = me.discord.avatar
+        ? `https://cdn.discordapp.com/avatars/${me.discord.id}/${me.discord.avatar}.png?size=64`
+        : `https://cdn.discordapp.com/embed/avatars/${(BigInt(me.discord.id) >> 22n) % 6n}.png`;
+    } else {
+      // Fallback initial-avatar SVG
+      const init = (me.username || '?')[0].toUpperCase();
+      img.src = `data:image/svg+xml;utf8,${encodeURIComponent(
+        `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='32' fill='#5865F2'/><text x='50%' y='54%' text-anchor='middle' font-family='-apple-system,sans-serif' font-size='30' font-weight='600' fill='#fff' dominant-baseline='middle'>${init}</text></svg>`
+      )}`;
+    }
+    chip.hidden = false;
+    window._currentUser = me;
+  } catch {}
+})();
+
 document.getElementById('changePwBtn')?.addEventListener('click', async () => {
   const oldPw = window.prompt('Current password');
   if (!oldPw) return;
