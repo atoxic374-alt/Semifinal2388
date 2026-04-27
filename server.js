@@ -1331,6 +1331,60 @@ app.post('/api/private/read/:channelId', (req, res) => {
   ok(res);
 });
 
+// Discord-style global search across DMs (and optionally groups). Scans every
+// open DM/GROUP_DM channel's locally-cached messages for the query, returning
+// matches grouped per-channel with snippets.
+app.get('/api/private/search', async (req, res) => {
+  try {
+    const q = (req.query.q || '').toString().trim();
+    if (q.length < 2) return ok(res, { matches: [], total: 0 });
+    const account = (req.query.account || '').toString().trim();
+    const includeGroups = req.query.groups === '1' || req.query.groups === 'true';
+    const limit = Math.min(50, parseInt(req.query.limit || '20', 10));
+
+    // Pick the right client
+    const c = account ? getClientByName(account) : discordClient;
+    if (!c) return fail(res, new Error('Not connected'));
+    const ql = q.toLowerCase();
+
+    const matches = [];
+    const channels = Array.from(c.channels.cache.values()).filter(ch =>
+      ch.type === 'DM' || (includeGroups && ch.type === 'GROUP_DM'));
+
+    for (const ch of channels) {
+      // Pull a recent slice (cached + small fetch). We avoid heavy fetching
+      // to keep the search snappy — Discord's own client also only searches
+      // what it has loaded.
+      let msgs = Array.from(ch.messages?.cache?.values?.() || []);
+      if (msgs.length < 25) {
+        try {
+          const fetched = await ch.messages.fetch({ limit: 50 });
+          msgs = Array.from(fetched.values());
+        } catch (e) {}
+      }
+      for (const m of msgs) {
+        const content = String(m.content || '');
+        const author = m.author?.username || '';
+        if (content.toLowerCase().includes(ql) || author.toLowerCase().includes(ql)) {
+          matches.push({
+            channelId: ch.id,
+            channelName: ch.recipient?.username || ch.name || 'DM',
+            channelAvatar: ch.recipient?.displayAvatarURL?.({ size: 64 }) || defaultAvatarUrl(ch.recipient?.id || 0),
+            messageId: m.id,
+            content,
+            author: { id: m.author?.id, username: author, avatar: m.author?.displayAvatarURL?.({ size: 32 }) || null },
+            ts: m.createdTimestamp,
+          });
+          if (matches.length >= limit) break;
+        }
+      }
+      if (matches.length >= limit) break;
+    }
+    matches.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    ok(res, { matches, total: matches.length });
+  } catch (e) { fail(res, e); }
+});
+
 // ═══════════════════════════════════════════════
 //  STATS DASHBOARD
 // ═══════════════════════════════════════════════

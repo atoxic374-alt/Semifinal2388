@@ -1,6 +1,16 @@
 {
   "history": [
     {
+      "id": "mofnzgxm97ny",
+      "ts": 1777201664890,
+      "account": "B",
+      "type": "delete_token",
+      "target": {
+        "name": "B"
+      },
+      "status": "success"
+    },
+    {
       "id": "mofmxq33n40d",
       "ts": 1777199903823,
       "account": "acc_2",

@@ -5,33 +5,103 @@ async function apiCall(method, url, body) {
   return res.json();
 }
 
+// Build a small library of test images to make test mode look real.
+// SVG data-URIs guarantee they render with no network calls or 404s.
+function _testAvatar(letter, color) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80" viewBox="0 0 80 80">`
+    + `<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">`
+    + `<stop offset="0" stop-color="${color}"/><stop offset="1" stop-color="#1f2233"/></linearGradient></defs>`
+    + `<rect width="80" height="80" rx="40" fill="url(#g)"/>`
+    + `<text x="50%" y="55%" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="34" font-weight="700" fill="#fff">${letter}</text></svg>`;
+  return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+}
+function _testServerIcon(letter, color) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">`
+    + `<rect width="96" height="96" rx="22" fill="${color}"/>`
+    + `<text x="50%" y="56%" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="38" font-weight="800" fill="#fff">${letter}</text></svg>`;
+  return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+}
+const _TEST_PALETTE = ['#5865f2','#eb459e','#3ba55d','#faa61a','#ed4245','#9b59b6','#1abc9c','#e91e63','#00b0ff','#ff7043'];
+const _testFriends = [
+  { id: '111111111111111111', username: 'ahmed_dev',  displayName: 'Ahmed (Dev)',   avatar: _testAvatar('A', _TEST_PALETTE[0]), bot:false },
+  { id: '111111111111111112', username: 'sara_design',displayName: 'Sara Design',   avatar: _testAvatar('S', _TEST_PALETTE[1]), bot:false },
+  { id: '111111111111111113', username: 'omar.codes', displayName: 'Omar',          avatar: _testAvatar('O', _TEST_PALETTE[2]), bot:false },
+  { id: '111111111111111114', username: 'layla',      displayName: 'Layla',         avatar: _testAvatar('L', _TEST_PALETTE[3]), bot:false },
+  { id: '111111111111111115', username: 'khaled_x',   displayName: 'Khaled',        avatar: _testAvatar('K', _TEST_PALETTE[4]), bot:false },
+  { id: '111111111111111116', username: 'zeina',      displayName: 'Zeina ✨',      avatar: _testAvatar('Z', _TEST_PALETTE[5]), bot:false },
+  { id: '111111111111111117', username: 'ai_helper_bot', displayName: 'AI Helper',  avatar: _testAvatar('B', _TEST_PALETTE[6]), bot:true  },
+  { id: '111111111111111118', username: 'mods_wand',  displayName: 'ModWand',       avatar: _testAvatar('M', _TEST_PALETTE[7]), bot:true  },
+];
+const _testServers = [
+  { id: '999000000000000001', name: 'Replit Builders',  icon: _testServerIcon('R', _TEST_PALETTE[0]), members: 1843, owner: true,  channels: 14 },
+  { id: '999000000000000002', name: 'Arabic Devs',      icon: _testServerIcon('ع', _TEST_PALETTE[2]), members: 4521, owner: false, channels: 22 },
+  { id: '999000000000000003', name: 'Game Night',       icon: _testServerIcon('G', _TEST_PALETTE[3]), members:  217, owner: false, channels:  8 },
+  { id: '999000000000000004', name: 'Design Critique',  icon: _testServerIcon('D', _TEST_PALETTE[1]), members:  812, owner: true,  channels: 11 },
+];
+const _testChannels = [
+  { id: '555000000000000001', name: 'general',           type: 'text',  category: 'TEXT CHANNELS' },
+  { id: '555000000000000002', name: 'announcements',     type: 'text',  category: 'TEXT CHANNELS' },
+  { id: '555000000000000003', name: 'random',            type: 'text',  category: 'TEXT CHANNELS' },
+  { id: '555000000000000004', name: 'help',              type: 'text',  category: 'SUPPORT' },
+  { id: '555000000000000005', name: 'bug-reports',       type: 'text',  category: 'SUPPORT' },
+  { id: '555000000000000006', name: 'General Voice',     type: 'voice', category: 'VOICE' },
+  { id: '555000000000000007', name: 'Music',             type: 'voice', category: 'VOICE' },
+];
+const _testDms = [
+  { id: '777000000000000001', username: 'sara_design',  displayName: 'Sara Design', avatar: _testAvatar('S', _TEST_PALETTE[1]), bot:false, unread: 2, preview: 'sounds great, ship it 🚀' },
+  { id: '777000000000000002', username: 'omar.codes',   displayName: 'Omar',        avatar: _testAvatar('O', _TEST_PALETTE[2]), bot:false, unread: 0, preview: 'pushed the fix' },
+  { id: '777000000000000003', username: 'ai_helper_bot',displayName: 'AI Helper',   avatar: _testAvatar('B', _TEST_PALETTE[6]), bot:true,  unread: 1, preview: 'Your reminder is set.' },
+  { id: '777000000000000004', username: 'layla',        displayName: 'Layla',       avatar: _testAvatar('L', _TEST_PALETTE[3]), bot:false, unread: 0, preview: 'see you tomorrow!' },
+  { id: '777000000000000005', username: 'khaled_x',     displayName: 'Khaled',      avatar: _testAvatar('K', _TEST_PALETTE[4]), bot:false, unread: 5, preview: 'check this out: https://example.com' },
+];
+const _testGroups = [
+  { id: '666000000000000001', name: 'Design Squad',  icon: _testAvatar('D', _TEST_PALETTE[1]), recipients: 4, unread: 3, preview: 'Layla: meeting moved' },
+  { id: '666000000000000002', name: 'Friday Crew',   icon: _testAvatar('F', _TEST_PALETTE[3]), recipients: 6, unread: 0, preview: 'who is in tonight?' },
+];
+const _now = Date.now();
+const _testMessages = [
+  { id: 'm1', author: { id: '111111111111111112', username: 'sara_design', displayName: 'Sara Design', avatar: _testAvatar('S', _TEST_PALETTE[1]) }, content: 'Hey! Did you see the new mockup I shared?', createdTimestamp: _now - 1000*60*55 },
+  { id: 'm2', author: { id: '0', username: 'AhmedTest', displayName: 'Ahmed', avatar: _testAvatar('A', _TEST_PALETTE[0]) }, content: 'Yes — I love the gradient on the hero. Can we ship it tonight? <@111111111111111112>', createdTimestamp: _now - 1000*60*52 },
+  { id: 'm3', author: { id: '111111111111111112', username: 'sara_design', displayName: 'Sara Design', avatar: _testAvatar('S', _TEST_PALETTE[1]) }, content: 'sounds great, ship it 🚀', createdTimestamp: _now - 1000*60*50 },
+  { id: 'm4', author: { id: '0', username: 'AhmedTest', displayName: 'Ahmed', avatar: _testAvatar('A', _TEST_PALETTE[0]) }, content: 'Working on the dropdown clipping bug right now.', createdTimestamp: _now - 1000*60*30 },
+  { id: 'm5', author: { id: '111111111111111112', username: 'sara_design', displayName: 'Sara Design', avatar: _testAvatar('S', _TEST_PALETTE[1]) }, content: 'nice. did you also fix the search?', createdTimestamp: _now - 1000*60*12 },
+  { id: 'm6', author: { id: '0', username: 'AhmedTest', displayName: 'Ahmed', avatar: _testAvatar('A', _TEST_PALETTE[0]) }, content: 'global search now scans messages too — like Discord 🎯', createdTimestamp: _now - 1000*60*8 },
+];
+const _testMembers = Array.from({ length: 28 }, (_, i) => {
+  const names = ['Ahmed','Sara','Omar','Layla','Khaled','Zeina','Yusuf','Mira','Hassan','Nour','Ziad','Rana','Tamer','Lina','Karim','Dina','Adel','Mona','Bilal','Hala','Samir','Reem','Faris','Nadia','Wael','Salma','Nizar','Hind'];
+  const u = (names[i] || ('User' + i)).toLowerCase();
+  return {
+    id: '4400000000000000' + String(10 + i),
+    username: u + (i % 3 === 0 ? '_dev' : ''),
+    displayName: names[i] || ('User ' + i),
+    avatar: _testAvatar((names[i] || 'U')[0], _TEST_PALETTE[i % _TEST_PALETTE.length]),
+    bot: i % 9 === 0,
+    roles: i % 4 === 0 ? ['Member','Booster'] : ['Member'],
+    joinedAt: _now - (1000 * 60 * 60 * 24 * (i + 5)),
+  };
+});
+
 const TEST_RESPONSES = {
-  friends:  { success: true, friends: [
-    { id: '111111111111111111', username: 'testfriend', displayName: 'Test Friend', avatar: '/discord.png' },
-    { id: '222222222222222222', username: 'demo_user',  displayName: 'Demo User',    avatar: '/discord.png' }
-  ]},
-  servers:  { success: true, servers: [
-    { id: '999000000000000001', name: 'Test Server #1', icon: '/discord.png' },
-    { id: '999000000000000002', name: 'Test Server #2', icon: '/discord.png' }
-  ]},
-  dms:      { success: true, dms: [
-    { id: '777000000000000001', username: 'testfriend', displayName: 'Test Friend', avatar: '/discord.png' }
-  ]},
-  groups:   { success: true, groups: [
-    { id: '666000000000000001', name: 'Test Group',  icon: '/discord.png', recipients: 4 }
-  ]},
-  channels: { success: true, channels: [
-    { id: '555000000000000001', name: 'general' },
-    { id: '555000000000000002', name: 'random' }
-  ]},
-  messages: { success: true, messages: [], currentUserId: 'test' },
+  friends:  { success: true, friends: _testFriends },
+  servers:  { success: true, servers: _testServers },
+  dms:      { success: true, dms: _testDms },
+  groups:   { success: true, groups: _testGroups },
+  channels: { success: true, channels: _testChannels },
+  messages: { success: true, messages: _testMessages, currentUserId: '0' },
+  members:  { success: true, members: _testMembers, total: _testMembers.length },
   clients:  { success: true, active: 'Ahmed (Test)', clients: [
-    { name: 'Ahmed (Test)', username: 'AhmedTest#0001', id: '0', avatar: '/discord.png', status: 'online', active: true }
+    { name: 'Ahmed (Test)', username: 'AhmedTest#0001', id: '0', avatar: _testAvatar('A', _TEST_PALETTE[0]), status: 'online', active: true },
+    { name: 'Test Bot',     username: 'TestBot#9999',   id: '1', avatar: _testAvatar('B', _TEST_PALETTE[6]), status: 'idle',   active: false },
   ]},
   jobs:     { success: true, jobs: [] },
   listeners:{ success: true, listeners: [] },
   results:  { success: true, results: [] },
   ok:       { success: true },
+  privateSearch: { success: true, total: 3, matches: [
+    { channelId: '777000000000000001', channelName: 'Sara Design', channelAvatar: _testAvatar('S', _TEST_PALETTE[1]), messageId: 'm3',  content: 'sounds great, ship it 🚀',                          author: { id: '111111111111111112', username: 'sara_design', avatar: _testAvatar('S', _TEST_PALETTE[1]) }, ts: _now - 1000*60*50 },
+    { channelId: '777000000000000002', channelName: 'Omar',        channelAvatar: _testAvatar('O', _TEST_PALETTE[2]), messageId: 'm10', content: 'pushed the fix for the dropdown clipping bug',     author: { id: '111111111111111113', username: 'omar.codes',  avatar: _testAvatar('O', _TEST_PALETTE[2]) }, ts: _now - 1000*60*22 },
+    { channelId: '777000000000000005', channelName: 'Khaled',      channelAvatar: _testAvatar('K', _TEST_PALETTE[4]), messageId: 'm11', content: 'check this out: https://example.com — global search demo', author: { id: '111111111111111115', username: 'khaled_x',    avatar: _testAvatar('K', _TEST_PALETTE[4]) }, ts: _now - 1000*60*5 },
+  ]},
 };
 
 function testOr(fallback) {
@@ -77,6 +147,11 @@ window.electronAPI = {
   },
   _getServersOriginal: () => testOr(TEST_RESPONSES.servers) || apiCall('GET', '/api/discord/servers'),
   getServerChannels:(id) => testOr(TEST_RESPONSES.channels) || apiCall('GET', `/api/discord/servers/${id}/channels`),
+  getServerMembers: (id, account) => {
+    if (window._testMode) return Promise.resolve(TEST_RESPONSES.members);
+    const q = account ? `?account=${encodeURIComponent(account)}` : '';
+    return apiCall('GET', `/api/discord/servers/${id}/members${q}`);
+  },
   leaveServer:      (id) => testOr(TEST_RESPONSES.ok) || apiCall('POST', `/api/discord/servers/${id}/leave`),
   muteServer:       (id) => testOr(TEST_RESPONSES.ok) || apiCall('POST', `/api/discord/servers/${id}/mute`),
   unmuteServer:     (id) => testOr(TEST_RESPONSES.ok) || apiCall('POST', `/api/discord/servers/${id}/unmute`),
@@ -150,6 +225,15 @@ window.electronAPI = {
     apiCall('POST', `/api/private/read/${channelId}`, { account }),
   privateReact:     (account, channelId, messageId, emoji, remove = false) =>
     apiCall('POST', '/api/private/react', { account, channelId, messageId, emoji, remove }),
+  privateSearch:    (account, q, opts = {}) => {
+    if (window._testMode) return Promise.resolve(TEST_RESPONSES.privateSearch || { success: true, matches: [], total: 0 });
+    const p = new URLSearchParams();
+    p.set('q', q);
+    if (account) p.set('account', account);
+    if (opts.groups) p.set('groups', '1');
+    if (opts.limit)  p.set('limit', String(opts.limit));
+    return apiCall('GET', '/api/private/search?' + p.toString());
+  },
 
   // ── Stats Dashboard
   getStats:         () => apiCall('GET', '/api/stats/summary'),

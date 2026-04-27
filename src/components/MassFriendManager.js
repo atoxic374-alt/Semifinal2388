@@ -41,8 +41,13 @@ export class MassFriendManager {
     if (!this.selectedServer) return;
     this.loading = true; this.renderMembers();
     try {
-      const url = `/api/discord/servers/${this.selectedServer}/members` + (this.account ? `?account=${encodeURIComponent(this.account)}` : '');
-      const r = await fetch(url).then(x => x.json());
+      let r;
+      if (window._testMode && window.electronAPI?.getServerMembers) {
+        r = await window.electronAPI.getServerMembers(this.selectedServer, this.account);
+      } else {
+        const url = `/api/discord/servers/${this.selectedServer}/members` + (this.account ? `?account=${encodeURIComponent(this.account)}` : '');
+        r = await fetch(url).then(x => x.json());
+      }
       if (!r.success) { showNotification(r.error || 'Failed', 'error'); this.members = []; this.totalMembers = 0; }
       else { this.members = r.members || []; this.totalMembers = r.total || this.members.length; }
     } catch (e) { showNotification(String(e.message || e), 'error'); }
@@ -50,14 +55,16 @@ export class MassFriendManager {
   }
 
   filteredMembers() {
+    const raw = (this.filter.usernameContains || '').trim();
+    const tokens = raw ? raw.toLowerCase().split(/\s+/).filter(Boolean) : [];
     return this.members.filter(m => {
       if (this.filter.excludeBots && m.bot) return false;
-      if (this.filter.usernameContains) {
-        const q = this.filter.usernameContains.toLowerCase();
-        if (!(m.username || '').toLowerCase().includes(q) &&
-            !(m.displayName || '').toLowerCase().includes(q)) return false;
-      }
-      return true;
+      if (!tokens.length) return true;
+      const u  = (m.username    || '').toLowerCase();
+      const d  = (m.displayName || '').toLowerCase();
+      const id = String(m.id || '');
+      // every token must match at least one field (AND across tokens, OR across fields)
+      return tokens.every(q => u.includes(q) || d.includes(q) || id.includes(q));
     });
   }
 

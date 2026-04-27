@@ -91,3 +91,11 @@ Developed and maintained by **Ahmed Dev** (`@4_3a`).
   - `options`: `{ categories, textChannels, voiceChannels, roles, rolePerms, channelPerms, emojis, messages, messageChannelIds, messageGapMs }`.
   - Messages are restored via webhook (`username` + `avatar_url` preserved) for speed and authenticity.
 - New paste UI in CloneManager: option grid with custom checkboxes, multi-account chip selector, per-channel chooser modal with search and select-all, and a paste-finished report.
+
+## Apr 27, 2026 — Search, speed, dropdown clipping & test data
+
+- **Themed select** (`src/utils/themedSelect.js`) now portals its popover to `<body>` with `position:fixed` so dropdowns (e.g. presence/activity type → "Watching") are never clipped by ancestors with `overflow:auto` (the page-container). Reposition on scroll/resize while open.
+- **PrivateManager search is now Discord-style global**: matches by username, displayName, ID, AND message content. Adds `GET /api/private/search?q=&account=&groups=&limit=` which scans cached + recent messages across DM channels and returns highlighted snippets in a dedicated "Messages" results section.
+- **Mass Friend filter** matches username, displayName **and** member ID (multi-token AND).
+- **Test mode (`TEST_RESPONSES` in `src/api.js`)** now ships rich data: 8 friends, 4 servers (with member counts), 7 channels (text+voice+categories), 5 DMs (with previews & unread), 2 groups, 6 sample messages with mentions & emoji, 28 server members for the bulk-friend preview, multiple connected clients, and 3 sample message-search hits — all using inline SVG data-URI avatars/icons so nothing 404s.
+- **Speed**: Send-loop fast gap stays at 500 ms; the new `/api/private/search` endpoint avoids artificial sleeps and only fetches a small slice (50 msgs) per channel for snappy results.

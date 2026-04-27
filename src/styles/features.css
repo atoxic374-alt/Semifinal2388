@@ -1117,6 +1117,14 @@ body.rtl .toast.out { transform: translateX(30%) scale(0.95); }
 .ts-pop {
   position: absolute; top: calc(100% + 6px); inset-inline-start: 0;
   min-width: 100%; max-width: min(380px, 90vw);
+}
+/* When the popover is portaled to <body> it must escape ancestor clipping */
+.ts-pop-portal {
+  position: fixed !important;
+  top: 0; left: 0; inset-inline-start: auto; right: auto;
+  z-index: 18000 !important;
+}
+.ts-pop, .ts-pop-portal {
   background: rgba(20,24,38,0.98);
   color: var(--text);
   border: 1px solid var(--border);
@@ -1235,4 +1243,26 @@ body.rtl .mp-row:hover, body.rtl .mp-row.is-active { transform: translateX(-2px)
   border-color: var(--success) !important;
   color: var(--success);
   font-weight: 700;
+}
+
+/* ── PrivateManager global search results ─────────────────────────── */
+.pm-list-section {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 11px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--text-muted);
+  padding: 14px 14px 6px; opacity: .85;
+}
+.pm-list-section .pm-sec-count {
+  background: rgba(255,255,255,.05); padding: 2px 8px; border-radius: 999px;
+  font-weight: 600; color: var(--text-muted); font-size: 10px;
+}
+.pm-msg-result { position: relative; }
+.pm-msg-result .pm-msg-author { font-weight: 600; color: var(--text); margin-inline-end: 4px; }
+.pm-msg-time {
+  position: absolute; inset-inline-end: 12px; top: 12px;
+  font-size: 10px; color: var(--text-muted); opacity: .7;
+}
+mark.pm-hl {
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--text); border-radius: 3px; padding: 0 2px;
 }

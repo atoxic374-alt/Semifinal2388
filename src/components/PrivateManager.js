@@ -183,7 +183,11 @@ export class PrivateManager {
       this.loadList();
     });
     toolbar.querySelector('#pm-search').addEventListener('input', (e) => {
-      this.search = e.target.value || ''; this.renderList();
+      this.search = e.target.value || '';
+      this.renderList();
+      // Debounced global search across messages — Discord-style
+      clearTimeout(this._searchT);
+      this._searchT = setTimeout(() => this.runGlobalSearch(this.search), 220);
     });
     this.updateConnPill();
     await this.loadList();
@@ -205,27 +209,92 @@ export class PrivateManager {
   renderList() {
     const el = this.contentArea.querySelector('#pm-list');
     if (!el) return;
+    const q = this.search.trim().toLowerCase();
     let items = this.dms;
-    if (this.search.trim()) {
-      const q = this.search.trim().toLowerCase();
+    if (q) {
       items = items.filter(d =>
-        (d.username || '').toLowerCase().includes(q) ||
-        (d.displayName || '').toLowerCase().includes(q));
+        (d.username    || '').toLowerCase().includes(q) ||
+        (d.displayName || '').toLowerCase().includes(q) ||
+        String(d.id || '').includes(q) ||
+        (d.preview     || '').toLowerCase().includes(q));
     }
-    if (!items.length) { el.innerHTML = `<div class="pm-list-empty">${t('pm.empty')}</div>`; return; }
-    el.innerHTML = items.map(d => `
-      <div class="pm-list-item ${this.activeDM?.id === d.id ? 'active' : ''}" data-id="${d.id}" onclick="window.privateManager.openChatById('${d.id}')">
-        <div class="pm-list-avatar"><img src="${d.avatar}" alt="" onerror="this.src='/discord.png'"></div>
-        <div class="pm-list-meta">
-          <div class="pm-list-name">
-            ${this.escHtml(d.displayName)}
-            ${d.bot ? `<span class="pm-bot-tag">${icon('bot')} BOT</span>` : ''}
+    const peopleHtml = items.length
+      ? items.map(d => `
+        <div class="pm-list-item ${this.activeDM?.id === d.id ? 'active' : ''}" data-id="${d.id}" onclick="window.privateManager.openChatById('${d.id}')">
+          <div class="pm-list-avatar"><img src="${d.avatar}" alt="" onerror="this.src='/discord.png'"></div>
+          <div class="pm-list-meta">
+            <div class="pm-list-name">
+              ${this.escHtml(d.displayName)}
+              ${d.bot ? `<span class="pm-bot-tag">${icon('bot')} BOT</span>` : ''}
+            </div>
+            <div class="pm-list-handle">${this.highlightMatch(d.preview || ('@' + d.username), q)}</div>
           </div>
-          <div class="pm-list-handle">${this.escHtml(d.preview || ('@' + d.username))}</div>
+          ${d.unread > 0 ? `<span class="pm-unread-dot" title="${d.unread} ${t('pm.unread')}">${d.unread > 9 ? '9+' : d.unread}</span>` : ''}
         </div>
-        ${d.unread > 0 ? `<span class="pm-unread-dot" title="${d.unread} ${t('pm.unread')}">${d.unread > 9 ? '9+' : d.unread}</span>` : ''}
-      </div>
-    `).join('');
+      `).join('')
+      : (q ? '' : `<div class="pm-list-empty">${t('pm.empty')}</div>`);
+
+    let header = '';
+    if (q) header = `<div class="pm-list-section">${t('pm.people') || 'People'} <span class="pm-sec-count">${items.length}</span></div>`;
+
+    let messagesBlock = '';
+    if (q && q.length >= 2) {
+      const msgs = this._searchMatches || [];
+      const loading = this._searchLoading;
+      messagesBlock = `
+        <div class="pm-list-section">${t('pm.messages') || 'Messages'} <span class="pm-sec-count">${loading ? '…' : msgs.length}</span></div>
+        ${loading ? `<div class="mm-info-row mm-muted">${t('common.loading')}</div>` :
+          (msgs.length ? msgs.map(m => `
+            <div class="pm-list-item pm-msg-result" data-id="${m.channelId}" onclick="window.privateManager.openChatById('${m.channelId}')" title="${this.escHtml(m.content)}">
+              <div class="pm-list-avatar"><img src="${m.channelAvatar || '/discord.png'}" alt="" onerror="this.src='/discord.png'"></div>
+              <div class="pm-list-meta">
+                <div class="pm-list-name">${this.escHtml(m.channelName)}</div>
+                <div class="pm-list-handle">
+                  <span class="pm-msg-author">${this.escHtml(m.author?.username || '')}:</span>
+                  ${this.highlightMatch(this.snip(m.content, 90), q)}
+                </div>
+              </div>
+              <span class="pm-msg-time">${this.fmtRel(m.ts)}</span>
+            </div>
+          `).join('') : `<div class="mm-info-row mm-muted">${t('pm.no_msg_results') || 'No messages found.'}</div>`)
+        }
+      `;
+    }
+    el.innerHTML = header + peopleHtml + messagesBlock;
+  }
+
+  snip(s, n) { s = String(s || ''); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+  fmtRel(ts) {
+    if (!ts) return '';
+    const d = new Date(ts), now = Date.now();
+    const diff = (now - ts) / 1000;
+    if (diff < 60) return Math.max(1, Math.floor(diff)) + 's';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h';
+    if (diff < 604800) return Math.floor(diff / 86400) + 'd';
+    return d.toLocaleDateString();
+  }
+  highlightMatch(s, q) {
+    s = String(s || '');
+    if (!q) return this.escHtml(s);
+    const idx = s.toLowerCase().indexOf(q.toLowerCase());
+    if (idx < 0) return this.escHtml(s);
+    return this.escHtml(s.slice(0, idx)) +
+      `<mark class="pm-hl">${this.escHtml(s.slice(idx, idx + q.length))}</mark>` +
+      this.escHtml(s.slice(idx + q.length));
+  }
+
+  async runGlobalSearch(q) {
+    q = (q || '').trim();
+    if (q.length < 2) { this._searchMatches = []; this._searchLoading = false; this.renderList(); return; }
+    this._searchLoading = true; this.renderList();
+    try {
+      const r = await window.electronAPI.privateSearch(this.account, q, { limit: 30 });
+      this._searchMatches = (r && r.success && r.matches) ? r.matches : [];
+    } catch (e) { this._searchMatches = []; }
+    this._searchLoading = false;
+    // Only re-render if the query is still the same to avoid race overwrites
+    if ((this.search || '').trim() === q) this.renderList();
   }
 
   openChatById(id) { const dm = this.dms.find(d => d.id === id); if (dm) this.openChat(dm); }

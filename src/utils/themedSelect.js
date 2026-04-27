@@ -80,21 +80,67 @@ function wrap(sel) {
   const pop = host.querySelector('.ts-pop');
   const list = host.querySelector('.ts-list');
 
+  // Move the popover under <body> so ancestors with overflow:auto can't clip it.
+  // Restore it on close so MutationObserver and lifecycle stay sane.
+  let popPortaled = false;
+  function portalOut() {
+    if (popPortaled) return;
+    document.body.appendChild(pop);
+    pop.classList.add('ts-pop-portal');
+    popPortaled = true;
+  }
+  function portalIn() {
+    if (!popPortaled) return;
+    host.appendChild(pop);
+    pop.classList.remove('ts-pop-portal');
+    pop.style.left = pop.style.top = pop.style.minWidth = pop.style.maxWidth = '';
+    popPortaled = false;
+  }
+  function position() {
+    const r = btn.getBoundingClientRect();
+    // Make pop briefly visible-but-hidden to measure
+    pop.style.visibility = 'hidden';
+    pop.style.display = 'block';
+    const popH = pop.scrollHeight || 240;
+    pop.style.visibility = '';
+    pop.style.display = '';
+    const room = window.innerHeight - r.bottom;
+    const dropUp = room < popH + 16 && r.top > popH + 16;
+    host.classList.toggle('drop-up', dropUp);
+    pop.style.minWidth = `${r.width}px`;
+    pop.style.maxWidth = `min(380px, 92vw)`;
+    pop.style.left = `${r.left}px`;
+    if (dropUp) {
+      const top = Math.max(8, r.top - popH - 6);
+      pop.style.top = `${top}px`;
+    } else {
+      pop.style.top = `${r.bottom + 6}px`;
+    }
+  }
   function open() {
     if (host.classList.contains('is-open') || sel.disabled) return;
-    document.querySelectorAll('.ts-host.is-open').forEach(h => { if (h !== host) h.classList.remove('is-open'); });
+    document.querySelectorAll('.ts-host.is-open').forEach(h => { if (h !== host) closeOther(h); });
+    portalOut();
     host.classList.add('is-open');
-    // Position-aware: flip up if no room
     requestAnimationFrame(() => {
-      const r = btn.getBoundingClientRect();
-      const popH = pop.scrollHeight || 220;
-      const room = window.innerHeight - r.bottom;
-      host.classList.toggle('drop-up', room < popH + 12 && r.top > popH + 12);
+      position();
       const cur = list.querySelector('.ts-opt.is-selected');
       if (cur) cur.scrollIntoView({ block: 'nearest' });
     });
   }
-  function close() { host.classList.remove('is-open'); }
+  function close() {
+    if (!host.classList.contains('is-open')) return;
+    host.classList.remove('is-open');
+    // Wait for transition before pulling back
+    setTimeout(portalIn, 220);
+  }
+  function closeOther(otherHost) {
+    otherHost.classList.remove('is-open');
+    const otherPop = otherHost.querySelector(':scope > .ts-pop, .ts-pop-portal');
+    if (otherPop && otherPop.classList.contains('ts-pop-portal')) {
+      // Best-effort: leave portal-back to its own close handler
+    }
+  }
   function toggle() { host.classList.contains('is-open') ? close() : open(); }
 
   btn.addEventListener('click', (e) => { e.stopPropagation(); toggle(); });
@@ -112,9 +158,14 @@ function wrap(sel) {
     refreshLabel(host, sel);
     close();
   });
-  document.addEventListener('click', (e) => { if (!host.contains(e.target)) close(); });
-  window.addEventListener('scroll', close, true);
-  window.addEventListener('resize', close);
+  document.addEventListener('click', (e) => {
+    if (host.contains(e.target)) return;
+    if (pop.contains(e.target)) return; // portal click is fine
+    close();
+  });
+  // Reposition on scroll/resize while open; only close on resize
+  window.addEventListener('scroll', () => { if (host.classList.contains('is-open')) position(); }, true);
+  window.addEventListener('resize', () => { if (host.classList.contains('is-open')) position(); });
 
   // Watch for option changes / value updates from external code.
   const mo = new MutationObserver(() => rebuildOptions(host, sel));
