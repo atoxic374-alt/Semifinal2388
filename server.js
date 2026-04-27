@@ -160,6 +160,7 @@ function dataUrlMime(dataUrl) {
 }
 const ALLOWED_AVATAR_MIMES = ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp'];
 const MAX_AVATAR_BYTES = 8 * 1024 * 1024; // Discord caps avatars at ~10MB; keep safety margin
+const MAX_BANNER_BYTES = 10 * 1024 * 1024; // Discord caps banners at ~10MB
 const MAX_BIO_LEN = 190;
 const MAX_CUSTOM_STATUS_LEN = 128;
 
@@ -287,9 +288,10 @@ app.get('/api/discord/friends', async (req, res) => {
 
 app.delete('/api/discord/friends/:friendId', async (req, res) => {
   try {
-    if (!discordClient?.token) return fail(res, new Error('Not connected'));
+    const c = pickClient(req);
+    if (!c?.token) return fail(res, new Error('Not connected'));
     await axios.delete(`https://discord.com/api/v9/users/@me/relationships/${req.params.friendId}`, {
-      headers: { Authorization: discordClient.token, 'Content-Type': 'application/json' }
+      headers: discordHeaders(c.token)
     });
     ok(res);
   } catch (e) { fail(res, e); }
@@ -302,13 +304,16 @@ app.get('/api/discord/servers', async (req, res) => {
   try {
     const c = pickClient(req);
     if (!c?.guilds) return fail(res, new Error('Not connected'));
+    // Owners need to manage their own servers too — filtering them out
+    // hid them from the entire UI (Servers, Messages, Reactions, Clone…).
     const servers = Array.from(c.guilds.cache.values())
-      .filter(s => s && s.ownerId !== c.user.id)
+      .filter(s => !!s)
       .map(s => ({
         id: s.id,
         name: s.name,
         icon: s.iconURL({ size: 64, forceStatic: false }) || '/discord.png',
-        members: s.memberCount || 0
+        members: s.memberCount || 0,
+        owned: s.ownerId === c.user.id
       }));
     ok(res, { servers });
   } catch (e) { fail(res, e); }
@@ -316,21 +321,23 @@ app.get('/api/discord/servers', async (req, res) => {
 
 app.get('/api/discord/servers/:serverId/channels', async (req, res) => {
   try {
-    if (!discordClient?.token) return fail(res, new Error('Not connected'));
+    const c = pickClient(req);
+    if (!c?.token) return fail(res, new Error('Not connected'));
     const r = await axios.get(`https://discord.com/api/v9/guilds/${req.params.serverId}/channels`, {
-      headers: { Authorization: discordClient.token }
+      headers: discordHeaders(c.token)
     });
     const channels = r.data
-      .filter(c => c.type === 0 || c.type === 5) // text + announcement
-      .map(c => ({ id: c.id, name: c.name, parent: c.parent_id }));
+      .filter(ch => ch.type === 0 || ch.type === 5) // text + announcement
+      .map(ch => ({ id: ch.id, name: ch.name, parent: ch.parent_id }));
     ok(res, { channels });
   } catch (e) { fail(res, e); }
 });
 
 app.post('/api/discord/servers/:serverId/leave', async (req, res) => {
   try {
-    if (!discordClient?.guilds) return fail(res, new Error('Not connected'));
-    const guild = discordClient.guilds.cache.get(req.params.serverId);
+    const c = pickClient(req);
+    if (!c?.guilds) return fail(res, new Error('Not connected'));
+    const guild = c.guilds.cache.get(req.params.serverId);
     if (!guild) return fail(res, new Error('Server not found'));
     await guild.leave();
     ok(res);
@@ -339,28 +346,31 @@ app.post('/api/discord/servers/:serverId/leave', async (req, res) => {
 
 app.post('/api/discord/servers/:serverId/mute', async (req, res) => {
   try {
-    if (!discordClient?.token) return fail(res, new Error('Not connected'));
+    const c = pickClient(req);
+    if (!c?.token) return fail(res, new Error('Not connected'));
     await axios.patch(`https://discord.com/api/v9/users/@me/guilds/${req.params.serverId}/settings`,
       { muted: true },
-      { headers: { Authorization: discordClient.token, 'Content-Type': 'application/json' } });
+      { headers: discordHeaders(c.token) });
     ok(res);
   } catch (e) { fail(res, e); }
 });
 
 app.post('/api/discord/servers/:serverId/unmute', async (req, res) => {
   try {
-    if (!discordClient?.token) return fail(res, new Error('Not connected'));
+    const c = pickClient(req);
+    if (!c?.token) return fail(res, new Error('Not connected'));
     await axios.patch(`https://discord.com/api/v9/users/@me/guilds/${req.params.serverId}/settings`,
       { muted: false },
-      { headers: { Authorization: discordClient.token, 'Content-Type': 'application/json' } });
+      { headers: discordHeaders(c.token) });
     ok(res);
   } catch (e) { fail(res, e); }
 });
 
 app.post('/api/discord/read-all', async (req, res) => {
   try {
-    if (!discordClient?.token) return fail(res, new Error('Not connected'));
-    const guilds = Array.from(discordClient.guilds.cache.values());
+    const c = pickClient(req);
+    if (!c?.token) return fail(res, new Error('Not connected'));
+    const guilds = Array.from(c.guilds.cache.values());
     for (const g of guilds) { try { await g.markAsRead(); } catch (e) {} }
     ok(res);
   } catch (e) { fail(res, e); }
@@ -397,19 +407,20 @@ app.get('/api/discord/dms', async (req, res) => {
 
 app.get('/api/discord/dms/:channelId/messages', async (req, res) => {
   try {
-    if (!discordClient?.user) return fail(res, new Error('Not connected'));
-    const channel = await discordClient.channels.fetch(req.params.channelId);
+    const c = pickClient(req);
+    if (!c?.user) return fail(res, new Error('Not connected'));
+    const channel = await c.channels.fetch(req.params.channelId);
     if (!channel || channel.type !== 'DM') return fail(res, new Error('Invalid DM channel'));
     const { before } = req.query;
     const opts = before ? { before, limit: 100 } : { limit: 100 };
     const msgs = await channel.messages.fetch(opts);
     res.json({
       success: true,
-      currentUserId: discordClient.user.id,
+      currentUserId: c.user.id,
       messages: Array.from(msgs.values()).map(m => ({
         id: m.id,
         content: m.content,
-        isDeletable: m.author.id === discordClient.user.id && !m.system,
+        isDeletable: m.author.id === c.user.id && !m.system,
         author: { id: m.author.id }
       }))
     });
@@ -418,8 +429,9 @@ app.get('/api/discord/dms/:channelId/messages', async (req, res) => {
 
 app.delete('/api/discord/dms/:channelId/messages/:messageId', async (req, res) => {
   try {
-    if (!discordClient?.user) return fail(res, new Error('Not connected'));
-    const channel = await discordClient.channels.fetch(req.params.channelId);
+    const c = pickClient(req);
+    if (!c?.user) return fail(res, new Error('Not connected'));
+    const channel = await c.channels.fetch(req.params.channelId);
     if (!channel || channel.type !== 'DM') return fail(res, new Error('Invalid DM channel'));
     const m = await channel.messages.fetch(req.params.messageId);
     await m.delete();
@@ -429,8 +441,9 @@ app.delete('/api/discord/dms/:channelId/messages/:messageId', async (req, res) =
 
 app.post('/api/discord/dms/:channelId/close', async (req, res) => {
   try {
-    if (!discordClient?.user) return fail(res, new Error('Not connected'));
-    const channel = await discordClient.channels.fetch(req.params.channelId);
+    const c = pickClient(req);
+    if (!c?.user) return fail(res, new Error('Not connected'));
+    const channel = await c.channels.fetch(req.params.channelId);
     if (!channel || channel.type !== 'DM') return fail(res, new Error('Invalid DM channel'));
     await channel.delete();
     ok(res);
@@ -465,8 +478,9 @@ app.get('/api/discord/groups', async (req, res) => {
 
 app.post('/api/discord/groups/:groupId/leave', async (req, res) => {
   try {
-    if (!discordClient?.user) return fail(res, new Error('Not connected'));
-    const g = await discordClient.channels.fetch(req.params.groupId);
+    const c = pickClient(req);
+    if (!c?.user) return fail(res, new Error('Not connected'));
+    const g = await c.channels.fetch(req.params.groupId);
     if (!g || g.type !== 'GROUP_DM') return fail(res, new Error('Invalid group'));
     await g.delete();
     ok(res);
@@ -475,15 +489,16 @@ app.post('/api/discord/groups/:groupId/leave', async (req, res) => {
 
 app.get('/api/discord/groups/:channelId/messages', async (req, res) => {
   try {
-    if (!discordClient?.token) return fail(res, new Error('Not connected'));
+    const c = pickClient(req);
+    if (!c?.token) return fail(res, new Error('Not connected'));
     const { before } = req.query;
     const url = `https://discord.com/api/v9/channels/${req.params.channelId}/messages?limit=100${before ? `&before=${before}` : ''}`;
     const r = await axios.get(url, {
-      headers: { Authorization: discordClient.token, 'Content-Type': 'application/json' }
+      headers: discordHeaders(c.token)
     });
     res.json({
       success: true,
-      currentUserId: discordClient.user.id,
+      currentUserId: c.user.id,
       messages: r.data.map(m => ({ id: m.id, content: m.content, author: { id: m.author.id } }))
     });
   } catch (e) { fail(res, e); }
@@ -491,9 +506,10 @@ app.get('/api/discord/groups/:channelId/messages', async (req, res) => {
 
 app.delete('/api/discord/groups/:channelId/messages/:messageId', async (req, res) => {
   try {
-    if (!discordClient?.token) return fail(res, new Error('Not connected'));
+    const c = pickClient(req);
+    if (!c?.token) return fail(res, new Error('Not connected'));
     await axios.delete(`https://discord.com/api/v9/channels/${req.params.channelId}/messages/${req.params.messageId}`, {
-      headers: { Authorization: discordClient.token, 'Content-Type': 'application/json' }
+      headers: discordHeaders(c.token)
     });
     ok(res);
   } catch (e) { fail(res, e); }
@@ -768,6 +784,18 @@ app.post('/api/presence/avatar', async (req, res) => {
 app.post('/api/presence/banner', async (req, res) => {
   try {
     const { tokens = [], banner } = req.body; // banner = data URL (data:image/...;base64,...) or null to remove
+    // Validate format + size for data URLs (URLs and null are passed through as-is)
+    if (typeof banner === 'string' && banner.startsWith('data:')) {
+      const mime = dataUrlMime(banner);
+      if (!mime || !ALLOWED_AVATAR_MIMES.includes(mime)) {
+        return fail(res, new Error(`Unsupported image type "${mime || 'unknown'}". Use PNG, JPG, GIF, or WebP.`));
+      }
+      const sz = dataUrlSizeBytes(banner);
+      if (sz <= 0) return fail(res, new Error('Could not read image data — re-upload the file.'));
+      if (sz > MAX_BANNER_BYTES) {
+        return fail(res, new Error(`Banner is too large: ${(sz / (1024*1024)).toFixed(2)} MB. Max ${(MAX_BANNER_BYTES/(1024*1024)).toFixed(0)} MB.`));
+      }
+    }
     const targets = (tokens.length ? tokens : (activeName ? [activeName] : []));
     const results = [];
     for (const n of targets) {
@@ -776,7 +804,7 @@ app.post('/api/presence/banner', async (req, res) => {
       try {
         await axios.patch('https://discord.com/api/v9/users/@me',
           { banner: banner || null },
-          { headers: { Authorization: entry.client.token, 'Content-Type': 'application/json' } });
+          { headers: discordHeaders(entry.client.token) });
         results.push({ name: n, ok: true });
       } catch (e) {
         const msg = e.response?.data?.message || e.message;
@@ -790,8 +818,22 @@ app.post('/api/presence/banner', async (req, res) => {
 });
 
 // ── Human-like activity simulator (online ↔ idle ↔ invisible at random intervals)
-const activityTimers = new Map(); // name -> timeoutId
-function scheduleNextCycle(name, modes, minMs, maxMs) {
+// Persisted across restarts — tracking "running" matters because users start
+// it and forget; a server reboot would silently leave their accounts stuck on
+// whatever status they had.
+const activitySims = new Map(); // name -> { timer, modes, minMs, maxMs }
+function _persistActivitySims() {
+  try {
+    const d = readData();
+    const out = {};
+    for (const [n, info] of activitySims.entries()) {
+      if (info?.modes) out[n] = { modes: info.modes, minMs: info.minMs, maxMs: info.maxMs };
+    }
+    d.activitySims = out;
+    writeData(d);
+  } catch (_) {}
+}
+function _scheduleNextCycle(name, modes, minMs, maxMs) {
   const c = getClientByName(name);
   if (!c) return;
   const next = jitter(minMs, maxMs);
@@ -802,9 +844,10 @@ function scheduleNextCycle(name, modes, minMs, maxMs) {
       const pick = choices.length ? choices[Math.floor(Math.random() * choices.length)] : modes[0];
       c.user.setStatus(resolvePresence(pick));
     } catch (e) {}
-    scheduleNextCycle(name, modes, minMs, maxMs);
+    _scheduleNextCycle(name, modes, minMs, maxMs);
   }, next);
-  activityTimers.set(name, id);
+  const info = activitySims.get(name) || {};
+  activitySims.set(name, { ...info, timer: id, modes, minMs, maxMs });
 }
 
 app.post('/api/presence/activity/start', (req, res) => {
@@ -814,9 +857,11 @@ app.post('/api/presence/activity/start', (req, res) => {
     const maxMs = Math.max(minMs + 1000, parseInt(maxSec) * 1000);
     const targets = (tokens.length ? tokens : (activeName ? [activeName] : []));
     for (const n of targets) {
-      if (activityTimers.has(n)) clearTimeout(activityTimers.get(n));
-      scheduleNextCycle(n, modes, minMs, maxMs);
+      const old = activitySims.get(n);
+      if (old?.timer) clearTimeout(old.timer);
+      _scheduleNextCycle(n, modes, minMs, maxMs);
     }
+    _persistActivitySims();
     ok(res, { simulating: targets });
   } catch (e) { fail(res, e); }
 });
@@ -824,18 +869,35 @@ app.post('/api/presence/activity/start', (req, res) => {
 app.post('/api/presence/activity/stop', (req, res) => {
   try {
     const { tokens = [] } = req.body;
-    const targets = (tokens.length ? tokens : Array.from(activityTimers.keys()));
+    const targets = (tokens.length ? tokens : Array.from(activitySims.keys()));
     for (const n of targets) {
-      const id = activityTimers.get(n);
-      if (id) { clearTimeout(id); activityTimers.delete(n); }
+      const info = activitySims.get(n);
+      if (info?.timer) clearTimeout(info.timer);
+      activitySims.delete(n);
     }
+    _persistActivitySims();
     ok(res, { stopped: targets });
   } catch (e) { fail(res, e); }
 });
 
 app.get('/api/presence/activity/list', (req, res) => {
-  ok(res, { running: Array.from(activityTimers.keys()) });
+  ok(res, { running: Array.from(activitySims.keys()) });
 });
+
+// Restore activity simulators after clients reconnect (give autoConnect time)
+setTimeout(() => {
+  try {
+    const d = readData();
+    const r = d.activitySims || {};
+    let restored = 0;
+    for (const [name, info] of Object.entries(r)) {
+      if (!info?.modes?.length) continue;
+      _scheduleNextCycle(name, info.modes, info.minMs || 60000, info.maxMs || 600000);
+      restored++;
+    }
+    if (restored) console.log(`[activity] restored ${restored} simulator(s)`);
+  } catch (_) {}
+}, 12000);
 
 // ═══════════════════════════════════════════════
 //  MESSAGES MANAGER (send / repeat / schedule)
@@ -1186,9 +1248,10 @@ function fmtMsg(msg, channel, guild) {
 
 app.get('/api/history/user/:userId', async (req, res) => {
   try {
-    if (!discordClient?.token) return fail(res, new Error('Not connected'));
+    const c = pickClient(req);
+    if (!c?.token) return fail(res, new Error('Not connected'));
     const r = await axios.get(`https://discord.com/api/v9/users/${req.params.userId}`, {
-      headers: { Authorization: discordClient.token }
+      headers: discordHeaders(c.token)
     });
     const u = r.data;
     ok(res, {
@@ -1204,10 +1267,11 @@ app.get('/api/history/user/:userId', async (req, res) => {
 
 app.get('/api/history/user-search', async (req, res) => {
   try {
-    if (!discordClient?.token) return fail(res, new Error('Not connected'));
+    const c = pickClient(req);
+    if (!c?.token) return fail(res, new Error('Not connected'));
     const query = (req.query.q || '').toLowerCase().replace('@', '');
     const frResp = await axios.get('https://discord.com/api/v9/users/@me/relationships', {
-      headers: { Authorization: discordClient.token }
+      headers: discordHeaders(c.token)
     });
     const friend = frResp.data.filter(x => x.type === 1).find(r =>
       r.user.username.toLowerCase().includes(query) ||
@@ -1216,9 +1280,9 @@ app.get('/api/history/user-search', async (req, res) => {
       const u = friend.user;
       return ok(res, { user: { id: u.id, username: u.username, displayName: u.global_name || u.username, avatar: u.avatar ? `https://cdn.discordapp.com/avatars/${u.id}/${u.avatar}.png` : '/discord.png' } });
     }
-    const dmMatch = Array.from(discordClient.channels.cache.values())
-      .filter(c => c.type === 'DM' && c.recipient)
-      .find(c => c.recipient.username.toLowerCase().includes(query) || (c.recipient.globalName || '').toLowerCase().includes(query));
+    const dmMatch = Array.from(c.channels.cache.values())
+      .filter(ch => ch.type === 'DM' && ch.recipient)
+      .find(ch => ch.recipient.username.toLowerCase().includes(query) || (ch.recipient.globalName || '').toLowerCase().includes(query));
     if (dmMatch) {
       const u = dmMatch.recipient;
       return ok(res, { user: { id: u.id, username: u.username, displayName: u.globalName || u.username, avatar: u.avatarURL() || '/discord.png' } });
@@ -1229,16 +1293,17 @@ app.get('/api/history/user-search', async (req, res) => {
 
 app.get('/api/history/dm-first-with/:userId', async (req, res) => {
   try {
-    if (!discordClient?.token) return fail(res, new Error('Not connected'));
-    let dm = Array.from(discordClient.channels.cache.values())
-      .find(c => c.type === 'DM' && c.recipient?.id === req.params.userId);
+    const c = pickClient(req);
+    if (!c?.token) return fail(res, new Error('Not connected'));
+    let dm = Array.from(c.channels.cache.values())
+      .find(ch => ch.type === 'DM' && ch.recipient?.id === req.params.userId);
     if (!dm) {
       try {
-        const user = await discordClient.users.fetch(req.params.userId);
+        const user = await c.users.fetch(req.params.userId);
         dm = await user.createDM();
       } catch (e) { return fail(res, new Error('No DM conversation with this user')); }
     }
-    const r = await axios.get(`https://discord.com/api/v9/channels/${dm.id}/messages?limit=1&after=0`, { headers: { Authorization: discordClient.token } });
+    const r = await axios.get(`https://discord.com/api/v9/channels/${dm.id}/messages?limit=1&after=0`, { headers: discordHeaders(c.token) });
     if (!r.data.length) return fail(res, new Error('No messages found'));
     ok(res, { message: fmtMsg(r.data[0], { id: dm.id, name: `DM with @${dm.recipient?.username || 'Unknown'}` }, null) });
   } catch (e) { fail(res, e); }
@@ -1246,15 +1311,16 @@ app.get('/api/history/dm-first-with/:userId', async (req, res) => {
 
 app.get('/api/history/oldest-dm', async (req, res) => {
   try {
-    if (!discordClient?.token) return fail(res, new Error('Not connected'));
-    const dms = Array.from(discordClient.channels.cache.values())
-      .filter(c => c.type === 'DM')
+    const c = pickClient(req);
+    if (!c?.token) return fail(res, new Error('Not connected'));
+    const dms = Array.from(c.channels.cache.values())
+      .filter(ch => ch.type === 'DM')
       .sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1))
       .slice(0, 30);
     let oldest = null;
     for (const dm of dms) {
       try {
-        const r = await axios.get(`https://discord.com/api/v9/channels/${dm.id}/messages?limit=1&after=0`, { headers: { Authorization: discordClient.token } });
+        const r = await axios.get(`https://discord.com/api/v9/channels/${dm.id}/messages?limit=1&after=0`, { headers: discordHeaders(c.token) });
         if (r.data.length) {
           const m = fmtMsg(r.data[0], { id: dm.id, name: `DM with @${dm.recipient?.username || 'Unknown'}` }, null);
           if (!oldest || m.timestamp < oldest.timestamp) oldest = m;
@@ -1269,18 +1335,19 @@ app.get('/api/history/oldest-dm', async (req, res) => {
 
 app.get('/api/history/server-my-first/:serverId', async (req, res) => {
   try {
-    if (!discordClient?.token) return fail(res, new Error('Not connected'));
-    const myId = discordClient.user.id;
-    const guild = discordClient.guilds.cache.get(req.params.serverId);
+    const c = pickClient(req);
+    if (!c?.token) return fail(res, new Error('Not connected'));
+    const myId = c.user.id;
+    const guild = c.guilds.cache.get(req.params.serverId);
     const sr = await axios.get(
       `https://discord.com/api/v9/guilds/${req.params.serverId}/messages/search?sort_by=timestamp&sort_order=asc&author_id=${myId}&limit=25`,
-      { headers: { Authorization: discordClient.token } });
+      { headers: discordHeaders(c.token) });
     const results = sr.data.messages;
     if (!results?.length) return fail(res, new Error('No messages found'));
     const target = results[0].find(m => m.author.id === myId) || results[0][0];
     let chName = target.channel_id;
     try {
-      const cr = await axios.get(`https://discord.com/api/v9/channels/${target.channel_id}`, { headers: { Authorization: discordClient.token } });
+      const cr = await axios.get(`https://discord.com/api/v9/channels/${target.channel_id}`, { headers: discordHeaders(c.token) });
       chName = cr.data.name;
     } catch (e) {}
     ok(res, { message: fmtMsg(target, { id: target.channel_id, name: chName }, guild ? { id: guild.id, name: guild.name } : null) });
@@ -1289,15 +1356,16 @@ app.get('/api/history/server-my-first/:serverId', async (req, res) => {
 
 app.get('/api/history/server-first/:serverId', async (req, res) => {
   try {
-    if (!discordClient?.token) return fail(res, new Error('Not connected'));
-    const guild = discordClient.guilds.cache.get(req.params.serverId);
+    const c = pickClient(req);
+    if (!c?.token) return fail(res, new Error('Not connected'));
+    const guild = c.guilds.cache.get(req.params.serverId);
     if (!guild) return fail(res, new Error('Server not found'));
-    const cr = await axios.get(`https://discord.com/api/v9/guilds/${req.params.serverId}/channels`, { headers: { Authorization: discordClient.token } });
-    const channels = cr.data.filter(c => c.type === 0 || c.type === 5).slice(0, 15);
+    const cr = await axios.get(`https://discord.com/api/v9/guilds/${req.params.serverId}/channels`, { headers: discordHeaders(c.token) });
+    const channels = cr.data.filter(ch => ch.type === 0 || ch.type === 5).slice(0, 15);
     let oldest = null;
     for (const ch of channels) {
       try {
-        const r = await axios.get(`https://discord.com/api/v9/channels/${ch.id}/messages?limit=1&after=0`, { headers: { Authorization: discordClient.token } });
+        const r = await axios.get(`https://discord.com/api/v9/channels/${ch.id}/messages?limit=1&after=0`, { headers: discordHeaders(c.token) });
         if (Array.isArray(r.data) && r.data.length) {
           const m = fmtMsg(r.data[0], { id: ch.id, name: ch.name }, { id: guild.id, name: guild.name });
           if (!oldest || m.timestamp < oldest.timestamp) oldest = m;
