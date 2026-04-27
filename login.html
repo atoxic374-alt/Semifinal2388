@@ -176,6 +176,7 @@
           <label for="loginRemember">تذكّرني على هذا الجهاز</label>
         </div>
         <button type="submit" id="loginBtn">تسجيل الدخول</button>
+        <button type="button" id="loginCancelDiscord" style="display:none;width:100%;margin-top:10px;padding:10px;border-radius:11px;border:1px solid rgba(255,255,255,.1);background:transparent;color:#a4a9c3;font-size:13px;cursor:pointer;font-family:inherit">استخدام حساب آخر</button>
       </form>
 
       <!-- SIGNUP PANEL -->
@@ -241,12 +242,19 @@
     if (params.get('mode') === 'signup') setMode('signup');
 
     if (params.get('error')) showAlert('فشل التسجيل: ' + params.get('error'), 'err');
-    if (params.get('discord') === '1') {
-      setMode('signup');
-      showAlert('تم التحقق من Discord! اختر اسم مستخدم وكلمة مرور لإكمال التسجيل.', 'ok');
-    }
 
-    // Wire Discord button visibility from server config
+    // Cancel discord-verified mode (user wants to sign in as someone else)
+    $('loginCancelDiscord').addEventListener('click', () => {
+      $('pendingDiscord').style.display = 'none';
+      $('loginCancelDiscord').style.display = 'none';
+      $('loginUser').readOnly = false;
+      $('loginUser').value = '';
+      $('title').textContent = 'مرحباً بعودتك';
+      $('sub').textContent = 'سجّل دخولك للوصول إلى لوحة إدارة حسابات Discord.';
+      $('loginUser').focus();
+    });
+
+    // Wire Discord button visibility + handle post-OAuth states
     fetch('/api/auth/status').then(r => r.json()).then(s => {
       if (s.discordOAuth) {
         $('discordBtn').hidden = false;
@@ -255,18 +263,34 @@
         $('discordBtn').hidden = true;
         $('divider').style.display = 'none';
       }
-      if (s.user?.discord) {
-        $('pdAvatar').src = avatarUrl(s.user.discord);
-        $('pdName').textContent = s.user.discord.username || '—';
+
+      // Case 1: returning user came back from Discord OAuth and we found their account.
+      // Pre-fill the username, lock it, show their avatar, and ask for password only.
+      if (s.discordVerifiedFor && params.get('discord_verified') === '1') {
+        setMode('login');
+        const dv = s.discordVerifiedFor;
+        $('pdAvatar').src = dv.avatar || '';
+        $('pdName').textContent = dv.username + (dv.discordUsername ? ` · ${dv.discordUsername}` : '');
+        document.querySelector('#pendingDiscord .pd-label').textContent = 'تم التحقق من Discord — أدخل كلمة المرور:';
         $('pendingDiscord').style.display = 'flex';
+        $('loginUser').value = dv.username;
+        $('loginUser').readOnly = true;
+        $('loginCancelDiscord').style.display = 'block';
+        $('title').textContent = `أهلاً ${dv.username}`;
+        $('sub').textContent = 'تأكيد كلمة المرور لإكمال تسجيل الدخول.';
+        setTimeout(() => $('loginPw').focus(), 100);
+      }
+
+      // Case 2: new Discord account — show signup with their avatar pre-filled.
+      else if (s.pendingDiscord && params.get('discord') === '1') {
+        setMode('signup');
+        $('pdAvatar').src = s.pendingDiscord.avatar || '';
+        $('pdName').textContent = s.pendingDiscord.username || '—';
+        document.querySelector('#pendingDiscord .pd-label').textContent = 'سيتم ربط هذا الحساب:';
+        $('pendingDiscord').style.display = 'flex';
+        showAlert('تم التحقق من Discord! اختر اسم مستخدم وكلمة مرور لإكمال التسجيل.', 'ok');
       }
     }).catch(() => {});
-
-    function avatarUrl(d) {
-      if (d?.avatar) return `https://cdn.discordapp.com/avatars/${d.id}/${d.avatar}.png?size=64`;
-      const i = (BigInt(d?.id || '0') >> 22n) % 6n;
-      return `https://cdn.discordapp.com/embed/avatars/${i}.png`;
-    }
 
     $('discordBtn').addEventListener('click', () => {
       const mode = signupPanel.classList.contains('active') ? 'signup' : 'login';

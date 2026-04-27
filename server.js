@@ -116,12 +116,36 @@ app.get('/signup', (req, res) => res.redirect('/login?mode=signup'));
 
 app.get('/api/auth/status', (req, res) => {
   try { auth.tryRestoreFromDeviceToken(req); } catch {}
+  // Surface the short-lived Discord verification (used to pre-fill the login
+  // form after the user came back from the OAuth round-trip). Expires in 5
+  // minutes so a stale session can't be used to phish a username.
+  let discordVerifiedFor = null;
+  const dv = req.session?.discordVerifiedFor;
+  if (dv && (Date.now() - dv.ts) < 5 * 60 * 1000) {
+    discordVerifiedFor = {
+      username: dv.username,
+      avatar: dv.avatar,
+      discordUsername: dv.discordUsername,
+    };
+  } else if (dv) {
+    delete req.session.discordVerifiedFor;
+  }
+  // Also surface a pending Discord identity for the signup pre-fill.
+  let pendingDiscord = null;
+  if (req.session?.pendingDiscord) {
+    pendingDiscord = {
+      username: req.session.pendingDiscord.username,
+      avatar: req.session.pendingDiscord.avatar,
+    };
+  }
   res.json({
     success: true,
     initialized: users.count() > 0,
     authed: !!(req.session && req.session.user),
     user: req.session?.user ? users.publicUser(users.findById(req.session.user.id)) : null,
     discordOAuth: oauth.isConfigured(),
+    discordVerifiedFor,
+    pendingDiscord,
   });
 });
 
@@ -236,23 +260,7 @@ app.get('/api/auth/discord/callback', async (req, res) => {
     const me = await oauth.fetchMe(tokenResp.access_token);
     const discordIdentity = { id: me.id, username: me.username, avatar: me.avatar };
 
-    // If a user with this Discord account already exists, sign them in regardless of intent
-    const existing = users.findByDiscordId(me.id);
-    if (existing) {
-      // Refresh stored discord profile (avatar may have changed)
-      users.linkDiscord(existing.id, discordIdentity);
-      return req.session.regenerate((err) => {
-        if (err) return res.redirect('/login?error=session_error');
-        req.session.user = { id: existing.id, username: existing.username, loginAt: Date.now() };
-        users.touchLogin(existing.id);
-        try {
-          const tok = users.issueDeviceToken(existing.id, { ua: req.headers['user-agent'], ip: req.ip });
-          auth.setDeviceCookie(res, tok);
-        } catch {}
-        res.redirect('/');
-      });
-    }
-
+    // Linking Discord to an *already signed-in* account is a one-step write.
     if (intent === 'link' && req.session?.user) {
       try {
         users.linkDiscord(req.session.user.id, discordIdentity);
@@ -262,9 +270,29 @@ app.get('/api/auth/discord/callback', async (req, res) => {
       }
     }
 
-    // signup flow: stash the Discord identity in session, send back to login page
-    // to finish the username+password step. (Intent 'login' for an unknown Discord
-    // account also lands here so the user can complete signup.)
+    // For login/signup intents we NEVER bypass the password step. Discord here
+    // is only used to identify which account the user wants to sign into (or
+    // to start a signup pre-filled with their Discord identity). The password
+    // is still required so a friend with access to their Discord cannot take
+    // over their managed-token vault.
+    const existing = users.findByDiscordId(me.id);
+    if (existing) {
+      // Refresh stored discord profile (avatar may have changed) and stash a
+      // short-lived "discord verified" hint so the login form can pre-fill the
+      // username and show whose account they're signing into.
+      users.linkDiscord(existing.id, discordIdentity);
+      req.session.discordVerifiedFor = {
+        userId: existing.id,
+        username: existing.username,
+        avatar: discordIdentity.avatar,
+        discordUsername: discordIdentity.username,
+        ts: Date.now(),
+      };
+      return res.redirect('/login?mode=login&discord_verified=1');
+    }
+
+    // Unknown Discord account → signup pre-filled with the Discord identity.
+    // The user must still pick a username and password.
     req.session.pendingDiscord = discordIdentity;
     return res.redirect('/login?mode=signup&discord=1');
   } catch (e) {
