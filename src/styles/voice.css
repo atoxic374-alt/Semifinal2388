@@ -1,0 +1,529 @@
+/* ═══════════════════════════════════════════
+   VOICE MANAGER — styles
+═══════════════════════════════════════════ */
+
+.vm-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.vm-header-icon {
+  color: #22c55e;
+  filter: drop-shadow(0 0 8px rgba(34,197,94,0.45));
+}
+
+/* ── Body Layout ── */
+.vm-body {
+  display: grid;
+  grid-template-columns: 280px 1fr 280px;
+  gap: 14px;
+  flex: 1;
+  overflow: hidden;
+  padding: 0 18px 18px;
+}
+
+/* ── Panel ── */
+.vm-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  min-height: 0;
+  background: var(--bg-card, rgba(255,255,255,0.04));
+  border: 1px solid var(--border, rgba(255,255,255,0.08));
+  border-radius: 14px;
+  padding: 14px;
+}
+
+.vm-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted, #94a3b8);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border, rgba(255,255,255,0.06));
+}
+
+/* ── Search Input ── */
+.vm-search {
+  width: 100%;
+  background: var(--bg-input, rgba(255,255,255,0.06));
+  border: 1px solid var(--border, rgba(255,255,255,0.08));
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--text, #e2e8f0);
+  outline: none;
+  transition: border-color 0.2s;
+  box-sizing: border-box;
+}
+.vm-search:focus { border-color: #22c55e; box-shadow: 0 0 0 2px rgba(34,197,94,0.15); }
+
+/* ── Guild List ── */
+.vm-guild-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.vm-guild-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.18s;
+  border: 1px solid transparent;
+}
+.vm-guild-item:hover { background: rgba(255,255,255,0.06); }
+.vm-guild-item.active {
+  background: rgba(34,197,94,0.12);
+  border-color: rgba(34,197,94,0.25);
+}
+
+.vm-guild-icon {
+  width: 36px; height: 36px;
+  border-radius: 10px;
+  background: var(--accent, #5865f2);
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 14px; color: #fff;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.vm-guild-icon img { width: 100%; height: 100%; object-fit: cover; border-radius: 10px; }
+
+.vm-guild-info { flex: 1; min-width: 0; }
+.vm-guild-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vm-guild-sub  { font-size: 11px; color: var(--text-muted, #64748b); margin-top: 1px; }
+.vm-guild-arrow { font-size: 16px; color: var(--text-muted, #64748b); transition: transform 0.2s; }
+.vm-guild-item.active .vm-guild-arrow { transform: rotate(90deg); color: #22c55e; }
+
+/* ── Channel List (inline) ── */
+.vm-channel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 6px 6px 14px;
+  animation: vmSlideDown 0.2s ease;
+}
+
+@keyframes vmSlideDown {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.vm-ch-search {
+  margin-bottom: 6px;
+  font-size: 12px;
+  padding: 6px 10px;
+}
+
+.vm-channel-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.15s;
+  border: 1px solid transparent;
+}
+.vm-channel-item:hover { background: rgba(255,255,255,0.05); }
+.vm-channel-item.active {
+  background: rgba(34,197,94,0.15);
+  border-color: rgba(34,197,94,0.3);
+  color: #22c55e;
+}
+
+.vm-ch-icon { font-size: 14px; }
+.vm-ch-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vm-ch-meta { font-size: 11px; color: var(--text-muted, #64748b); white-space: nowrap; }
+
+/* ── Section ── */
+.vm-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.vm-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted, #64748b);
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border, rgba(255,255,255,0.06));
+}
+
+/* ── Selected Info ── */
+.vm-selected-info {
+  background: var(--bg-input, rgba(255,255,255,0.04));
+  border: 1px solid var(--border, rgba(255,255,255,0.08));
+  border-radius: 10px;
+  padding: 10px 14px;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+}
+.vm-no-sel { color: var(--text-muted, #64748b); font-size: 13px; font-style: italic; }
+.vm-sel-detail { display: flex; flex-direction: column; gap: 3px; }
+.vm-sel-server { font-size: 13px; }
+.vm-sel-channel { font-size: 12px; color: #22c55e; }
+
+/* ── Join Grid ── */
+.vm-join-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+/* ── Buttons ── */
+.vm-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 14px;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.18s;
+  white-space: nowrap;
+}
+.vm-btn:active { transform: scale(0.97); }
+
+.vm-btn-primary {
+  background: #22c55e;
+  color: #fff;
+  border-color: #16a34a;
+}
+.vm-btn-primary:hover { background: #16a34a; box-shadow: 0 0 12px rgba(34,197,94,0.35); }
+
+.vm-btn-warning {
+  background: rgba(234,179,8,0.15);
+  color: #eab308;
+  border-color: rgba(234,179,8,0.3);
+}
+.vm-btn-warning:hover { background: rgba(234,179,8,0.25); }
+
+.vm-btn-danger {
+  background: rgba(239,68,68,0.12);
+  color: #ef4444;
+  border-color: rgba(239,68,68,0.25);
+}
+.vm-btn-danger:hover { background: rgba(239,68,68,0.22); }
+
+.vm-btn-ghost {
+  background: rgba(255,255,255,0.05);
+  color: var(--text, #e2e8f0);
+  border-color: var(--border, rgba(255,255,255,0.1));
+}
+.vm-btn-ghost:hover { background: rgba(255,255,255,0.1); }
+
+.vm-btn-full { width: 100%; margin-top: 4px; }
+
+/* ── Voice State Buttons ── */
+.vm-state-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.vm-state-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 10px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  background: var(--bg-input, rgba(255,255,255,0.05));
+  border: 1.5px solid var(--border, rgba(255,255,255,0.08));
+  transition: all 0.18s;
+}
+.vm-state-btn:hover {
+  background: rgba(255,255,255,0.1);
+  border-color: rgba(255,255,255,0.2);
+  transform: translateY(-2px);
+}
+.vm-state-btn.active {
+  background: rgba(34,197,94,0.15);
+  border-color: rgba(34,197,94,0.5);
+  box-shadow: 0 0 12px rgba(34,197,94,0.2);
+}
+
+.vm-state-icon { font-size: 20px; line-height: 1; }
+.vm-state-label { font-size: 10px; font-weight: 600; color: var(--text-muted, #94a3b8); text-align: center; }
+
+/* ── Field Row ── */
+.vm-field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+}
+.vm-field-row label { color: var(--text-muted, #94a3b8); font-size: 12px; font-weight: 500; white-space: nowrap; }
+.vm-toggle-row { flex-wrap: nowrap; }
+
+.vm-interval-group { display: flex; gap: 6px; align-items: center; }
+
+.vm-num-input {
+  width: 70px;
+  background: var(--bg-input, rgba(255,255,255,0.06));
+  border: 1px solid var(--border, rgba(255,255,255,0.1));
+  border-radius: 7px;
+  padding: 6px 8px;
+  font-size: 13px;
+  color: var(--text, #e2e8f0);
+  outline: none;
+  text-align: center;
+}
+.vm-num-input:focus { border-color: #22c55e; }
+
+.vm-select {
+  background: var(--bg-input, rgba(255,255,255,0.06));
+  border: 1px solid var(--border, rgba(255,255,255,0.1));
+  border-radius: 7px;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--text, #e2e8f0);
+  outline: none;
+  cursor: pointer;
+}
+.vm-select:focus { border-color: #22c55e; }
+
+/* ── Toggle Switch ── */
+.vm-toggle { position: relative; display: inline-flex; align-items: center; cursor: pointer; }
+.vm-toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
+.vm-toggle-track {
+  width: 38px; height: 20px;
+  background: rgba(255,255,255,0.1);
+  border-radius: 20px;
+  position: relative;
+  transition: background 0.2s;
+  border: 1px solid rgba(255,255,255,0.1);
+}
+.vm-toggle input:checked ~ .vm-toggle-track { background: #22c55e; border-color: #16a34a; }
+.vm-toggle-thumb {
+  position: absolute;
+  top: 2px; left: 2px;
+  width: 14px; height: 14px;
+  background: #fff;
+  border-radius: 50%;
+  transition: left 0.2s;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+}
+.vm-toggle input:checked ~ .vm-toggle-track .vm-toggle-thumb { left: 20px; }
+
+/* ── State Cycle Builder ── */
+.vm-cycle-builder { display: flex; flex-direction: column; gap: 8px; }
+.vm-cycle-states {
+  display: flex; flex-direction: column; gap: 4px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border, rgba(255,255,255,0.06));
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.vm-chk-label {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; cursor: pointer;
+  padding: 3px 0;
+  color: var(--text, #e2e8f0);
+}
+.vm-chk-label input[type=checkbox] { accent-color: #22c55e; }
+
+/* ── Rotation Channels ── */
+.vm-rotation-channels {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.vm-rot-ch-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.06);
+  font-size: 12px;
+  animation: vmFadeIn 0.18s ease;
+}
+.vm-rot-ch-num {
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: #22c55e;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.vm-rot-ch-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vm-rot-ch-del {
+  background: none; border: none; color: var(--text-muted, #64748b);
+  cursor: pointer; font-size: 13px; padding: 0 2px;
+  transition: color 0.15s;
+}
+.vm-rot-ch-del:hover { color: #ef4444; }
+
+.vm-rot-btns { display: flex; gap: 8px; }
+
+/* ── Sessions ── */
+.vm-section-sessions { flex: none; }
+
+.vm-sessions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.vm-session-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: rgba(34,197,94,0.07);
+  border: 1px solid rgba(34,197,94,0.2);
+  animation: vmFadeIn 0.2s ease;
+}
+
+.vm-session-avatar {
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 13px; color: #fff;
+  flex-shrink: 0;
+}
+.vm-session-info { flex: 1; min-width: 0; }
+.vm-session-name { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vm-session-ch { font-size: 11px; color: var(--text-muted, #64748b); margin-top: 1px; }
+.vm-session-leave {
+  background: none; border: none;
+  color: var(--text-muted, #64748b);
+  cursor: pointer; font-size: 14px; padding: 2px 6px;
+  border-radius: 5px; transition: all 0.15s;
+}
+.vm-session-leave:hover { background: rgba(239,68,68,0.15); color: #ef4444; }
+
+/* ── Tasks ── */
+.vm-tasks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.vm-task-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.07);
+  animation: vmFadeIn 0.2s ease;
+}
+.vm-task-info { flex: 1; min-width: 0; }
+.vm-task-label { font-size: 13px; font-weight: 600; }
+.vm-task-sub   { font-size: 11px; color: var(--text-muted, #64748b); margin-top: 2px; }
+.vm-task-next  { font-size: 10px; color: #22c55e; margin-top: 2px; }
+.vm-task-stop {
+  padding: 6px 10px;
+  border-radius: 7px;
+  background: rgba(239,68,68,0.1);
+  border: 1px solid rgba(239,68,68,0.25);
+  color: #ef4444;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+.vm-task-stop:hover { background: rgba(239,68,68,0.22); }
+
+/* ── Refresh Button ── */
+.vm-refresh-btn {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-muted, #64748b);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  transition: color 0.15s, transform 0.3s;
+}
+.vm-refresh-btn:hover { color: #22c55e; transform: rotate(180deg); }
+
+/* ── Loading / Error / Empty ── */
+.vm-loading { color: var(--text-muted, #64748b); font-size: 13px; display: flex; align-items: center; gap: 8px; padding: 12px 4px; }
+.vm-error   { color: #ef4444; font-size: 13px; padding: 8px 4px; }
+
+/* ── Animations ── */
+@keyframes vmFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Scrollbar ── */
+.vm-guild-list::-webkit-scrollbar,
+.vm-sessions-list::-webkit-scrollbar,
+.vm-tasks-list::-webkit-scrollbar,
+.vm-rotation-channels::-webkit-scrollbar { width: 4px; }
+.vm-guild-list::-webkit-scrollbar-track,
+.vm-sessions-list::-webkit-scrollbar-track,
+.vm-tasks-list::-webkit-scrollbar-track,
+.vm-rotation-channels::-webkit-scrollbar-track { background: transparent; }
+.vm-guild-list::-webkit-scrollbar-thumb,
+.vm-sessions-list::-webkit-scrollbar-thumb,
+.vm-tasks-list::-webkit-scrollbar-thumb,
+.vm-rotation-channels::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 4px; }
+
+/* ── Responsive ── */
+@media (max-width: 900px) {
+  .vm-body { grid-template-columns: 1fr; overflow-y: auto; }
+  .vm-panel { overflow: visible; }
+  .vm-join-grid { grid-template-columns: 1fr 1fr; }
+  .vm-state-grid { grid-template-columns: repeat(3, 1fr); }
+}
+
+@media (max-width: 600px) {
+  .vm-join-grid { grid-template-columns: 1fr 1fr; }
+  .vm-state-grid { grid-template-columns: repeat(3, 1fr); }
+}
+
+/* ── Light theme overrides ── */
+.light-theme .vm-panel { background: rgba(0,0,0,0.03); }
+.light-theme .vm-search,
+.light-theme .vm-num-input,
+.light-theme .vm-select { background: rgba(0,0,0,0.05); color: #1e293b; }
+.light-theme .vm-guild-item:hover { background: rgba(0,0,0,0.04); }
+.light-theme .vm-session-item { background: rgba(34,197,94,0.08); }

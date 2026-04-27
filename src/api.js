@@ -346,6 +346,44 @@ window.electronAPI = {
   getBanAlerts:       () => apiCall('GET', '/api/ban-alerts'),
   clearBanAlerts:     () => apiCall('DELETE', '/api/ban-alerts'),
 
+  // ── Voice Manager
+  voiceGetGuilds:        (account) => {
+    if (window._testMode) return Promise.resolve({ guilds: [
+      { account: 'Ahmed (Test)', guildId: '999000000000000001', guildName: 'Replit Builders', guildIcon: null, voiceChannels: [
+        { id: 'vc1', name: 'General Voice', userLimit: 0, members: 3, bitrate: 64 },
+        { id: 'vc2', name: 'Music',         userLimit: 10, members: 1, bitrate: 96 },
+        { id: 'vc3', name: 'AFK',           userLimit: 0, members: 0, bitrate: 64 },
+      ]},
+      { account: 'Ahmed (Test)', guildId: '999000000000000002', guildName: 'Arabic Devs', guildIcon: null, voiceChannels: [
+        { id: 'vc4', name: 'Dev Chat',      userLimit: 0, members: 2, bitrate: 64 },
+        { id: 'vc5', name: 'Chill Zone',    userLimit: 0, members: 0, bitrate: 64 },
+      ]},
+    ]});
+    const q = account ? `?account=${encodeURIComponent(account)}` : '';
+    return apiCall('GET', `/api/voice/guilds${q}`);
+  },
+  voiceGetSessions:      () => {
+    if (window._testMode) return Promise.resolve({ sessions: [] });
+    return apiCall('GET', '/api/voice/sessions');
+  },
+  voiceGetRotations:     () => {
+    if (window._testMode) return Promise.resolve({ rotations: [] });
+    return apiCall('GET', '/api/voice/rotations');
+  },
+  voiceGetStateCycles:   () => {
+    if (window._testMode) return Promise.resolve({ cycles: [] });
+    return apiCall('GET', '/api/voice/state-cycles');
+  },
+  voiceJoin:             (payload) => testOr({ results: [] }) || apiCall('POST', '/api/voice/join', payload),
+  voiceLeave:            (payload) => testOr({ results: [] }) || apiCall('POST', '/api/voice/leave', payload),
+  voiceSetState:         (payload) => testOr({ results: [] }) || apiCall('POST', '/api/voice/state', payload),
+  voiceJoinAll:          (payload) => testOr({ results: [] }) || apiCall('POST', '/api/voice/join-all', payload),
+  voiceDistributeRandom: (payload) => testOr({ results: [] }) || apiCall('POST', '/api/voice/distribute-random', payload),
+  voiceStartRotation:    (payload) => testOr({ id: 'test-rot', message: 'ok' }) || apiCall('POST', '/api/voice/rotation/start', payload),
+  voiceStopRotation:     (payload) => testOr({ ok: true }) || apiCall('POST', '/api/voice/rotation/stop', payload),
+  voiceStartStateCycle:  (payload) => testOr({ id: 'test-cyc', message: 'ok' }) || apiCall('POST', '/api/voice/state-cycle/start', payload),
+  voiceStopStateCycle:   (payload) => testOr({ ok: true }) || apiCall('POST', '/api/voice/state-cycle/stop', payload),
+
   // ── Bot Tokens
   botsList:           () => apiCall('GET', '/api/bots'),
   botsAllTokensUrl:   (format = 'text') => `/api/bots/all-tokens?format=${encodeURIComponent(format)}`,

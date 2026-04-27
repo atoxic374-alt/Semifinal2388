@@ -14,6 +14,7 @@ const ITEMS = [
   { id: 'antiprune',   i18n: 'fm.antiprune',    ic: 'shield',     accent: '#5865f2' },
   { id: 'search',      i18n: 'fm.search',       ic: 'search',     accent: '#06b6d4' },
   { id: 'massfriend',  i18n: 'fm.mass_friend',  ic: 'users',      accent: '#e07c35' },
+  { id: 'voice',       i18n: 'fm.voice',        ic: 'mic',        accent: '#22c55e' },
 ];
 
 export function mountFeaturesMenu(controlsEl) {

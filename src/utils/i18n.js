@@ -707,6 +707,7 @@ const DICT = {
     // ── Features-menu items new
     'fm.search': 'User Search',
     'fm.mass_friend': 'Mass Friend',
+    'fm.voice': 'Voice Manager',
 
     // ── Private extras
     'pm.deleted': 'deleted',
@@ -1501,6 +1502,7 @@ const DICT = {
     // ── قائمة المزايا الجديدة
     'fm.search': 'البحث عن مستخدم',
     'fm.mass_friend': 'إضافة بالجملة',
+    'fm.voice': 'مدير الفويس',
 
     // ── خاص: إشارة الحذف
     'pm.deleted': 'محذوف',

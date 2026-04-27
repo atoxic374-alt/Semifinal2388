@@ -4384,6 +4384,281 @@ function attachDMDeleteListener(name, client) {
 }
 for (const [n, e] of clients.entries()) attachDMDeleteListener(n, e.client);
 
+// ═══════════════════════════════════════════════
+//  10. VOICE MANAGER
+// ═══════════════════════════════════════════════
+
+// In-memory state
+const voiceSessions   = new Map(); // "<name>_<guildId>" -> { name, guildId, channelId, selfMute, selfDeaf, selfVideo, selfStream }
+const voiceRotations  = new Map(); // rotationId -> { id, name, guildId, channels, intervalMs, randomOrder, timer, currentIdx, nextAt }
+const voiceStateCycles= new Map(); // cycleId    -> { id, accounts, states, intervalMs, timer, currentIdx, nextAt }
+
+function sendVoiceOp(client, guildId, channelId, selfMute = false, selfDeaf = false, selfVideo = false, selfStream = false) {
+  try {
+    const shard = client.ws?.shards?.first?.() || client.ws?.shards?.get?.(0);
+    if (!shard) return false;
+    shard.send({
+      op: 4,
+      d: { guild_id: guildId, channel_id: channelId, self_mute: selfMute, self_deaf: selfDeaf, self_video: selfVideo, self_stream: selfStream }
+    });
+    return true;
+  } catch (e) { return false; }
+}
+
+function getVoiceClient(name) {
+  const entry = clients.get(name);
+  if (!entry?.client?.ws) return null;
+  return entry.client;
+}
+
+function voiceSessionKey(name, guildId) { return `${name}__${guildId}`; }
+
+// GET /api/voice/guilds — list all guilds with their voice channels for an account
+app.get('/api/voice/guilds', (req, res) => {
+  const { account } = req.query;
+  const targets = account ? [[account, clients.get(account)]] : Array.from(clients.entries());
+  const results = [];
+  for (const [name, entry] of targets) {
+    if (!entry?.client?.guilds) continue;
+    for (const [, guild] of entry.client.guilds.cache) {
+      const voiceChannels = guild.channels.cache
+        .filter(c => c.type === 'GUILD_VOICE' || c.type === 2)
+        .map(c => ({
+          id: c.id,
+          name: c.name,
+          userLimit: c.userLimit || 0,
+          members: c.members?.size || 0,
+          bitrate: Math.round((c.bitrate || 64000) / 1000)
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      if (voiceChannels.length > 0) {
+        results.push({ account: name, guildId: guild.id, guildName: guild.name, guildIcon: guild.iconURL?.({ size: 64 }) || null, voiceChannels });
+      }
+    }
+  }
+  ok(res, { guilds: results });
+});
+
+// GET /api/voice/sessions — list all active voice sessions
+app.get('/api/voice/sessions', (req, res) => {
+  ok(res, { sessions: Array.from(voiceSessions.values()) });
+});
+
+// GET /api/voice/rotations — list channel rotations
+app.get('/api/voice/rotations', (req, res) => {
+  const list = Array.from(voiceRotations.values()).map(r => ({
+    id: r.id, name: r.name, guildId: r.guildId, guildName: r.guildName,
+    channels: r.channels, intervalMs: r.intervalMs, randomOrder: r.randomOrder,
+    currentIdx: r.currentIdx, nextAt: r.nextAt, accounts: r.accounts
+  }));
+  ok(res, { rotations: list });
+});
+
+// GET /api/voice/state-cycles — list state cycles
+app.get('/api/voice/state-cycles', (req, res) => {
+  const list = Array.from(voiceStateCycles.values()).map(c => ({
+    id: c.id, accounts: c.accounts, states: c.states,
+    intervalMs: c.intervalMs, currentIdx: c.currentIdx, nextAt: c.nextAt
+  }));
+  ok(res, { cycles: list });
+});
+
+// POST /api/voice/join — join a voice channel
+app.post('/api/voice/join', (req, res) => {
+  const { accounts, guildId, channelId, selfMute = false, selfDeaf = false } = req.body;
+  const targets = Array.isArray(accounts) ? accounts : [accounts].filter(Boolean);
+  if (!targets.length) return fail(res, new Error('No accounts specified'));
+  if (!guildId || !channelId) return fail(res, new Error('guildId and channelId required'));
+  const results = [];
+  for (const name of targets) {
+    const client = getVoiceClient(name);
+    if (!client) { results.push({ name, ok: false, error: 'Not connected' }); continue; }
+    const sent = sendVoiceOp(client, guildId, channelId, selfMute, selfDeaf, false, false);
+    if (sent) {
+      const key = voiceSessionKey(name, guildId);
+      voiceSessions.set(key, { name, guildId, channelId, selfMute, selfDeaf, selfVideo: false, selfStream: false, joinedAt: Date.now() });
+    }
+    results.push({ name, ok: sent, error: sent ? null : 'Failed to send voice op' });
+  }
+  ok(res, { results });
+});
+
+// POST /api/voice/leave — leave voice channel
+app.post('/api/voice/leave', (req, res) => {
+  const { accounts, guildId } = req.body;
+  const targets = Array.isArray(accounts) ? accounts : [accounts].filter(Boolean);
+  const results = [];
+  for (const name of targets) {
+    const client = getVoiceClient(name);
+    if (!client) { results.push({ name, ok: false }); continue; }
+    const sent = sendVoiceOp(client, guildId, null, false, false, false, false);
+    const key = voiceSessionKey(name, guildId);
+    voiceSessions.delete(key);
+    results.push({ name, ok: sent });
+  }
+  ok(res, { results });
+});
+
+// POST /api/voice/state — update voice state (mute/deaf/video/stream)
+app.post('/api/voice/state', (req, res) => {
+  const { accounts, guildId, selfMute, selfDeaf, selfVideo, selfStream } = req.body;
+  const targets = Array.isArray(accounts) ? accounts : [accounts].filter(Boolean);
+  const results = [];
+  for (const name of targets) {
+    const client = getVoiceClient(name);
+    if (!client) { results.push({ name, ok: false }); continue; }
+    const key = voiceSessionKey(name, guildId);
+    const sess = voiceSessions.get(key);
+    const chId = sess?.channelId || null;
+    const sm = selfMute  !== undefined ? selfMute  : (sess?.selfMute  || false);
+    const sd = selfDeaf  !== undefined ? selfDeaf  : (sess?.selfDeaf  || false);
+    const sv = selfVideo !== undefined ? selfVideo : (sess?.selfVideo || false);
+    const ss = selfStream!== undefined ? selfStream: (sess?.selfStream|| false);
+    const sent = sendVoiceOp(client, guildId, chId, sm, sd, sv, ss);
+    if (sent && sess) Object.assign(sess, { selfMute: sm, selfDeaf: sd, selfVideo: sv, selfStream: ss });
+    results.push({ name, ok: sent });
+  }
+  ok(res, { results });
+});
+
+// POST /api/voice/join-all — join all connected accounts to one channel
+app.post('/api/voice/join-all', (req, res) => {
+  const { guildId, channelId, selfMute = false, selfDeaf = false } = req.body;
+  if (!guildId || !channelId) return fail(res, new Error('guildId and channelId required'));
+  const results = [];
+  for (const [name, entry] of clients.entries()) {
+    if (!entry?.client?.ws) continue;
+    const sent = sendVoiceOp(entry.client, guildId, channelId, selfMute, selfDeaf, false, false);
+    if (sent) voiceSessions.set(voiceSessionKey(name, guildId), { name, guildId, channelId, selfMute, selfDeaf, selfVideo: false, selfStream: false, joinedAt: Date.now() });
+    results.push({ name, ok: sent });
+  }
+  ok(res, { results });
+});
+
+// POST /api/voice/distribute-random — randomly distribute accounts across voice channels
+app.post('/api/voice/distribute-random', (req, res) => {
+  const { accounts, guildId, channelIds } = req.body;
+  if (!Array.isArray(channelIds) || !channelIds.length) return fail(res, new Error('channelIds required'));
+  const targets = Array.isArray(accounts) && accounts.length ? accounts : Array.from(clients.keys());
+  const results = [];
+  const shuffled = [...channelIds].sort(() => Math.random() - 0.5);
+  targets.forEach((name, i) => {
+    const client = getVoiceClient(name);
+    if (!client) { results.push({ name, ok: false, channelId: null }); return; }
+    const channelId = shuffled[i % shuffled.length];
+    const sent = sendVoiceOp(client, guildId, channelId, false, false, false, false);
+    if (sent) voiceSessions.set(voiceSessionKey(name, guildId), { name, guildId, channelId, selfMute: false, selfDeaf: false, selfVideo: false, selfStream: false, joinedAt: Date.now() });
+    results.push({ name, ok: sent, channelId });
+  });
+  ok(res, { results });
+});
+
+// POST /api/voice/rotation/start — rotate between voice channels on a timer
+app.post('/api/voice/rotation/start', (req, res) => {
+  const { accounts, guildId, guildName, channelIds, intervalMs = 3600000, randomOrder = false } = req.body;
+  if (!Array.isArray(channelIds) || channelIds.length < 2) return fail(res, new Error('At least 2 channelIds required'));
+  const targets = Array.isArray(accounts) && accounts.length ? accounts : Array.from(clients.keys());
+  const id = `vr_${Date.now()}`;
+  const rotation = {
+    id, accounts: targets, guildId, guildName: guildName || guildId,
+    channels: channelIds, intervalMs, randomOrder, currentIdx: 0,
+    nextAt: Date.now() + intervalMs
+  };
+
+  function doRotate() {
+    let idx;
+    if (randomOrder) idx = Math.floor(Math.random() * channelIds.length);
+    else { rotation.currentIdx = (rotation.currentIdx + 1) % channelIds.length; idx = rotation.currentIdx; }
+    const channelId = channelIds[idx];
+    rotation.nextAt = Date.now() + intervalMs;
+    for (const name of targets) {
+      const client = getVoiceClient(name);
+      if (!client) continue;
+      sendVoiceOp(client, guildId, channelId, false, false, false, false);
+      const key = voiceSessionKey(name, guildId);
+      const sess = voiceSessions.get(key);
+      if (sess) sess.channelId = channelId;
+      else voiceSessions.set(key, { name, guildId, channelId, selfMute: false, selfDeaf: false, selfVideo: false, selfStream: false, joinedAt: Date.now() });
+    }
+  }
+
+  // Join initial channel
+  const firstChannel = channelIds[0];
+  for (const name of targets) {
+    const client = getVoiceClient(name);
+    if (!client) continue;
+    sendVoiceOp(client, guildId, firstChannel, false, false, false, false);
+    voiceSessions.set(voiceSessionKey(name, guildId), { name, guildId, channelId: firstChannel, selfMute: false, selfDeaf: false, selfVideo: false, selfStream: false, joinedAt: Date.now() });
+  }
+
+  rotation.timer = setInterval(doRotate, intervalMs);
+  voiceRotations.set(id, rotation);
+  ok(res, { id, message: 'Rotation started' });
+});
+
+// POST /api/voice/rotation/stop
+app.post('/api/voice/rotation/stop', (req, res) => {
+  const { id } = req.body;
+  const rot = voiceRotations.get(id);
+  if (!rot) return fail(res, new Error('Rotation not found'));
+  clearInterval(rot.timer);
+  voiceRotations.delete(id);
+  ok(res, { ok: true });
+});
+
+// POST /api/voice/state-cycle/start — cycle voice states on a timer
+app.post('/api/voice/state-cycle/start', (req, res) => {
+  const { accounts, guildId, states, intervalMs = 3600000 } = req.body;
+  // states: array of objects { selfMute, selfDeaf, selfVideo, selfStream }
+  if (!Array.isArray(states) || states.length < 2) return fail(res, new Error('At least 2 states required'));
+  const targets = Array.isArray(accounts) && accounts.length ? accounts : Array.from(clients.keys());
+  const id = `vsc_${Date.now()}`;
+  const cycle = { id, accounts: targets, guildId, states, intervalMs, currentIdx: 0, nextAt: Date.now() + intervalMs };
+
+  function applyState(stateObj) {
+    cycle.currentIdx = (cycle.currentIdx + 1) % states.length;
+    const s = states[cycle.currentIdx];
+    cycle.nextAt = Date.now() + intervalMs;
+    for (const name of targets) {
+      const client = getVoiceClient(name);
+      if (!client) continue;
+      const key = voiceSessionKey(name, guildId);
+      const sess = voiceSessions.get(key);
+      const chId = sess?.channelId || null;
+      if (!chId) continue;
+      sendVoiceOp(client, guildId, chId, !!s.selfMute, !!s.selfDeaf, !!s.selfVideo, !!s.selfStream);
+      if (sess) Object.assign(sess, { selfMute: !!s.selfMute, selfDeaf: !!s.selfDeaf, selfVideo: !!s.selfVideo, selfStream: !!s.selfStream });
+    }
+  }
+
+  // Apply first state immediately
+  const s0 = states[0];
+  for (const name of targets) {
+    const client = getVoiceClient(name);
+    if (!client) continue;
+    const key = voiceSessionKey(name, guildId);
+    const sess = voiceSessions.get(key);
+    const chId = sess?.channelId || null;
+    if (!chId) continue;
+    sendVoiceOp(client, guildId, chId, !!s0.selfMute, !!s0.selfDeaf, !!s0.selfVideo, !!s0.selfStream);
+    if (sess) Object.assign(sess, { selfMute: !!s0.selfMute, selfDeaf: !!s0.selfDeaf, selfVideo: !!s0.selfVideo, selfStream: !!s0.selfStream });
+  }
+
+  cycle.timer = setInterval(applyState, intervalMs);
+  voiceStateCycles.set(id, cycle);
+  ok(res, { id, message: 'State cycle started' });
+});
+
+// POST /api/voice/state-cycle/stop
+app.post('/api/voice/state-cycle/stop', (req, res) => {
+  const { id } = req.body;
+  const cycle = voiceStateCycles.get(id);
+  if (!cycle) return fail(res, new Error('Cycle not found'));
+  clearInterval(cycle.timer);
+  voiceStateCycles.delete(id);
+  ok(res, { ok: true });
+});
+
 app.listen(PORT, '0.0.0.0', async () => {
   const banner = `
 ╔══════════════════════════════════════════════════╗

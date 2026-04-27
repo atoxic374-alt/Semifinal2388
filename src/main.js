@@ -20,6 +20,7 @@ import { AntiPruneManager } from './components/AntiPruneManager.js';
 import { SearchManager } from './components/SearchManager.js';
 import { MassFriendManager } from './components/MassFriendManager.js';
 import { BotsManager } from './components/BotsManager.js';
+import { VoiceManager } from './components/VoiceManager.js';
 import { mountTaskBar } from './utils/taskBar.js';
 import { mountThemedSelect } from './utils/themedSelect.js';
 import { showInfoModal, showTestPreview } from './utils/ui.js';
@@ -102,6 +103,7 @@ window.antiPruneManager = new AntiPruneManager(document.getElementById('antiprun
 window.searchManager    = new SearchManager(document.getElementById('search-page'));
 window.massFriendManager = new MassFriendManager(document.getElementById('massfriend-page'));
 window.botsManager      = new BotsManager(document.getElementById('bots-page'));
+window.voiceManager     = new VoiceManager(document.getElementById('voice-page'));
 
 // Mount the top-right features hamburger dropdown
 mountFeaturesMenu(document.querySelector('.window-controls'));
@@ -140,6 +142,7 @@ window.addEventListener('feature-nav', (ev) => {
     massfriend:  'massfriend',
     clone:       'clone',
     stats:       'stats',
+    voice:       'voice',
   };
   const page = map[ev.detail];
   if (page) switchPage(page);
@@ -240,6 +243,7 @@ function switchPage(pageId) {
     case 'search':      window.searchManager.init();                  break;
     case 'massfriend':  window.massFriendManager.init();              break;
     case 'bots':        window.botsManager.init();                    break;
+    case 'voice':       window.voiceManager.init();                   break;
   }
 }
 
