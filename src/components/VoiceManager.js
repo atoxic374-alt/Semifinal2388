@@ -393,8 +393,12 @@ export class VoiceManager {
         this._pickerClients = picker.clients || [];
         this._activeAccount = picker.active || null;
         acctArea.innerHTML = picker.html;
-        picker.bind(acctArea, (val) => {
+        picker.bind(acctArea, async (val) => {
           this.selectedAccounts = val ? [val] : [];
+          this.selectedGuild = null;
+          this.selectedChannel = null;
+          this._deduped = [];
+          await this._loadGuilds();
           this._refreshSessions();
         });
       }
@@ -403,7 +407,7 @@ export class VoiceManager {
     }
 
     if (view === 'server-picker') {
-      if (!this._deduped.length) await this._loadGuilds();
+      await this._loadGuilds();
       const gsearch = this.contentArea.querySelector('#vm-gsearch');
       if (gsearch) {
         gsearch.addEventListener('input', (e) => {
@@ -420,7 +424,7 @@ export class VoiceManager {
   // ── Data Loading ──────────────────────────────────
   async _loadGuilds() {
     try {
-      const acct = this.selectedAccounts[0] || null;
+      const acct = this.selectedAccounts[0] || this._activeAccount || null;
       const data = await window.electronAPI.voiceGetGuilds(acct);
       this._guilds = data.guilds || [];
       const map = new Map();
@@ -500,6 +504,7 @@ export class VoiceManager {
     try {
       const r = await window.electronAPI.voiceJoin({ accounts: this._accounts(), guildId: this.selectedGuild.guildId, channelId: this.selectedChannel.id });
       const ok = (r.results||[]).filter(x=>x.ok).length;
+      await this._refreshSessions();
       showNotification(`${t('vm.joined')} ${ok}/${this._accounts().length}`, ok ? 'success' : 'error');
     } catch(e) { showNotification(t('vm.error'), 'error'); }
   }
@@ -509,6 +514,7 @@ export class VoiceManager {
     try {
       const r = await window.electronAPI.voiceJoinAll({ guildId: this.selectedGuild.guildId, channelId: this.selectedChannel.id });
       const ok = (r.results||[]).filter(x=>x.ok).length;
+      await this._refreshSessions();
       showNotification(`${t('vm.joined_all')} ${ok}`, 'success');
     } catch(e) { showNotification(t('vm.error'), 'error'); }
   }
@@ -518,6 +524,7 @@ export class VoiceManager {
     if (!this._needAccounts()) return;
     try {
       await window.electronAPI.voiceLeave({ accounts: this._accounts(), guildId: this.selectedGuild.guildId });
+      await this._refreshSessions();
       showNotification(t('vm.left'), 'success');
     } catch(e) { showNotification(t('vm.error'), 'error'); }
   }
@@ -530,6 +537,7 @@ export class VoiceManager {
     try {
       const r = await window.electronAPI.voiceDistributeRandom({ accounts: this._accounts(), guildId: this.selectedGuild.guildId, channelIds });
       const ok = (r.results||[]).filter(x=>x.ok).length;
+      await this._refreshSessions();
       showNotification(`${t('vm.distributed')} ${ok}`, 'success');
     } catch(e) { showNotification(t('vm.error'), 'error'); }
   }
@@ -542,8 +550,10 @@ export class VoiceManager {
     this.contentArea.querySelectorAll('.vm-state-row').forEach(b => b.classList.remove('vm-active'));
     this.contentArea.querySelector(`[onclick*="applyState('${stateId}')"]`)?.classList.add('vm-active');
     try {
-      await window.electronAPI.voiceSetState({ accounts: this._accounts(), guildId: this.selectedGuild.guildId, ...state });
-      showNotification(`${t(state.key)} ${t('vm.applied')}`, 'success');
+      const r = await window.electronAPI.voiceSetState({ accounts: this._accounts(), guildId: this.selectedGuild.guildId, ...state });
+      const ok = (r.results || []).filter(x => x.ok).length;
+      await this._refreshSessions();
+      showNotification(ok ? `${t(state.key)} ${t('vm.applied')}` : t('vm.error'), ok ? 'success' : 'error');
     } catch(e) { showNotification(t('vm.error'), 'error'); }
   }
 
