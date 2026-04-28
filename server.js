@@ -2597,11 +2597,24 @@ function pushBotEvent(type, payload = {}) {
   sseBroadcast(type, { ...payload, task: botSnapshot() });
 }
 
-async function solveHCaptcha2captcha(apiKey, sitekey, pageUrl, rqdata) {
+function buildAxiosNetOpts(proxyUrl) {
+  if (!proxyUrl) return {};
+  try {
+    const a = buildProxyAgents(proxyUrl);
+    const httpAgent = a?.ws?.httpAgent || null;
+    const httpsAgent = a?.ws?.httpsAgent || null;
+    if (!httpAgent && !httpsAgent) return {};
+    return { proxy: false, httpAgent, httpsAgent };
+  } catch (e) {
+    return {};
+  }
+}
+
+async function solveCaptcha2captcha(apiKey, service, sitekey, pageUrl, rqdata) {
   if (!apiKey) throw new Error('No 2captcha key configured');
-  const inParams = new URLSearchParams({
-    key: apiKey, method: 'hcaptcha', sitekey, pageurl: pageUrl, json: '1'
-  });
+  const mode = String(service || 'hcaptcha').toLowerCase();
+  const method = mode.includes('turnstile') ? 'turnstile' : 'hcaptcha';
+  const inParams = new URLSearchParams({ key: apiKey, method, sitekey, pageurl: pageUrl, json: '1' });
   if (rqdata) inParams.set('data', rqdata);
   const inResp = await axios.post('https://2captcha.com/in.php', inParams.toString(), {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 30000
@@ -2618,10 +2631,10 @@ async function solveHCaptcha2captcha(apiKey, sitekey, pageUrl, rqdata) {
   throw new Error('2captcha timed out');
 }
 
-async function discordRequestWithCaptcha({ method, url, token, body, pageUrl = 'https://discord.com' }) {
+async function discordRequestWithCaptcha({ method, url, token, body, pageUrl = 'https://discord.com', netOpts = {} }) {
   const headers = { Authorization: token, 'Content-Type': 'application/json' };
   let captchaKey = null, captchaRqtoken = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 5; attempt++) {
     if (botTask.cancelRequested) throw new Error('Cancelled');
     const reqHeaders = { ...headers };
     if (captchaKey) {
@@ -2629,8 +2642,14 @@ async function discordRequestWithCaptcha({ method, url, token, body, pageUrl = '
       if (captchaRqtoken) reqHeaders['X-Captcha-Rqtoken'] = captchaRqtoken;
     }
     try {
-      const r = await axios({ method, url, headers: reqHeaders, data: body, validateStatus: () => true, timeout: 30000 });
+      const r = await axios({ method, url, headers: reqHeaders, data: body, validateStatus: () => true, timeout: 30000, ...netOpts });
       if (r.status >= 200 && r.status < 300) return r.data;
+      if (r.status === 429) {
+        const retryAfterMs = Math.max(1000, Math.ceil(((r.data?.retry_after || 2) * 1000)));
+        pushBotEvent('bot_progress', { msg: `rate-limited, retrying in ${Math.round(retryAfterMs / 1000)}s` });
+        await new Promise(rs => setTimeout(rs, retryAfterMs));
+        continue;
+      }
       const e = r.data || {};
       if (e.captcha_key && (e.captcha_sitekey || e.captcha_service)) {
         const sitekey = e.captcha_sitekey || '';
@@ -2640,10 +2659,10 @@ async function discordRequestWithCaptcha({ method, url, token, body, pageUrl = '
         const cfg = ensureData();
         const apiKey = (cfg.botsConfig?.captcha2captchaKey || '').trim();
         let token2;
-        if (apiKey && service === 'hcaptcha') {
+        if (apiKey) {
           try {
             pushBotEvent('bot_progress', { msg: 'auto-solving captcha…' });
-            token2 = await solveHCaptcha2captcha(apiKey, sitekey, pageUrl, rqdata);
+            token2 = await solveCaptcha2captcha(apiKey, service, sitekey, pageUrl, rqdata);
           } catch (err) {
             // Auto-solve failed → fall through to manual
             token2 = await waitManualCaptcha({ sitekey, service, rqdata, rqtoken });
@@ -2660,7 +2679,8 @@ async function discordRequestWithCaptcha({ method, url, token, body, pageUrl = '
       err.status = r.status; err.body = e;
       throw err;
     } catch (e) {
-      if (attempt === 2) throw e;
+      if (attempt === 4) throw e;
+      await new Promise(rs => setTimeout(rs, 1000 * (attempt + 1)));
       if (!e.captcha) throw e;
     }
   }
@@ -2683,25 +2703,27 @@ function waitManualCaptcha({ sitekey, service, rqdata, rqtoken }) {
   });
 }
 
-async function createOneBot({ userToken, name, avatarDataUrl, bannerDataUrl }) {
+async function createOneBot({ userToken, name, avatarDataUrl, bannerDataUrl, netOpts = {}, accountPassword = '' }) {
+  const pw = String(accountPassword || '').trim();
+  const withPw = (obj = {}) => (pw ? { ...obj, password: pw } : obj);
   // 1) Create application
   const app = await discordRequestWithCaptcha({
     method: 'POST', url: 'https://discord.com/api/v9/applications',
-    token: userToken, body: { name, team_id: null }
+    token: userToken, body: withPw({ name, team_id: null }), netOpts
   });
   const appId = app.id;
 
   // 2) Convert to bot (creates the bot user, returns initial token)
   const botCreate = await discordRequestWithCaptcha({
     method: 'POST', url: `https://discord.com/api/v9/applications/${appId}/bot`,
-    token: userToken, body: {}
+    token: userToken, body: withPw({}), netOpts
   });
   let botToken = botCreate.token;
   if (!botToken) {
     // Some accounts must reset to receive the token
     const reset = await discordRequestWithCaptcha({
       method: 'POST', url: `https://discord.com/api/v9/applications/${appId}/bot/reset`,
-      token: userToken, body: {}
+      token: userToken, body: withPw({}), netOpts
     });
     botToken = reset.token;
   }
@@ -2715,7 +2737,7 @@ async function createOneBot({ userToken, name, avatarDataUrl, bannerDataUrl }) {
     try {
       await discordRequestWithCaptcha({
         method: 'PATCH', url: `https://discord.com/api/v9/applications/${appId}/bot`,
-        token: userToken, body: patchBody
+        token: userToken, body: withPw(patchBody), netOpts
       });
     } catch (e) {
       // Soft-fail: keep the bot, surface the error
@@ -2727,7 +2749,7 @@ async function createOneBot({ userToken, name, avatarDataUrl, bannerDataUrl }) {
   let validated = false;
   try {
     const r = await axios.get('https://discord.com/api/v10/users/@me', {
-      headers: { Authorization: `Bot ${botToken}` }, validateStatus: () => true, timeout: 15000
+      headers: { Authorization: `Bot ${botToken}` }, validateStatus: () => true, timeout: 15000, ...netOpts
     });
     validated = r.status === 200;
   } catch (e) {}
@@ -2735,7 +2757,20 @@ async function createOneBot({ userToken, name, avatarDataUrl, bannerDataUrl }) {
   return { appId, botUserId, botToken, validated };
 }
 
-async function runBotCreationTask({ ownerName, userToken, count, namePattern, avatarDataUrl, bannerDataUrl, customPasswordPattern }) {
+async function validateUserTokenWorks(userToken, netOpts = {}) {
+  const r = await axios.get('https://discord.com/api/v10/users/@me', {
+    headers: { Authorization: userToken },
+    validateStatus: () => true,
+    timeout: 15000,
+    ...netOpts
+  });
+  if (r.status >= 200 && r.status < 300) {
+    return { ok: true, user: { id: r.data?.id, username: r.data?.username, discriminator: r.data?.discriminator } };
+  }
+  return { ok: false, error: r.data?.message || `Discord ${r.status}` };
+}
+
+async function runBotCreationTask({ ownerName, userToken, count, namePattern, avatarDataUrl, bannerDataUrl, customPasswordPattern, netOpts = {}, accountPassword = '' }) {
   botTask.state = 'running';
   botTask.startedAt = Date.now();
   botTask.account = ownerName;
@@ -2762,7 +2797,7 @@ async function runBotCreationTask({ ownerName, userToken, count, namePattern, av
     botTask.current = name;
     pushBotEvent('bot_progress', { msg: `creating ${name}` });
     try {
-      const r = await createOneBot({ userToken, name, avatarDataUrl, bannerDataUrl });
+      const r = await createOneBot({ userToken, name, avatarDataUrl, bannerDataUrl, netOpts, accountPassword });
       // Local password is optional. Bot tokens are the real credential, so we no
       // longer auto-generate a meaningless local password. Only set one if the
       // user explicitly provided a pattern in customPasswordPattern.
@@ -2842,28 +2877,34 @@ app.post('/api/bots/create', (req, res) => {
   if (botTask.state === 'running' || botTask.state === 'waiting_captcha') {
     return fail(res, new Error('A bot creation task is already running'));
   }
-  const { account, count, namePattern, avatarDataUrl, bannerDataUrl, cooldownMs, customPasswordPattern } = req.body || {};
-  if (!account) return fail(res, new Error('account is required'));
-  const c = clients.get(account);
+  const { account, count, namePattern, avatarDataUrl, bannerDataUrl, cooldownMs, customPasswordPattern, accountPassword } = req.body || {};
+  const resolvedAccount = account || activeRef.get();
+  if (!resolvedAccount) return fail(res, new Error('account is required'));
+  const c = clients.get(resolvedAccount);
   if (!c?.token) return fail(res, new Error('Account is not connected'));
+  const netOpts = buildAxiosNetOpts(c.proxy);
   const n = Math.max(1, Math.min(50, parseInt(count || 1) || 1));
   botTask.cooldownMs = Math.max(30000, parseInt(cooldownMs || 120000) || 120000);
 
-  // Run async
-  runBotCreationTask({
-    ownerName: account,
-    userToken: c.token,
-    count: n,
-    namePattern: String(namePattern || 'Bot {n}').slice(0, 32),
-    avatarDataUrl: avatarDataUrl || null,
-    bannerDataUrl: bannerDataUrl || null,
-    customPasswordPattern: customPasswordPattern || ''
+  validateUserTokenWorks(c.token, netOpts).then((tokenCheck) => {
+    if (!tokenCheck.ok) throw new Error(`Account token validation failed: ${tokenCheck.error}`);
+    return runBotCreationTask({
+      ownerName: resolvedAccount,
+      userToken: c.token,
+      count: n,
+      namePattern: String(namePattern || 'Bot {n}').slice(0, 32),
+      avatarDataUrl: avatarDataUrl || null,
+      bannerDataUrl: bannerDataUrl || null,
+      customPasswordPattern: customPasswordPattern || '',
+      netOpts,
+      accountPassword: accountPassword || ''
+    });
   }).catch(e => {
     botTask.state = 'error';
     botTask.lastError = e.message;
     pushBotEvent('bot_done', {});
   });
-  ok(res, { started: true, task: botSnapshot() });
+  ok(res, { started: true, account: resolvedAccount, task: botSnapshot() });
 });
 
 app.post('/api/bots/cancel', (req, res) => {
@@ -4959,6 +5000,40 @@ function getVoiceClient(name) {
 
 function voiceSessionKey(name, guildId) { return `${name}__${guildId}`; }
 
+function isVoiceType(channel) {
+  const t = channel?.type;
+  return t === 'GUILD_VOICE' || t === 2 || t === 'GUILD_STAGE_VOICE' || t === 13;
+}
+
+function getSelfMember(guild, client) {
+  return guild?.members?.me || guild?.members?.cache?.get?.(client?.user?.id) || null;
+}
+
+function canJoinVoiceChannel(channel, memberOrId) {
+  const perms = channel?.permissionsFor?.(memberOrId);
+  const canView = perms?.has?.('VIEW_CHANNEL') ?? true;
+  const canConnect = perms?.has?.('CONNECT') ?? true;
+  return !!(canView && canConnect);
+}
+
+function validateVoiceTarget(client, guildId, channelId) {
+  const guild = client?.guilds?.cache?.get?.(guildId);
+  if (!guild) return { ok: false, error: 'Guild not found in this account' };
+  const channel = guild.channels?.cache?.get?.(channelId);
+  if (!channel) return { ok: false, error: 'Channel not found in this guild' };
+  if (!isVoiceType(channel)) return { ok: false, error: 'Target channel is not voice/stage' };
+
+  const me = getSelfMember(guild, client) || client?.user?.id;
+  if (!canJoinVoiceChannel(channel, me)) return { ok: false, error: 'Missing voice permissions' };
+
+  const userLimit = Number(channel.userLimit) || 0;
+  const currentIn = channel.members?.size || 0;
+  const alreadyIn = guild.voiceStates?.cache?.get?.(client?.user?.id)?.channelId === channelId;
+  if (!alreadyIn && userLimit > 0 && currentIn >= userLimit) return { ok: false, error: 'Voice channel is full' };
+
+  return { ok: true, guild, channel };
+}
+
 // GET /api/voice/guilds — list all guilds with their voice channels for an account
 app.get('/api/voice/guilds', (req, res) => {
   const { account } = req.query;
@@ -4967,8 +5042,16 @@ app.get('/api/voice/guilds', (req, res) => {
   for (const [name, entry] of targets) {
     if (!entry?.client?.guilds) continue;
     for (const [, guild] of entry.client.guilds.cache) {
+      const me = getSelfMember(guild, entry.client);
       const voiceChannels = guild.channels.cache
-        .filter(c => c.type === 'GUILD_VOICE' || c.type === 2)
+        .filter(c => isVoiceType(c))
+        .filter((c) => {
+          if (!canJoinVoiceChannel(c, me || entry.client.user?.id)) return false;
+          const userLimit = Number(c.userLimit) || 0;
+          if (userLimit <= 0) return true;
+          const membersCount = c.members?.size || 0;
+          return membersCount < userLimit;
+        })
         .map(c => ({
           id: c.id,
           name: c.name,
@@ -5019,6 +5102,8 @@ app.post('/api/voice/join', (req, res) => {
   for (const name of targets) {
     const client = getVoiceClient(name);
     if (!client) { results.push({ name, ok: false, error: 'Not connected' }); continue; }
+    const target = validateVoiceTarget(client, guildId, channelId);
+    if (!target.ok) { results.push({ name, ok: false, error: target.error }); continue; }
     const sent = sendVoiceOp(client, guildId, channelId, selfMute, selfDeaf, false, false);
     if (sent) {
       const key = voiceSessionKey(name, guildId);
@@ -5055,6 +5140,10 @@ app.post('/api/voice/state', (req, res) => {
     if (!client) { results.push({ name, ok: false }); continue; }
     const key = voiceSessionKey(name, guildId);
     const sess = voiceSessions.get(key);
+    if (!sess?.channelId) {
+      results.push({ name, ok: false, error: 'Not connected to voice in this guild' });
+      continue;
+    }
     const chId = sess?.channelId || null;
     const sm = selfMute  !== undefined ? selfMute  : (sess?.selfMute  || false);
     const sd = selfDeaf  !== undefined ? selfDeaf  : (sess?.selfDeaf  || false);
@@ -5074,6 +5163,8 @@ app.post('/api/voice/join-all', (req, res) => {
   const results = [];
   for (const [name, entry] of clients.entries()) {
     if (!entry?.client?.ws) continue;
+    const target = validateVoiceTarget(entry.client, guildId, channelId);
+    if (!target.ok) { results.push({ name, ok: false, error: target.error }); continue; }
     const sent = sendVoiceOp(entry.client, guildId, channelId, selfMute, selfDeaf, false, false);
     if (sent) vsSet(voiceSessionKey(name, guildId), { name, guildId, channelId, selfMute, selfDeaf, selfVideo: false, selfStream: false, joinedAt: Date.now() });
     results.push({ name, ok: sent });
@@ -5092,6 +5183,8 @@ app.post('/api/voice/distribute-random', (req, res) => {
     const client = getVoiceClient(name);
     if (!client) { results.push({ name, ok: false, channelId: null }); return; }
     const channelId = shuffled[i % shuffled.length];
+    const target = validateVoiceTarget(client, guildId, channelId);
+    if (!target.ok) { results.push({ name, ok: false, channelId, error: target.error }); return; }
     const sent = sendVoiceOp(client, guildId, channelId, false, false, false, false);
     if (sent) vsSet(voiceSessionKey(name, guildId), { name, guildId, channelId, selfMute: false, selfDeaf: false, selfVideo: false, selfStream: false, joinedAt: Date.now() });
     results.push({ name, ok: sent, channelId });
@@ -5120,6 +5213,8 @@ app.post('/api/voice/rotation/start', (req, res) => {
     for (const name of targets) {
       const client = getVoiceClient(name);
       if (!client) continue;
+      const target = validateVoiceTarget(client, guildId, channelId);
+      if (!target.ok) continue;
       sendVoiceOp(client, guildId, channelId, false, false, false, false);
       const key = voiceSessionKey(name, guildId);
       const sess = voiceSessions.get(key);
@@ -5133,6 +5228,8 @@ app.post('/api/voice/rotation/start', (req, res) => {
   for (const name of targets) {
     const client = getVoiceClient(name);
     if (!client) continue;
+    const target = validateVoiceTarget(client, guildId, firstChannel);
+    if (!target.ok) continue;
     sendVoiceOp(client, guildId, firstChannel, false, false, false, false);
     vsSet(voiceSessionKey(name, guildId), { name, guildId, channelId: firstChannel, selfMute: false, selfDeaf: false, selfVideo: false, selfStream: false, joinedAt: Date.now() });
   }

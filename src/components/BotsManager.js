@@ -23,7 +23,8 @@ export class BotsManager {
       cooldownSec: 120,
       avatarDataUrl: null,
       bannerDataUrl: null,
-      captchaKey: ''
+      captchaKey: '',
+      accountPassword: ''
     };
     this._captchaSaveTimer = null;
     this._inited = false;
@@ -166,6 +167,7 @@ export class BotsManager {
 
   async renderGenerator(body) {
     const picker = await buildAccountPicker({ selectId: 'bm-account', selected: this.account });
+    if (!this.account && picker.active) this.account = picker.active;
     body.innerHTML = `
       <div class="bm-card">
         <div class="bm-row">${picker.html}</div>
@@ -189,6 +191,11 @@ export class BotsManager {
         </div>
 
         <div class="bm-grid">
+          <div class="bm-field">
+            <label>${t('bm.password')}</label>
+            <input type="password" id="bm-account-password" value="${escapeAttr(this.form.accountPassword || '')}" placeholder="${t('bm.password')} (optional)" autocomplete="off" />
+            <span class="bm-hint">Used only when Discord requires password confirmation for app/bot actions.</span>
+          </div>
           <div class="bm-field">
             <label>${icon('image')} ${t('bm.avatar')}</label>
             <div class="bm-pick-row">
@@ -238,6 +245,7 @@ export class BotsManager {
     picker.bind(body, (name) => { this.account = name || null; });
     body.querySelector('#bm-name').addEventListener('input', e => this.form.namePattern = e.target.value);
     body.querySelector('#bm-count').addEventListener('input', e => this.form.count = Math.max(1, Math.min(50, parseInt(e.target.value || '1') || 1)));
+    body.querySelector('#bm-account-password')?.addEventListener('input', e => this.form.accountPassword = e.target.value || '');
     const cd = body.querySelector('#bm-cooldown');
     const cdLbl = body.querySelector('#bm-cooldown-label');
     cd.addEventListener('input', e => { this.form.cooldownSec = parseInt(e.target.value); cdLbl.textContent = `${this.form.cooldownSec}s`; });
@@ -363,7 +371,8 @@ export class BotsManager {
         namePattern: this.form.namePattern,
         avatarDataUrl: this.form.avatarDataUrl,
         bannerDataUrl: this.form.bannerDataUrl,
-        cooldownMs: this.form.cooldownSec * 1000
+        cooldownMs: this.form.cooldownSec * 1000,
+        accountPassword: this.form.accountPassword || ''
       });
       if (r?.success) {
         showNotification(t('bm.task_started'));
