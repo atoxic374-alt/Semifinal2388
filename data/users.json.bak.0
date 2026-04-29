@@ -28,13 +28,13 @@
       "discordUsername": null,
       "discordAvatar": null,
       "createdAt": 1777428426088,
-      "lastLogin": 1777429563843,
+      "lastLogin": 1777431720938,
       "deviceTokens": [
         {
           "id": "886c0fe077f2363b",
           "hash": "ea289c66dd1e0c544092951e16b61348e83610760dc8092da8ff90957d1020d4",
           "createdAt": 1777428426089,
-          "lastSeen": 1777429563843,
+          "lastSeen": 1777431720938,
           "ua": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
           "ip": "10.28.92.44"
         }

@@ -1622,3 +1622,9 @@ body.rtl .pm-toast { right: auto; left: 24px; }
 .bm-team-meta code { background: #0f1114; padding: 1px 5px; border-radius: 4px; }
 .bm-team-bots { display: flex; gap: 6px; flex-wrap: wrap; }
 .bm-team-bot-pill { background: #2a2d31; color: #dcddde; font-size: 10px; padding: 3px 8px; border-radius: 999px; }
+
+/* Bot card action buttons */
+.bm-bot-actions { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.bm-token-missing { color: #f59e0b; font-style: italic; }
+.bm-btn.warn { background: #b45309; color: #fff; border: 1px solid #d97706; }
+.bm-btn.warn:hover { background: #d97706; }

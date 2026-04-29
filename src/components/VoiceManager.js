@@ -581,10 +581,17 @@ export class VoiceManager {
     if (!this.selectedGuild) { showNotification(t('vm.select_server_first'), 'error'); return; }
     if (!this._needAccounts()) return;
     try {
-      await window.electronAPI.voiceLeave({ accounts: this._accounts(), guildId: this.selectedGuild.guildId });
+      const r = await window.electronAPI.voiceLeave({ accounts: this._accounts(), guildId: this.selectedGuild.guildId });
+      const results = r?.results || [];
+      const okCount = results.filter(x => x.ok).length;
       await this._refreshSessions();
-      showNotification(t('vm.left'), 'success');
-    } catch(e) { showNotification(t('vm.error'), 'error'); }
+      if (okCount === 0 && results.length) {
+        const firstErr = results.find(x => !x.ok)?.error || t('vm.error');
+        showNotification(`${t('vm.left')} 0/${results.length} — ${firstErr}`, 'error');
+      } else {
+        showNotification(`${t('vm.left')} ${okCount}/${results.length || this._accounts().length}`, okCount ? 'success' : 'error');
+      }
+    } catch(e) { showNotification(e?.message || t('vm.error'), 'error'); }
   }
 
   async distributeRandom() {
@@ -594,10 +601,16 @@ export class VoiceManager {
     if (!channelIds?.length) { showNotification(t('vm.no_voice_channels'), 'error'); return; }
     try {
       const r = await window.electronAPI.voiceDistributeRandom({ accounts: this._accounts(), guildId: this.selectedGuild.guildId, channelIds });
-      const ok = (r.results||[]).filter(x=>x.ok).length;
+      const results = r?.results || [];
+      const okCount = results.filter(x => x.ok).length;
       await this._refreshSessions();
-      showNotification(`${t('vm.distributed')} ${ok}`, 'success');
-    } catch(e) { showNotification(t('vm.error'), 'error'); }
+      if (okCount === 0 && results.length) {
+        const firstErr = results.find(x => !x.ok)?.error || t('vm.error');
+        showNotification(`${t('vm.distributed')} 0/${results.length} — ${firstErr}`, 'error');
+      } else {
+        showNotification(`${t('vm.distributed')} ${okCount}/${results.length}`, okCount ? 'success' : 'error');
+      }
+    } catch(e) { showNotification(e?.message || t('vm.error'), 'error'); }
   }
 
   async applyState(stateId) {
@@ -605,14 +618,28 @@ export class VoiceManager {
     if (!state) return;
     if (!this.selectedGuild) { showNotification(t('vm.select_server_first'), 'error'); return; }
     if (!this._needAccounts()) return;
+    // Heads-up: actual screen-share streaming requires a Discord client; selfbots can only
+    // toggle the "Go Live" indicator (selfStream flag) without actually pushing video.
+    if (state.selfStream) {
+      showNotification(t('vm.screen_share_warn') || 'Note: this only toggles the "Go Live" flag. Actual video streaming from a selfbot is not supported by Discord.', 'info');
+    }
     this.contentArea.querySelectorAll('.vm-state-row').forEach(b => b.classList.remove('vm-active'));
     this.contentArea.querySelector(`[onclick*="applyState('${stateId}')"]`)?.classList.add('vm-active');
     try {
       const r = await window.electronAPI.voiceSetState({ accounts: this._accounts(), guildId: this.selectedGuild.guildId, ...state });
-      const ok = (r.results || []).filter(x => x.ok).length;
+      const results = r?.results || [];
+      const okCount = results.filter(x => x.ok).length;
       await this._refreshSessions();
-      showNotification(ok ? `${t(state.key)} ${t('vm.applied')}` : t('vm.error'), ok ? 'success' : 'error');
-    } catch(e) { showNotification(t('vm.error'), 'error'); }
+      if (okCount === 0 && results.length) {
+        const firstErr = results.find(x => !x.ok)?.error || t('vm.error');
+        showNotification(`${t(state.key)} — ${firstErr}`, 'error');
+      } else if (okCount < results.length) {
+        const firstErr = results.find(x => !x.ok)?.error || '';
+        showNotification(`${t(state.key)} ${t('vm.applied')} ${okCount}/${results.length}${firstErr ? ' — ' + firstErr : ''}`, 'error');
+      } else {
+        showNotification(`${t(state.key)} ${t('vm.applied')}`, 'success');
+      }
+    } catch(e) { showNotification(e?.message || t('vm.error'), 'error'); }
   }
 
   addRotCh() {

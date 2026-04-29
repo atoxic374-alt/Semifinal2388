@@ -328,7 +328,20 @@ app.get('/api/me', (req, res) => {
   });
 });
 
-app.use(express.static(path.join(__dirname)));
+// In dev, disable static caching so users always see fresh code without manual refreshes.
+// Production keeps default caching for performance.
+const IS_PROD = process.env.NODE_ENV === 'production';
+app.use(express.static(path.join(__dirname), {
+  etag: !IS_PROD,
+  lastModified: !IS_PROD,
+  setHeaders(res, filePath) {
+    if (!IS_PROD) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    }
+  }
+}));
 
 // ── Persistent stores (per-user, scoped via AsyncLocalStorage) ─────────
 // Each user's data lives under data/users/<userId>/. The scoped wrappers
@@ -3264,13 +3277,82 @@ app.get('/api/bots/all-tokens', (req, res) => {
   res.send(`# number\tname\ttoken\tpassword\n${lines.join('\n')}\n`);
 });
 
-app.delete('/api/bots/:id', (req, res) => {
+app.delete('/api/bots/:id', async (req, res) => {
   const d = ensureData();
   const i = (d.bots || []).findIndex(b => b.id === req.params.id);
   if (i < 0) return fail(res, new Error('Not found'));
+  const bot = d.bots[i];
+  const fromDiscord = String(req.query.fromDiscord || '').toLowerCase() === 'true' || String(req.query.from_discord || '').toLowerCase() === 'true';
+  const accountPassword = (req.body && req.body.accountPassword) || req.query.accountPassword || '';
+
+  if (fromDiscord) {
+    // Try to delete the application on Discord using the owner account's user token.
+    const ownerAccount = bot.ownerAccount || bot.createdBy;
+    const c = ownerAccount ? clients.get(ownerAccount) : null;
+    if (!c?.token) return fail(res, new Error(`Owner account "${ownerAccount || 'unknown'}" must be connected to delete the Discord application`));
+    if (!bot.appId) return fail(res, new Error('This bot has no Discord application id stored'));
+    try {
+      const netOpts = buildAxiosNetOpts(c.proxy);
+      const body = accountPassword ? { password: String(accountPassword) } : {};
+      // Discord requires POST /applications/:id/delete with the account password for owner-protected apps.
+      await discordRequestWithCaptcha({
+        method: 'POST', url: `https://discord.com/api/v9/applications/${bot.appId}/delete`,
+        token: c.token, body, netOpts
+      });
+    } catch (e) {
+      const msg = e?.response?.data?.message || e?.message || 'Discord deletion failed';
+      const code = e?.response?.status;
+      // 404 means the app no longer exists on Discord — proceed to remove from library.
+      if (code !== 404) return fail(res, new Error(`Discord refused deletion: ${msg}${/password/i.test(msg) ? ' (account password may be required)' : ''}`));
+    }
+  }
+
   const removed = d.bots.splice(i, 1)[0];
   writeData(d);
-  ok(res, { removed: { id: removed.id, name: removed.name } });
+  ok(res, { removed: { id: removed.id, name: removed.name }, fromDiscord });
+});
+
+// Reset (and reveal) a bot's token. Calls Discord's POST /applications/:id/bot/reset.
+// Discord may require the owner-account password (sent via discordRequestWithCaptcha body).
+app.post('/api/bots/:id/reset-token', async (req, res) => {
+  try {
+    const d = ensureData();
+    const i = (d.bots || []).findIndex(b => b.id === req.params.id);
+    if (i < 0) return fail(res, new Error('Not found'));
+    const bot = d.bots[i];
+    if (!bot.appId) return fail(res, new Error('This bot has no Discord application id stored'));
+    const ownerAccount = bot.ownerAccount || bot.createdBy;
+    const c = ownerAccount ? clients.get(ownerAccount) : null;
+    if (!c?.token) return fail(res, new Error(`Owner account "${ownerAccount || 'unknown'}" must be connected to reset this bot's token`));
+    const accountPassword = (req.body && req.body.accountPassword) || '';
+    const netOpts = buildAxiosNetOpts(c.proxy);
+    const body = accountPassword ? { password: String(accountPassword) } : {};
+    let resp;
+    try {
+      resp = await discordRequestWithCaptcha({
+        method: 'POST', url: `https://discord.com/api/v9/applications/${bot.appId}/bot/reset`,
+        token: c.token, body, netOpts
+      });
+    } catch (e) {
+      const msg = e?.response?.data?.message || e?.message || 'failed';
+      return fail(res, new Error(`Discord refused token reset: ${msg}${/password/i.test(msg) ? ' (account password is required)' : ''}`));
+    }
+    const newToken = resp?.token;
+    if (!newToken) return fail(res, new Error('Discord did not return a new token'));
+    // Validate new token before persisting
+    let validated = false;
+    try {
+      const r = await axios.get('https://discord.com/api/v10/users/@me', {
+        headers: { Authorization: `Bot ${newToken}` }, validateStatus: () => true, timeout: 15000, ...netOpts
+      });
+      validated = r.status === 200;
+    } catch (e) {}
+    bot.token = newToken;
+    bot.validated = validated;
+    bot.tokenResetAt = Date.now();
+    writeData(d);
+    ok(res, { id: bot.id, token: newToken, validated });
+  } catch (e) { fail(res, e); }
 });
 
 app.get('/api/bots/status', (req, res) => ok(res, { task: botSnapshot() }));

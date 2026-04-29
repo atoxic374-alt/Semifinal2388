@@ -417,6 +417,8 @@ export class BotsManager {
         span.dataset.hidden = hidden ? '0' : '1';
       });
       card.querySelector('.bm-del')?.addEventListener('click', () => this.deleteBot(bot));
+      card.querySelector('.bm-del-discord')?.addEventListener('click', () => this.deleteBotFromDiscord(bot));
+      card.querySelector('.bm-reset-token')?.addEventListener('click', () => this.resetBotToken(bot));
     });
   }
 
@@ -455,6 +457,7 @@ export class BotsManager {
   }
 
   botCardHtml(b) {
+    const hasToken = !!b.token;
     return `
       <div class="bm-card-bot" data-id="${escapeAttr(b.id)}">
         <div class="bm-bot-head">
@@ -467,9 +470,12 @@ export class BotsManager {
         </div>
         <div class="bm-bot-row">
           <span class="bm-bot-label">${t('bm.token')}:</span>
-          <code class="bm-token-val" data-hidden="1">${maskToken(b.token)}</code>
-          <button class="bm-btn ghost xsmall bm-toggle-token" title="${t('bm.toggle')}">👁</button>
-          <button class="bm-btn ghost xsmall bm-copy-token" title="${t('bm.copy')}">${icon('copy')}</button>
+          ${hasToken
+            ? `<code class="bm-token-val" data-hidden="1">${maskToken(b.token)}</code>
+               <button class="bm-btn ghost xsmall bm-toggle-token" title="${t('bm.toggle')}">👁</button>
+               <button class="bm-btn ghost xsmall bm-copy-token" title="${t('bm.copy')}">${icon('copy')}</button>`
+            : `<code class="bm-token-val bm-token-missing">${t('bm.no_token') || 'no token stored'}</code>`}
+          <button class="bm-btn warn xsmall bm-reset-token" title="${t('bm.reset_token_tip') || 'Reset & reveal a fresh token from Discord'}">${icon('refresh') || '↻'} ${hasToken ? (t('bm.reset_token') || 'Reset') : (t('bm.fetch_token') || 'Fetch token')}</button>
         </div>
         ${b.password ? `
         <div class="bm-bot-row">
@@ -479,7 +485,10 @@ export class BotsManager {
         </div>` : ''}
         <div class="bm-bot-foot">
           <span class="bm-bot-meta">${t('bm.owner')}: ${escapeHtml(b.createdBy || '—')} · ${new Date(b.createdAt).toLocaleString()}</span>
-          <button class="bm-btn danger xsmall bm-del">${icon('trash')} ${t('bm.delete')}</button>
+          <span class="bm-bot-actions">
+            <button class="bm-btn ghost xsmall bm-del" title="${t('bm.delete_local_tip') || 'Remove from this library only'}">${icon('trash')} ${t('bm.delete_local') || t('bm.delete')}</button>
+            <button class="bm-btn danger xsmall bm-del-discord" title="${t('bm.delete_discord_tip') || 'Permanently delete the Discord application'}">${icon('trash')} ${t('bm.delete_discord') || 'Delete from Discord'}</button>
+          </span>
         </div>
       </div>
     `;
@@ -555,6 +564,53 @@ export class BotsManager {
       this.renderLibrary();
       showNotification(t('bm.deleted'));
     } catch (e) { showNotification(e.message, 'error'); }
+  }
+
+  async deleteBotFromDiscord(bot) {
+    const owner = bot.ownerAccount || bot.createdBy || '—';
+    const msg = (t('bm.confirm_delete_discord') || 'Permanently delete "{name}" application from Discord using the {owner} account? This cannot be undone.')
+      .replace('{name}', bot.name).replace('{owner}', owner);
+    const ok = await showConfirm(msg);
+    if (!ok) return;
+    let pwd = '';
+    try {
+      pwd = window.prompt((t('bm.password_prompt') || 'Discord password for the {owner} account (leave blank if not required):').replace('{owner}', owner), '') || '';
+    } catch (e) {}
+    try {
+      const r = await window.electronAPI.botsDeleteFromDiscord(bot.id, pwd);
+      if (!r?.success) throw new Error(r?.error || 'Failed');
+      this.bots = this.bots.filter(b => b.id !== bot.id);
+      await this.refreshAll().catch(() => {});
+      this.renderLibrary();
+      showNotification(t('bm.deleted_from_discord') || 'Bot deleted from Discord and library');
+    } catch (e) {
+      showNotification(e.message || 'Failed', 'error');
+    }
+  }
+
+  async resetBotToken(bot) {
+    const owner = bot.ownerAccount || bot.createdBy || '—';
+    const hasToken = !!bot.token;
+    const confirmMsg = hasToken
+      ? (t('bm.confirm_reset_token') || 'Reset token for "{name}"? The current token will stop working immediately.').replace('{name}', bot.name)
+      : (t('bm.confirm_fetch_token') || 'Fetch a fresh token for "{name}"?').replace('{name}', bot.name);
+    const ok = await showConfirm(confirmMsg);
+    if (!ok) return;
+    let pwd = '';
+    try {
+      pwd = window.prompt((t('bm.password_prompt') || 'Discord password for the {owner} account (leave blank if not required):').replace('{owner}', owner), '') || '';
+    } catch (e) {}
+    try {
+      const r = await window.electronAPI.botsResetToken(bot.id, pwd);
+      if (!r?.success) throw new Error(r?.error || 'Failed');
+      bot.token = r.token;
+      bot.validated = !!r.validated;
+      this.renderLibrary();
+      try { await copyToClipboard(r.token); showNotification(t('bm.token_reset_copied') || 'New token revealed and copied to clipboard'); }
+      catch (e) { showNotification(t('bm.token_reset') || 'New token saved'); }
+    } catch (e) {
+      showNotification(e.message || 'Failed', 'error');
+    }
   }
 }
 

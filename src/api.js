@@ -426,6 +426,8 @@ window.electronAPI = {
   botsCapacity:       () => apiCall('GET', '/api/bots/capacity'),
   botsAllTokensUrl:   (format = 'text') => `/api/bots/all-tokens?format=${encodeURIComponent(format)}`,
   botsDelete:         (id) => apiCall('DELETE', `/api/bots/${encodeURIComponent(id)}`),
+  botsDeleteFromDiscord: (id, accountPassword = '') => apiCall('DELETE', `/api/bots/${encodeURIComponent(id)}?fromDiscord=true`, { accountPassword }),
+  botsResetToken:     (id, accountPassword = '') => apiCall('POST', `/api/bots/${encodeURIComponent(id)}/reset-token`, { accountPassword }),
   botsStatus:         () => apiCall('GET', '/api/bots/status'),
   botsCreate:         (cfg) => apiCall('POST', '/api/bots/create', cfg),
   botsCancel:         () => apiCall('POST', '/api/bots/cancel'),

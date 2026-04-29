@@ -1,6 +1,50 @@
 {
   "history": [
     {
+      "id": "mojhhtiwipf3",
+      "ts": 1777432628408,
+      "account": "acc_4",
+      "type": "connect",
+      "target": {
+        "username": "di_e1",
+        "id": "1033831422810669126"
+      },
+      "status": "success"
+    },
+    {
+      "id": "mojhc8e2u9et",
+      "ts": 1777432367738,
+      "account": "acc_3",
+      "type": "connect",
+      "target": {
+        "username": "di_e1",
+        "id": "1033831422810669126"
+      },
+      "status": "success"
+    },
+    {
+      "id": "mojh60jau5dy",
+      "ts": 1777432077622,
+      "account": "acc_2",
+      "type": "connect",
+      "target": {
+        "username": "di_e1",
+        "id": "1033831422810669126"
+      },
+      "status": "success"
+    },
+    {
+      "id": "mojgyswg2tm0",
+      "ts": 1777431741136,
+      "account": "acc_1",
+      "type": "connect",
+      "target": {
+        "username": "di_e1",
+        "id": "1033831422810669126"
+      },
+      "status": "success"
+    },
+    {
       "id": "mojgmvotznuq",
       "ts": 1777431184877,
       "account": "acc_2",
