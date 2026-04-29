@@ -14,6 +14,9 @@ export class BotsManager {
     this.tab = 'gen';        // 'gen' | 'lib'
     this.account = null;
     this.bots = [];
+    this.sections = { created: [], synced: [], teamBots: [] };
+    this.teams = [];
+    this.capacity = [];
     this.task = { state: 'idle' };
     this.config = { has2captcha: false };
     this.sse = null;
@@ -47,11 +50,26 @@ export class BotsManager {
         window.electronAPI.botsGetConfig()
       ]);
       this.bots = list?.bots || [];
+      this.sections = list?.sections || { created: this.bots, synced: [], teamBots: [] };
       this.task = status?.task || { state: 'idle' };
       this.config = cfg?.config || { has2captcha: false };
     } catch (e) {
       showNotification('Failed to load bots: ' + e.message, 'error');
     }
+    // Teams + capacity are non-fatal — load in the background.
+    this.refreshLibraryAux();
+  }
+
+  async refreshLibraryAux() {
+    try {
+      const [tr, cap] = await Promise.all([
+        window.electronAPI.botsTeams().catch(() => ({ teams: [] })),
+        window.electronAPI.botsCapacity().catch(() => ({ accounts: [] })),
+      ]);
+      this.teams = tr?.teams || [];
+      this.capacity = cap?.accounts || [];
+      if (this.tab === 'lib') this.renderLibrary();
+    } catch (e) { /* non-fatal */ }
   }
 
   openSSE() {
@@ -314,7 +332,13 @@ export class BotsManager {
   renderLibrary() { const b = this.contentArea.querySelector('#bm-body'); if (b && this.tab === 'lib') this.renderLibraryInto(b); this.renderHeader(); }
 
   renderLibraryInto(body) {
-    if (!this.bots.length) {
+    const created = (this.sections?.created || []).slice().sort((a, b) => a.number - b.number);
+    const synced  = (this.sections?.synced  || []).slice().sort((a, b) => a.number - b.number);
+    const teamBots = (this.sections?.teamBots || []).slice().sort((a, b) => a.number - b.number);
+    const teams = this.teams || [];
+    const capacity = this.capacity || [];
+
+    if (!this.bots.length && !teams.length) {
       body.innerHTML = `
         <div class="bm-empty">
           <div class="bm-empty-icon">${icon('users')}</div>
@@ -324,38 +348,110 @@ export class BotsManager {
       `;
       return;
     }
-    const sorted = this.bots.slice().sort((a, b) => a.number - b.number);
+
     body.innerHTML = `
       <div class="bm-lib-head">
-        <div class="bm-lib-count">${sorted.length} ${t('bm.bots')}</div>
+        <div class="bm-lib-count">${this.bots.length} ${t('bm.bots') || 'bots'}</div>
         <div class="bm-lib-actions">
           <a class="bm-btn primary" href="${window.electronAPI.botsAllTokensUrl('text')}" download>${icon('download')} ${t('bm.export_all')}</a>
           <a class="bm-btn ghost" href="${window.electronAPI.botsAllTokensUrl('json')}" download>${icon('download')} JSON</a>
           <button class="bm-btn ghost" id="bm-copy-all">${icon('copy')} ${t('bm.copy_all')}</button>
+          <button class="bm-btn ghost" id="bm-refresh-lib">${icon('refresh') || ''} ${t('bm.refresh') || 'Refresh'}</button>
         </div>
       </div>
-      <div class="bm-list">
-        ${sorted.map(b => this.botCardHtml(b)).join('')}
+
+      ${capacity.length ? `
+        <div class="bm-lib-section">
+          <div class="bm-lib-section-head">
+            <h3>${icon('shield')} ${t('bm.capacity_title') || 'Account capacity'}</h3>
+            <span class="bm-lib-section-sub">${t('bm.capacity_hint') || 'Discord caps applications per account'}</span>
+          </div>
+          <div class="bm-cap-grid">
+            ${capacity.map(c => this.capacityCardHtml(c)).join('')}
+          </div>
+        </div>
+      ` : ''}
+
+      <div class="bm-lib-section">
+        <div class="bm-lib-section-head">
+          <h3>${icon('plus')} ${t('bm.section_created') || 'Bots created here'} <span class="bm-pill">${created.length}</span></h3>
+          <span class="bm-lib-section-sub">${t('bm.section_created_hint') || 'Bots created through this app'}</span>
+        </div>
+        ${created.length ? `<div class="bm-list">${created.map(b => this.botCardHtml(b)).join('')}</div>` : `<div class="bm-empty-mini">${t('bm.section_created_empty') || 'No bots created yet'}</div>`}
+      </div>
+
+      <div class="bm-lib-section">
+        <div class="bm-lib-section-head">
+          <h3>${icon('users')} ${t('bm.section_synced') || 'Existing bots on Discord'} <span class="bm-pill">${synced.length}</span></h3>
+          <span class="bm-lib-section-sub">${t('bm.section_synced_hint') || 'Discovered from your connected accounts'}</span>
+        </div>
+        ${synced.length ? `<div class="bm-list">${synced.map(b => this.botCardHtml(b)).join('')}</div>` : `<div class="bm-empty-mini">${t('bm.section_synced_empty') || 'No external bots found on connected accounts'}</div>`}
+      </div>
+
+      <div class="bm-lib-section">
+        <div class="bm-lib-section-head">
+          <h3>${icon('users')} ${t('bm.section_teams') || 'Teams'} <span class="bm-pill">${teams.length}</span></h3>
+          <span class="bm-lib-section-sub">${t('bm.section_teams_hint') || 'Discord developer teams you belong to'}</span>
+        </div>
+        ${teams.length ? `<div class="bm-team-grid">${teams.map(team => this.teamCardHtml(team, teamBots)).join('')}</div>` : `<div class="bm-empty-mini">${t('bm.section_teams_empty') || 'You are not a member of any team'}</div>`}
       </div>
     `;
+
     body.querySelector('#bm-copy-all').addEventListener('click', async () => {
-      const text = sorted.map(b => `${String(b.number).padStart(3, '0')}\t${b.name}\t${b.token}\t${b.password || ''}`).join('\n');
+      const all = (this.bots || []).slice().sort((a, b) => a.number - b.number);
+      const text = all.map(b => `${String(b.number).padStart(3, '0')}\t${b.name}\t${b.token}\t${b.password || ''}`).join('\n');
       await copyToClipboard(text);
       showNotification(t('bm.copied_all'));
     });
+    body.querySelector('#bm-refresh-lib')?.addEventListener('click', () => this.refreshAll().then(() => this.renderLibrary()));
     body.querySelectorAll('.bm-card-bot').forEach(card => {
       const id = card.dataset.id;
-      const bot = sorted.find(x => x.id === id);
-      card.querySelector('.bm-copy-token').addEventListener('click', async () => { await copyToClipboard(bot.token); showNotification(t('bm.copied_token')); });
+      const bot = this.bots.find(x => x.id === id);
+      if (!bot) return;
+      card.querySelector('.bm-copy-token')?.addEventListener('click', async () => { await copyToClipboard(bot.token); showNotification(t('bm.copied_token')); });
       card.querySelector('.bm-copy-pw')?.addEventListener('click', async () => { await copyToClipboard(bot.password); showNotification(t('bm.copied_pw')); });
-      card.querySelector('.bm-toggle-token').addEventListener('click', () => {
+      card.querySelector('.bm-toggle-token')?.addEventListener('click', () => {
         const span = card.querySelector('.bm-token-val');
         const hidden = span.dataset.hidden === '1';
         span.textContent = hidden ? bot.token : maskToken(bot.token);
         span.dataset.hidden = hidden ? '0' : '1';
       });
-      card.querySelector('.bm-del').addEventListener('click', () => this.deleteBot(bot));
+      card.querySelector('.bm-del')?.addEventListener('click', () => this.deleteBot(bot));
     });
+  }
+
+  capacityCardHtml(c) {
+    const used = (c.used == null) ? '?' : c.used;
+    const limit = c.limit || 25;
+    const remaining = (c.remaining == null) ? '—' : c.remaining;
+    const pct = (typeof c.used === 'number') ? Math.min(100, Math.round((c.used / limit) * 100)) : 0;
+    const cls = pct >= 90 ? 'danger' : pct >= 70 ? 'warn' : 'ok';
+    const err = c.error ? `<div class="bm-cap-err">${escapeHtml(c.error)}</div>` : '';
+    return `
+      <div class="bm-cap-card">
+        <div class="bm-cap-head">
+          <span class="bm-cap-name">${escapeHtml(c.account)}</span>
+          <span class="bm-cap-num bm-cap-num-${cls}">${used} / ${limit}</span>
+        </div>
+        <div class="bm-cap-bar"><div class="bm-cap-bar-fill bm-cap-bar-${cls}" style="width:${pct}%"></div></div>
+        <div class="bm-cap-foot">${remaining === '—' ? '' : `${remaining} ${t('bm.cap_remaining') || 'slots remaining'}`}</div>
+        ${err}
+      </div>
+    `;
+  }
+
+  teamCardHtml(team, teamBots) {
+    const myBots = teamBots.filter(b => b.team?.id === team.id);
+    return `
+      <div class="bm-team-card">
+        <div class="bm-team-head">
+          <span class="bm-team-name">${icon('users')} ${escapeHtml(team.name)}</span>
+          <span class="bm-team-sub">${myBots.length} ${t('bm.bots') || 'bots'} · ${team.memberCount} ${t('bm.members') || 'members'}</span>
+        </div>
+        <div class="bm-team-meta">id: <code>${escapeHtml(team.id)}</code> · ${t('bm.via') || 'via'} <code>${escapeHtml(team.discoveredVia)}</code></div>
+        ${myBots.length ? `<div class="bm-team-bots">${myBots.map(b => `<span class="bm-team-bot-pill">#${String(b.number).padStart(3,'0')} ${escapeHtml(b.name)}</span>`).join('')}</div>` : ''}
+      </div>
+    `;
   }
 
   botCardHtml(b) {

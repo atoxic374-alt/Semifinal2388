@@ -1,6 +1,96 @@
 {
   "history": [
     {
+      "id": "mojgmvotznuq",
+      "ts": 1777431184877,
+      "account": "acc_2",
+      "type": "connect",
+      "target": {
+        "username": "di_e1",
+        "id": "1033831422810669126"
+      },
+      "status": "success"
+    },
+    {
+      "id": "mojg5i7uup5w",
+      "ts": 1777430374266,
+      "account": "ه",
+      "type": "disconnect",
+      "target": {},
+      "status": "success"
+    },
+    {
+      "id": "mojg5fda9rky",
+      "ts": 1777430370574,
+      "account": "ه",
+      "type": "delete_token",
+      "target": {
+        "name": "ه"
+      },
+      "status": "success"
+    },
+    {
+      "id": "mojg5bs87kmn",
+      "ts": 1777430365928,
+      "account": "acc_2",
+      "type": "connect",
+      "target": {
+        "username": "di_e1",
+        "id": "1033831422810669126"
+      },
+      "status": "success"
+    },
+    {
+      "id": "mojg3sipsqg3",
+      "ts": 1777430294305,
+      "account": "ه",
+      "type": "connect",
+      "target": {
+        "username": "di_e1",
+        "id": "1033831422810669126"
+      },
+      "status": "success"
+    },
+    {
+      "id": "mojg3otnucr4",
+      "ts": 1777430289515,
+      "account": "ه",
+      "type": "save_token",
+      "target": {
+        "name": "ه"
+      },
+      "status": "success"
+    },
+    {
+      "id": "mojg3fejd0bq",
+      "ts": 1777430277307,
+      "account": "Aa",
+      "type": "delete_token",
+      "target": {
+        "name": "Aa"
+      },
+      "status": "success"
+    },
+    {
+      "id": "mojg3dybxaqe",
+      "ts": 1777430275427,
+      "account": "acc_1",
+      "type": "disconnect",
+      "target": {},
+      "status": "success"
+    },
+    {
+      "id": "mojfynl34k0r",
+      "ts": 1777430054631,
+      "account": "acc_1",
+      "type": "connect",
+      "target": {
+        "username": "di_e1",
+        "id": "1033831422810669126"
+      },
+      "status": "success"
+    },
+    {
       "id": "mojfg9vw6wy4",
       "ts": 1777429197068,
       "account": "acc_1",

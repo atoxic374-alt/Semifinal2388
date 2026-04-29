@@ -422,6 +422,8 @@ window.electronAPI = {
 
   // ── Bot Tokens
   botsList:           () => apiCall('GET', '/api/bots'),
+  botsTeams:          () => apiCall('GET', '/api/bots/teams'),
+  botsCapacity:       () => apiCall('GET', '/api/bots/capacity'),
   botsAllTokensUrl:   (format = 'text') => `/api/bots/all-tokens?format=${encodeURIComponent(format)}`,
   botsDelete:         (id) => apiCall('DELETE', `/api/bots/${encodeURIComponent(id)}`),
   botsStatus:         () => apiCall('GET', '/api/bots/status'),
