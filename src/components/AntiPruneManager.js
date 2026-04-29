@@ -24,7 +24,7 @@ export class AntiPruneManager {
   connectStream() {
     this.disconnect();
     try {
-      this.es = new EventSource('/api/features/stream?types=antiprune');
+      this.es = new EventSource('/api/features/stream?types=antiprune,antiprune_warning');
       this.es.onmessage = (ev) => {
         try {
           const d = JSON.parse(ev.data);
@@ -32,6 +32,8 @@ export class AntiPruneManager {
             this.log.unshift(d.event);
             (d.event.ok ? sfx.success : sfx.fail)();
             if (this.tab === 'log') this.renderLog();
+          } else if (d.type === 'antiprune_warning') {
+            showToast(d.message || 'AntiPrune warning', 'error');
           }
         } catch (e) {}
       };

@@ -250,6 +250,7 @@ window.electronAPI = {
   // ── Presence / Status / Bio
   setPresence:    (payload) => testOr(TEST_RESPONSES.ok) || apiCall('POST', '/api/presence/set', payload),
   setBio:         (payload) => testOr(TEST_RESPONSES.ok) || apiCall('POST', '/api/presence/bio', payload),
+  getProfile:     (payload) => testOr({ profile: { bio: 'Test bio', status: 'online', avatar: null, banner: null } }) || apiCall('POST', '/api/presence/profile', payload),
   setAvatar:      (payload) => testOr(TEST_RESPONSES.ok) || apiCall('POST', '/api/presence/avatar', payload),
   setBanner:      (payload) => testOr(TEST_RESPONSES.ok) || apiCall('POST', '/api/presence/banner', payload),
   startRotation:  (payload) => testOr(TEST_RESPONSES.ok) || apiCall('POST', '/api/presence/rotate/start', payload),

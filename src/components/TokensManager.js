@@ -19,6 +19,7 @@ export class TokensManager {
     this.pActivityName = '';
     this.pActivityUrl  = ''; // for streaming
     this.bioText = '';
+    this.currentBio = '';
     this.avatarDataUrl = '';
     this.avatarFileName = '';
     this.bannerDataUrl = '';
@@ -81,7 +82,11 @@ export class TokensManager {
   tabBtn(id, ic, label) {
     return `<button class="mm-tab ${this.activeTab === id ? 'active' : ''}" onclick="window.tokensManager.switchTab('${id}')">${icon(ic)} ${label}</button>`;
   }
-  switchTab(tab) { this.activeTab = tab; this.render(); }
+  switchTab(tab) {
+    this.activeTab = tab;
+    this.render();
+    if (tab === 'bio') this.fetchCurrentBio();
+  }
 
   renderTab() {
     switch (this.activeTab) {
@@ -260,6 +265,14 @@ export class TokensManager {
   toggleSelected(n, on) { if (on && !this.selected.includes(n)) this.selected.push(n); else if (!on) this.selected = this.selected.filter(x => x !== n); }
   selectAll(all) { this.selected = all ? this.clients.map(c => c.name) : []; this.render(); }
   _allConnectedNames() { return this.clients.map(c => c.name); }
+  _resolveTargets(all = false) {
+    const tokens = all ? this._allConnectedNames() : this.selected;
+    if (!tokens.length) {
+      showNotification(t('tk.no_accounts'));
+      return null;
+    }
+    return tokens;
+  }
 
   // ─── Presence tab
   renderPresence() {
@@ -381,15 +394,17 @@ export class TokensManager {
   async applyPresence(all = false) {
     try {
       const tokens = all ? this._allConnectedNames() : this.selected;
+      if (!tokens.length) return showNotification(t('tk.no_accounts'));
       const r = await window.electronAPI.setPresence({
         tokens,
         status: this.pStatus,
         customStatus: this.pCustom,
         emoji: this.pEmoji || undefined
       });
-      const ok = (r.results || []).filter(x => x.ok).length;
-      const fail = (r.results || []).length - ok;
-      showNotification(`${t('tk.apply')} ${t('common.ok')} ${ok}  ${t('common.fail')} ${fail}`);
+      const s = r.summary || {};
+      const ok = s.ok ?? (r.results || []).filter(x => x.ok).length;
+      const fail = s.failed ?? ((r.results || []).length - ok);
+      showNotification(`${t('tk.apply')} ${t('common.ok')} ${ok}  ${t('common.fail')} ${fail}${fail ? ' ⚠' : ''}`);
     } catch (e) { showNotification(`${t('mm.failed')}: ${e.message}`); }
   }
   async clearCustom() { this.pCustom = ''; this.pEmoji = ''; await this.applyPresence(); }
@@ -406,19 +421,33 @@ export class TokensManager {
         <div class="mm-field">
           <textarea rows="6" placeholder="${t('tk.your_bio')}" oninput="window.tokensManager.bioText=this.value">${this.escHtml(this.bioText)}</textarea>
         </div>
+        <div class="mm-info-row"><strong>Current bio:</strong> <span>${this.escHtml(this.currentBio || '—')}</span></div>
         <div class="mm-actions-row">
           <button class="mm-btn primary glow" onclick="window.tokensManager.applyBio()">${t('tk.apply_bio')}</button>
           <button class="mm-btn success" onclick="window.tokensManager.applyBio(true)">${t('tk.apply_all')}</button>
+          <button class="mm-btn ghost" onclick="window.tokensManager.fetchCurrentBio()">${icon('refresh')} Refresh current</button>
         </div>
       </div>
     `;
   }
   async applyBio(all = false) {
-    const tokens = all ? this._allConnectedNames() : this.selected;
+    const tokens = this._resolveTargets(all); if (!tokens) return;
     const r = await window.electronAPI.setBio({ tokens, bio: this.bioText });
     const ok = (r.results || []).filter(x => x.ok).length;
     const fail = (r.results || []).length - ok;
     showNotification(`${t('tk.profile_bio')} ${t('common.ok')} ${ok}  ${t('common.fail')} ${fail}`);
+    if (ok > 0) await this.fetchCurrentBio(tokens[0]);
+  }
+  async fetchCurrentBio(tokenName = null) {
+    try {
+      const tok = tokenName || this.selected[0] || this._allConnectedNames()[0];
+      if (!tok) return;
+      const r = await window.electronAPI.getProfile({ token: tok });
+      if (r?.success && r.profile) {
+        this.currentBio = r.profile.bio || '';
+        this.render();
+      }
+    } catch (_) {}
   }
 
   // ─── Avatar tab (avatar + banner)
@@ -498,7 +527,7 @@ export class TokensManager {
   }
   async applyAvatar(all = false) {
     if (!this.avatarDataUrl) return showNotification(t('tk.choose_first'));
-    const tokens = all ? this._allConnectedNames() : this.selected;
+    const tokens = this._resolveTargets(all); if (!tokens) return;
     const r = await window.electronAPI.setAvatar({ tokens, avatar: this.avatarDataUrl });
     const ok = (r.results || []).filter(x => x.ok).length;
     const fail = (r.results || []).length - ok;
@@ -506,7 +535,7 @@ export class TokensManager {
   }
   async applyBanner(all = false) {
     if (!this.bannerDataUrl) return showNotification(t('tk.choose_first'));
-    const tokens = all ? this._allConnectedNames() : this.selected;
+    const tokens = this._resolveTargets(all); if (!tokens) return;
     const r = await window.electronAPI.setBanner({ tokens, banner: this.bannerDataUrl });
     const ok = (r.results || []).filter(x => x.ok).length;
     const failed = (r.results || []).filter(x => !x.ok);
@@ -573,14 +602,14 @@ export class TokensManager {
   async startRotate(all = false) {
     const states = this.rotStates.filter(s => s.status || s.customStatus || s.emoji);
     if (!states.length) return showNotification('Add at least one state');
-    const tokens = all ? this._allConnectedNames() : this.selected;
+    const tokens = this._resolveTargets(all); if (!tokens) return;
     const r = await window.electronAPI.startRotation({ tokens, states, intervalMs: this.rotInterval * 1000 });
-    if (r.success) showNotification(`${t('tk.start_rotation')}: ${(r.rotating || []).length}`);
+    if (r.success) showNotification(`${t('tk.start_rotation')}: ${(r.rotating || []).length} • ${r.states || states.length} states • ${Math.round((r.intervalMs || this.rotInterval * 1000) / 1000)}s`);
     else showNotification(`${t('mm.failed')}: ${r.error}`);
   }
   async stopRotate() {
-    await window.electronAPI.stopRotation({ tokens: this.selected });
-    showNotification(t('tk.stop_rotation'));
+    const r = await window.electronAPI.stopRotation({ tokens: this.selected });
+    showNotification(`${t('tk.stop_rotation')}: ${r.count || (r.stopped || []).length}`);
   }
 
   // ─── Activity Simulator tab
@@ -616,7 +645,7 @@ export class TokensManager {
     `;
   }
   async startActivity(all = false) {
-    const tokens = all ? this._allConnectedNames() : this.selected;
+    const tokens = this._resolveTargets(all); if (!tokens) return;
     const modes = Object.keys(this.actModes).filter(k => this.actModes[k]);
     if (!modes.length) return showNotification('Pick at least one mode');
     const r = await window.electronAPI.startActivity({ tokens, modes, minSec: this.actMin, maxSec: this.actMax });
