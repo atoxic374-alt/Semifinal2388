@@ -446,6 +446,72 @@ async function humanizedSend(channel, text, { typing = true } = {}) {
   return channel.send(text);
 }
 
+// ───────────────────────────────────────────────
+// Smart per-account / per-action cooldown
+// Mimics natural human pacing for destructive / spammy operations
+// (leave server, close DM, delete message, unfriend, send) so Discord's
+// anti-abuse heuristics don't flag the account for "tool-like" speed.
+// ───────────────────────────────────────────────
+const _coolStore = new Map(); // key → { last:number, recent:number[] }
+
+const COOLDOWN_PROFILES = {
+  'leave-server':  { min: 2400, max: 4200, hardMinGap: 2200 },
+  'leave-group':   { min: 2400, max: 4200, hardMinGap: 2200 },
+  'close-dm':      { min: 2000, max: 3600, hardMinGap: 1900 },
+  'delete-msg':    { min: 1800, max: 3200, hardMinGap: 1600 },
+  'unfriend':      { min: 2000, max: 3800, hardMinGap: 1900 },
+  'send-msg':      { min: 1200, max: 2600, hardMinGap: 1100 },
+  'react':         { min:  900, max: 2000, hardMinGap:  800 },
+};
+
+function _coolKey(token, action) {
+  // Use the last chars of the token as an in-memory id (token is not persisted).
+  const id = (typeof token === 'string' ? token : 'anon').slice(-14);
+  return `${id}|${action}`;
+}
+
+async function humanCooldown(token, action) {
+  const prof = COOLDOWN_PROFILES[action];
+  if (!prof) return;
+  const k = _coolKey(token, action);
+  const now = Date.now();
+  let st = _coolStore.get(k);
+  if (!st) { st = { last: 0, recent: [] }; _coolStore.set(k, st); }
+
+  // keep only last 60 seconds of activity
+  st.recent = st.recent.filter(t => now - t < 60000);
+
+  // base wait with jitter
+  let wait = jitter(prof.min, prof.max);
+
+  // fatigue: each recent op in the last 60s adds ~8% (capped at +120%)
+  const fatigue = Math.min(1.2, st.recent.length * 0.08);
+  wait = Math.floor(wait * (1 + fatigue));
+
+  // burst guard: every 7–12 ops inject a longer "breather" (2–5s extra)
+  if (st.recent.length > 0 && st.recent.length % jitter(7, 13) === 0) {
+    wait += jitter(2000, 5000);
+  }
+
+  // enforce hard minimum gap from the previous same-action call
+  const sinceLast = now - st.last;
+  if (sinceLast < prof.hardMinGap) {
+    wait = Math.max(wait, prof.hardMinGap - sinceLast);
+  }
+
+  if (wait > 0) await sleep(wait);
+  st.last = Date.now();
+  st.recent.push(st.last);
+}
+
+// periodic cleanup of stale cooldown entries
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, st] of _coolStore) {
+    if (now - st.last > 300000) _coolStore.delete(k);
+  }
+}, 60000).unref?.();
+
 // Standardized error handler
 function ok(res, payload = {}) { res.json({ success: true, ...payload }); }
 function fail(res, err) {
@@ -657,6 +723,7 @@ app.delete('/api/discord/friends/:friendId', async (req, res) => {
   try {
     const c = pickClient(req);
     if (!c?.token) return fail(res, new Error('Not connected'));
+    await humanCooldown(c.token, 'unfriend');
     await axios.delete(`https://discord.com/api/v9/users/@me/relationships/${req.params.friendId}`, {
       headers: discordHeaders(c.token)
     });
@@ -706,6 +773,7 @@ app.post('/api/discord/servers/:serverId/leave', async (req, res) => {
     if (!c?.guilds) return fail(res, new Error('Not connected'));
     const guild = c.guilds.cache.get(req.params.serverId);
     if (!guild) return fail(res, new Error('Server not found'));
+    await humanCooldown(c.token, 'leave-server');
     await guild.leave();
     ok(res);
   } catch (e) { fail(res, e); }
@@ -801,6 +869,7 @@ app.delete('/api/discord/dms/:channelId/messages/:messageId', async (req, res) =
     const channel = await c.channels.fetch(req.params.channelId);
     if (!channel || channel.type !== 'DM') return fail(res, new Error('Invalid DM channel'));
     const m = await channel.messages.fetch(req.params.messageId);
+    await humanCooldown(c.token, 'delete-msg');
     await m.delete();
     ok(res);
   } catch (e) { fail(res, e); }
@@ -812,6 +881,7 @@ app.post('/api/discord/dms/:channelId/close', async (req, res) => {
     if (!c?.user) return fail(res, new Error('Not connected'));
     const channel = await c.channels.fetch(req.params.channelId);
     if (!channel || channel.type !== 'DM') return fail(res, new Error('Invalid DM channel'));
+    await humanCooldown(c.token, 'close-dm');
     await channel.delete();
     ok(res);
   } catch (e) { fail(res, e); }
@@ -862,6 +932,7 @@ app.post('/api/discord/groups/:groupId/leave', async (req, res) => {
     if (!c?.user) return fail(res, new Error('Not connected'));
     const g = await c.channels.fetch(req.params.groupId);
     if (!g || g.type !== 'GROUP_DM') return fail(res, new Error('Invalid group'));
+    await humanCooldown(c.token, 'leave-group');
     await g.delete();
     ok(res);
   } catch (e) { fail(res, e); }
@@ -888,6 +959,7 @@ app.delete('/api/discord/groups/:channelId/messages/:messageId', async (req, res
   try {
     const c = pickClient(req);
     if (!c?.token) return fail(res, new Error('Not connected'));
+    await humanCooldown(c.token, 'delete-msg');
     await axios.delete(`https://discord.com/api/v9/channels/${req.params.channelId}/messages/${req.params.messageId}`, {
       headers: discordHeaders(c.token)
     });
@@ -2146,6 +2218,15 @@ app.post('/api/private/send', async (req, res) => {
         return null;
       }).filter(Boolean);
     }
+    await humanCooldown(c.token, 'send-msg');
+    // optional typing simulation for short messages (only if pure text, no files)
+    if (content && !(files && files.length) && ch.sendTyping) {
+      try {
+        await ch.sendTyping();
+        const tDelay = Math.min(2500, Math.max(400, String(content).length * jitter(60, 130)));
+        await sleep(tDelay);
+      } catch (_) {}
+    }
     const m = await ch.send(opts);
     ok(res, { id: m.id, ts: m.createdTimestamp });
   } catch (e) { fail(res, e); }
@@ -2159,6 +2240,7 @@ app.post('/api/private/react', async (req, res) => {
     if (!channelId || !messageId || !emoji) return fail(res, new Error('channelId, messageId, emoji required'));
     const ch = await c.channels.fetch(channelId);
     const m = await ch.messages.fetch(messageId);
+    await humanCooldown(c.token, 'react');
     if (remove) {
       const r = m.reactions?.cache?.find(x => x.emoji.name === emoji || (x.emoji.id && `<:${x.emoji.name}:${x.emoji.id}>` === emoji));
       if (r) await r.users.remove(c.user.id);
