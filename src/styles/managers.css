@@ -1553,7 +1553,12 @@ body.rtl .pm-toast { right: auto; left: 24px; }
 .bm-captcha { margin-top: 12px; padding: 12px; background: #15171a; border-radius: 9px; border: 1px solid rgba(245,158,11,.35); }
 .bm-captcha-msg { color: #f59e0b; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
 .bm-captcha-msg svg { width: 14px; height: 14px; }
-.bm-captcha-meta { font-size: 11px; color: #9aa0a8; margin-bottom: 8px; }
+.bm-captcha-meta { display: flex; flex-direction: column; gap: 6px; font-size: 11px; color: #9aa0a8; margin-bottom: 8px; }
+.bm-captcha-field { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bm-captcha-label { min-width: 64px; color: #72767d; text-transform: uppercase; letter-spacing: .5px; font-size: 10px; font-weight: 600; }
+.bm-captcha-val { flex: 1 1 160px; background: #0f1114; padding: 4px 8px; border-radius: 5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: #e3e6ea; word-break: break-all; cursor: pointer; border: 1px solid #2a2d31; transition: border-color .15s; }
+.bm-captcha-val:hover { border-color: #5865f2; }
+.bm-cap-copy { padding: 4px 7px !important; }
 .bm-captcha-meta code { background: #0f1114; padding: 1px 5px; border-radius: 4px; }
 .bm-captcha-row { display: flex; gap: 8px; margin-bottom: 4px; }
 .bm-captcha-row input { flex: 1; background: #0f1114; border: 1px solid #2a2d31; color: #fff; padding: 8px 10px; border-radius: 7px; font-size: 12px; }

@@ -542,21 +542,39 @@ export class VoiceManager {
   async joinSelected() {
     if (!this._needChannel() || !this._needAccounts()) return;
     try {
-      const r = await window.electronAPI.voiceJoin({ accounts: this._accounts(), guildId: this.selectedGuild.guildId, channelId: this.selectedChannel.id });
-      const ok = (r.results||[]).filter(x=>x.ok).length;
+      const accs = this._accounts();
+      const r = await window.electronAPI.voiceJoin({ accounts: accs, guildId: this.selectedGuild.guildId, channelId: this.selectedChannel.id });
+      if (r && r.success === false) { showNotification(r.error || t('vm.error'), 'error'); return; }
+      const results = r.results || [];
+      const ok = results.filter(x=>x.ok).length;
       await this._refreshSessions();
-      showNotification(`${t('vm.joined')} ${ok}/${this._accounts().length}`, ok ? 'success' : 'error');
-    } catch(e) { showNotification(t('vm.error'), 'error'); }
+      if (ok === 0) {
+        const firstErr = results.find(x => !x.ok)?.error || r.error || t('vm.error');
+        showNotification(`${t('vm.joined')} 0/${accs.length} — ${firstErr}`, 'error');
+      } else if (ok < accs.length) {
+        const firstErr = results.find(x => !x.ok)?.error || '';
+        showNotification(`${t('vm.joined')} ${ok}/${accs.length}${firstErr ? ' — ' + firstErr : ''}`, 'error');
+      } else {
+        showNotification(`${t('vm.joined')} ${ok}/${accs.length}`, 'success');
+      }
+    } catch(e) { showNotification(e?.message || t('vm.error'), 'error'); }
   }
 
   async joinAllToSelected() {
     if (!this._needChannel()) return;
     try {
       const r = await window.electronAPI.voiceJoinAll({ guildId: this.selectedGuild.guildId, channelId: this.selectedChannel.id });
-      const ok = (r.results||[]).filter(x=>x.ok).length;
+      if (r && r.success === false) { showNotification(r.error || t('vm.error'), 'error'); return; }
+      const results = r.results || [];
+      const ok = results.filter(x=>x.ok).length;
       await this._refreshSessions();
-      showNotification(`${t('vm.joined_all')} ${ok}`, 'success');
-    } catch(e) { showNotification(t('vm.error'), 'error'); }
+      if (ok === 0) {
+        const firstErr = results.find(x => !x.ok)?.error || t('vm.error');
+        showNotification(`${t('vm.joined_all')} 0 — ${firstErr}`, 'error');
+      } else {
+        showNotification(`${t('vm.joined_all')} ${ok}`, 'success');
+      }
+    } catch(e) { showNotification(e?.message || t('vm.error'), 'error'); }
   }
 
   async leaveSelected() {

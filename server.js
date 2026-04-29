@@ -2746,7 +2746,8 @@ function botSnapshot() {
     captcha: botTask.pendingCaptcha ? {
       sitekey: botTask.pendingCaptcha.sitekey,
       service: botTask.pendingCaptcha.service,
-      rqdata: botTask.pendingCaptcha.rqdata
+      rqdata: botTask.pendingCaptcha.rqdata,
+      pageUrl: botTask.pendingCaptcha.pageUrl || 'https://discord.com'
     } : null,
     lastError: botTask.lastError
   };
@@ -2790,7 +2791,8 @@ async function solveCaptcha2captcha(apiKey, service, sitekey, pageUrl, rqdata) {
   throw new Error('2captcha timed out');
 }
 
-async function discordRequestWithCaptcha({ method, url, token, body, pageUrl = 'https://discord.com', netOpts = {} }) {
+async function discordRequestWithCaptcha({ method, url, token, body, pageUrl: pageUrlArg, netOpts = {} }) {
+  const pageUrl = pageUrlArg || 'https://discord.com';
   const headers = { Authorization: token, 'Content-Type': 'application/json' };
   let captchaKey = null, captchaRqtoken = null;
   for (let attempt = 0; attempt < 5; attempt++) {
@@ -2824,10 +2826,10 @@ async function discordRequestWithCaptcha({ method, url, token, body, pageUrl = '
             token2 = await solveCaptcha2captcha(apiKey, service, sitekey, pageUrl, rqdata);
           } catch (err) {
             // Auto-solve failed → fall through to manual
-            token2 = await waitManualCaptcha({ sitekey, service, rqdata, rqtoken });
+            token2 = await waitManualCaptcha({ sitekey, service, rqdata, rqtoken, pageUrl });
           }
         } else {
-          token2 = await waitManualCaptcha({ sitekey, service, rqdata, rqtoken });
+          token2 = await waitManualCaptcha({ sitekey, service, rqdata, rqtoken, pageUrl });
         }
         captchaKey = token2;
         captchaRqtoken = rqtoken;
@@ -2846,11 +2848,11 @@ async function discordRequestWithCaptcha({ method, url, token, body, pageUrl = '
   throw new Error('Captcha retry exhausted');
 }
 
-function waitManualCaptcha({ sitekey, service, rqdata, rqtoken }) {
+function waitManualCaptcha({ sitekey, service, rqdata, rqtoken, pageUrl }) {
   return new Promise((resolve, reject) => {
     botTask.state = 'waiting_captcha';
-    botTask.pendingCaptcha = { sitekey, service, rqdata, rqtoken, resolve, reject };
-    pushBotEvent('bot_captcha', { sitekey, service });
+    botTask.pendingCaptcha = { sitekey, service, rqdata, rqtoken, pageUrl: pageUrl || 'https://discord.com', resolve, reject };
+    pushBotEvent('bot_captcha', { sitekey, service, pageUrl: pageUrl || 'https://discord.com' });
     // 10-minute timeout
     setTimeout(() => {
       if (botTask.pendingCaptcha && botTask.pendingCaptcha.resolve === resolve) {

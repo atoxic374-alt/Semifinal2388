@@ -5,7 +5,12 @@ async function apiCall(method, url, body) {
     credentials: 'same-origin',
   };
   if (body !== undefined) opts.body = JSON.stringify(body);
-  const res = await fetch(url, opts);
+  let res;
+  try {
+    res = await fetch(url, opts);
+  } catch (e) {
+    return { success: false, error: 'Network error: ' + (e?.message || 'fetch failed') };
+  }
   // If the server says we lost the session, bounce back to the login page so
   // the user gets a clean re-auth instead of a confusing "401" string.
   if (res.status === 401 && !url.startsWith('/api/auth/')) {
@@ -14,7 +19,23 @@ async function apiCall(method, url, body) {
     }
     return { success: false, error: 'unauthorized' };
   }
-  return res.json();
+  // Robust JSON parsing — some proxy / edge errors return HTML, which would
+  // otherwise crash with "Unexpected token '<' in JSON at position 0" and
+  // bubble up as a confusing notification.
+  const ctype = (res.headers?.get?.('content-type') || '').toLowerCase();
+  const text  = await res.text();
+  if (ctype.includes('application/json') || /^[\s\uFEFF]*[{[]/.test(text)) {
+    try { return JSON.parse(text); }
+    catch (_) { /* fall through to graceful error */ }
+  }
+  // Non-JSON payload — surface a short, useful error instead of HTML noise.
+  const snippet = (text || '').replace(/\s+/g, ' ').slice(0, 120).trim();
+  return {
+    success: false,
+    error: `Server returned ${res.status} ${res.statusText || ''}`.trim()
+         + (snippet ? ` — ${snippet}` : ''),
+    httpStatus: res.status
+  };
 }
 
 // Build a small library of test images to make test mode look real.

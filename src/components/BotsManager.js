@@ -130,10 +130,30 @@ export class BotsManager {
       cancelled: t('bm.state_cancelled'),
       error: t('bm.state_error')
     })[t1.state] || t1.state;
+    const _sitekey = t1.captcha?.sitekey || '';
+    const _service = t1.captcha?.service || 'hcaptcha';
+    const _pageUrl = t1.captcha?.pageUrl || 'https://discord.com';
+    const _demoUrl = `https://accounts.hcaptcha.com/demo?sitekey=${encodeURIComponent(_sitekey)}`;
     const captchaPanel = t1.waitingCaptcha ? `
       <div class="bm-captcha">
         <div class="bm-captcha-msg">${icon('shield')} ${t('bm.captcha_panel_msg')}</div>
-        <div class="bm-captcha-meta">sitekey: <code>${escapeHtml(t1.captcha?.sitekey || '')}</code> · service: <code>${escapeHtml(t1.captcha?.service || 'hcaptcha')}</code></div>
+        <div class="bm-captcha-meta">
+          <div class="bm-captcha-field">
+            <span class="bm-captcha-label">sitekey</span>
+            <code class="bm-captcha-val" data-cap-copy="${escapeAttr(_sitekey)}" title="Click to copy">${escapeHtml(_sitekey)}</code>
+            <button class="bm-btn ghost xsmall bm-cap-copy" data-cap-copy="${escapeAttr(_sitekey)}" title="Copy sitekey">${icon('copy')}</button>
+          </div>
+          <div class="bm-captcha-field">
+            <span class="bm-captcha-label">page URL</span>
+            <code class="bm-captcha-val" data-cap-copy="${escapeAttr(_pageUrl)}" title="Click to copy">${escapeHtml(_pageUrl)}</code>
+            <button class="bm-btn ghost xsmall bm-cap-copy" data-cap-copy="${escapeAttr(_pageUrl)}" title="Copy URL">${icon('copy')}</button>
+          </div>
+          <div class="bm-captcha-field">
+            <span class="bm-captcha-label">service</span>
+            <code class="bm-captcha-val">${escapeHtml(_service)}</code>
+            ${_sitekey ? `<a class="bm-btn ghost xsmall" href="${_demoUrl}" target="_blank" rel="noopener" title="Open hCaptcha demo">${icon('external')}</a>` : ''}
+          </div>
+        </div>
         <div class="bm-captcha-row">
           <input type="text" id="bm-captcha-input" placeholder="${t('bm.captcha_placeholder')}" />
           <button class="bm-btn primary" id="bm-captcha-submit">${icon('check')} ${t('bm.submit')}</button>
@@ -156,6 +176,16 @@ export class BotsManager {
     wrap.querySelector('#bm-cancel')?.addEventListener('click', () => this.cancelTask());
     const sub = wrap.querySelector('#bm-captcha-submit');
     if (sub) sub.addEventListener('click', () => this.submitCaptcha());
+    // Copy buttons / clickable values for sitekey / page URL
+    wrap.querySelectorAll('[data-cap-copy]').forEach(el => {
+      el.addEventListener('click', async (ev) => {
+        ev.preventDefault();
+        const v = el.getAttribute('data-cap-copy') || '';
+        if (!v) return;
+        try { await copyToClipboard(v); showNotification(t('common.copied') || 'Copied', 'success'); }
+        catch (e) { showNotification('Copy failed', 'error'); }
+      });
+    });
   }
 
   async renderBody() {
