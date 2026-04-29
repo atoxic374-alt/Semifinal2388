@@ -28,6 +28,7 @@ export class VoiceManager {
     this._activeAccount = null;
     this._pickerClients = [];
     this._timer = null;
+    this._expandedAccount = null;
   }
 
   async init() {
@@ -88,6 +89,37 @@ export class VoiceManager {
 
     const sessCount = this._sessions.length;
     const taskCount = this._rotations.length + this._cycles.length;
+    const voiceByAccount = new Map();
+    for (const s of this._sessions) voiceByAccount.set(s.name, (voiceByAccount.get(s.name) || 0) + 1);
+    const accountRows = (this._pickerClients || []).map(c => {
+      const inVoice = voiceByAccount.get(c.name) || 0;
+      const status = c.status || 'offline';
+      const sess = this._sessions.find(s => s.name === c.name);
+      const guild = this._guilds.find(g => g.account === c.name && g.guildId === sess?.guildId);
+      const ch = guild?.voiceChannels?.find(v => v.id === sess?.channelId);
+      const expanded = this._expandedAccount === c.name;
+      return `
+        <div class="vm-acc-card ${expanded ? 'open' : ''}">
+          <button class="vm-acc-row" onclick="window.voiceManager.toggleAccountCard('${this._esc(c.name)}')">
+            <img class="vm-acc-avatar" src="${this._esc(c.avatar || '/discord.png')}" onerror="this.src='/discord.png'" alt="">
+            <span class="vm-acc-name">${this._esc(c.displayName || c.username || c.name)}</span>
+            <span class="vm-acc-expand">${icon('chevron_d')}</span>
+          </button>
+          <div class="vm-acc-details">
+            <div class="vm-acc-meta"><span class="vm-acc-dot ${status}"></span> ${status}</div>
+            <div class="vm-acc-meta">${icon('radio')} ${inVoice ? `${inVoice} ${t('vm.active')}` : t('vm.no_sessions_short')}</div>
+            <div class="vm-acc-meta">${icon('shield')} ${this._esc(guild?.guildName || '—')}</div>
+            <div class="vm-acc-meta">${icon('volume')} ${this._esc(ch?.name || '—')}</div>
+            ${sess ? `<div class="vm-acc-state">
+              ${sess.selfMute ? icon('mic_off') : icon('mic')}
+              ${sess.selfDeaf ? icon('headphones') : ''}
+              ${sess.selfVideo ? icon('video') : ''}
+              ${sess.selfStream ? icon('monitor') : ''}
+            </div>` : ''}
+          </div>
+        </div>
+      `;
+    }).join('');
 
     return `
       <div class="vm-home">
@@ -142,9 +174,17 @@ export class VoiceManager {
             </div>
             <span class="vm-nav-card-arrow">${icon('chevron_r')}</span>
           </button>
+          <div class="vm-section-label">${t('vm.accounts')}</div>
+          <div class="vm-acc-list">
+            ${accountRows || `<div class="vm-empty">${t('vm.no_sessions_short')}</div>`}
+          </div>
         </div>
       </div>
     `;
+  }
+  toggleAccountCard(name) {
+    this._expandedAccount = (this._expandedAccount === name) ? null : name;
+    if (this._view === 'home') this._render('home', false);
   }
 
   // ── Sub-view wrapper ──────────────────────────────

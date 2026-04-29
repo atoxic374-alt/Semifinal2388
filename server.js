@@ -1096,11 +1096,21 @@ function resolvePresence(s) {
   if (['online','idle','dnd','invisible','offline'].includes(v)) return v === 'offline' ? 'invisible' : v;
   return 'online';
 }
+function resolveTargetsOrFail(tokens = []) {
+  const targets = (Array.isArray(tokens) && tokens.length ? tokens : (activeRef.get() ? [activeRef.get()] : []));
+  return targets;
+}
 
 app.post('/api/presence/set', async (req, res) => {
   try {
     const { tokens = [], status, customStatus, activity, emoji } = req.body;
-    const targets = (tokens.length ? tokens : (activeRef.get() ? [activeRef.get()] : []));
+    const targets = resolveTargetsOrFail(tokens);
+    if (!targets.length) return fail(res, new Error('No target accounts selected'));
+    if (activity && (!activity.name || typeof activity.name !== 'string' || activity.name.trim().length < 2)) {
+      return fail(res, new Error('Activity name must be at least 2 characters'));
+    }
+    if (customStatus !== undefined && typeof customStatus !== 'string') return fail(res, new Error('customStatus must be a string'));
+    if (emoji !== undefined && typeof emoji !== 'string') return fail(res, new Error('emoji must be a string'));
     const results = [];
     for (const n of targets) {
       const c = getClientByName(n);
@@ -1121,7 +1131,8 @@ app.post('/api/presence/set', async (req, res) => {
         results.push({ name: n, ok: true });
       } catch (e) { results.push({ name: n, ok: false, error: e.message }); }
     }
-    ok(res, { results });
+    const okCount = results.filter(r => r.ok).length;
+    ok(res, { results, summary: { total: results.length, ok: okCount, failed: results.length - okCount } });
   } catch (e) { fail(res, e); }
 });
 
@@ -1133,7 +1144,8 @@ app.post('/api/presence/bio', async (req, res) => {
     if (bio.length > MAX_BIO_LEN) {
       return fail(res, new Error(`Bio is too long: ${bio.length}/${MAX_BIO_LEN} chars. Discord rejects anything longer.`));
     }
-    const targets = (tokens.length ? tokens : (activeRef.get() ? [activeRef.get()] : []));
+    const targets = resolveTargetsOrFail(tokens);
+    if (!targets.length) return fail(res, new Error('No target accounts selected'));
     const results = [];
     for (const n of targets) {
       const entry = clients.get(n);
@@ -1147,6 +1159,34 @@ app.post('/api/presence/bio', async (req, res) => {
       await sleep(jitter(300, 800));
     }
     ok(res, { results });
+  } catch (e) { fail(res, e); }
+});
+
+app.post('/api/presence/profile', async (req, res) => {
+  try {
+    const { token } = req.body || {};
+    const target = token || activeRef.get();
+    if (!target) return fail(res, new Error('No target token selected'));
+    const entry = clients.get(target);
+    if (!entry?.client?.token) return fail(res, new Error('Target is not connected'));
+    const headers = discordHeaders(entry.client.token);
+    const [me, profile] = await Promise.all([
+      axios.get('https://discord.com/api/v9/users/@me', { headers }),
+      axios.get('https://discord.com/api/v9/users/@me/profile', { headers })
+    ]);
+    const d = me.data || {};
+    const p = profile.data || {};
+    const avatar = d.avatar ? `https://cdn.discordapp.com/avatars/${d.id}/${d.avatar}.${String(d.avatar).startsWith('a_') ? 'gif' : 'png'}?size=256` : null;
+    const banner = d.banner ? `https://cdn.discordapp.com/banners/${d.id}/${d.banner}.${String(d.banner).startsWith('a_') ? 'gif' : 'png'}?size=512` : null;
+    ok(res, {
+      profile: {
+        token: target,
+        bio: p?.user_profile?.bio ?? '',
+        status: entry.client.user?.presence?.status || 'unknown',
+        avatar,
+        banner
+      }
+    });
   } catch (e) { fail(res, e); }
 });
 
@@ -1189,10 +1229,17 @@ app.post('/api/presence/rotate/start', (req, res) => {
   try {
     const { tokens = [], states = [], intervalMs = 60000 } = req.body;
     if (!states.length) return fail(res, new Error('No states provided'));
-    const targets = (tokens.length ? tokens : (activeRef.get() ? [activeRef.get()] : []));
-    for (const n of targets) _startRotationFor(n, states, intervalMs);
+    const targets = resolveTargetsOrFail(tokens);
+    if (!targets.length) return fail(res, new Error('No target accounts selected'));
+    const safeStates = states.map((s) => ({
+      status: resolvePresence(s?.status),
+      customStatus: typeof s?.customStatus === 'string' ? s.customStatus.slice(0, 128) : '',
+      emoji: typeof s?.emoji === 'string' ? s.emoji.slice(0, 64) : ''
+    }));
+    const safeInterval = Math.max(15000, parseInt(intervalMs || 60000) || 60000);
+    for (const n of targets) _startRotationFor(n, safeStates, safeInterval);
     _persistRotations();
-    ok(res, { rotating: targets });
+    ok(res, { rotating: targets, intervalMs: safeInterval, states: safeStates.length });
   } catch (e) { fail(res, e); }
 });
 
@@ -1206,7 +1253,7 @@ app.post('/api/presence/rotate/stop', (req, res) => {
       statusRotations.delete(n);
     }
     _persistRotations();
-    ok(res, { stopped: targets });
+    ok(res, { stopped: targets, count: targets.length });
   } catch (e) { fail(res, e); }
 });
 
@@ -1242,7 +1289,8 @@ app.post('/api/presence/avatar', async (req, res) => {
         return fail(res, new Error(`Image is too large: ${(sz / (1024*1024)).toFixed(2)} MB. Max ${(MAX_AVATAR_BYTES/(1024*1024)).toFixed(0)} MB.`));
       }
     }
-    const targets = (tokens.length ? tokens : (activeRef.get() ? [activeRef.get()] : []));
+    const targets = resolveTargetsOrFail(tokens);
+    if (!targets.length) return fail(res, new Error('No target accounts selected'));
     const results = [];
     for (const n of targets) {
       const c = getClientByName(n);
@@ -1275,7 +1323,8 @@ app.post('/api/presence/banner', async (req, res) => {
         return fail(res, new Error(`Banner is too large: ${(sz / (1024*1024)).toFixed(2)} MB. Max ${(MAX_BANNER_BYTES/(1024*1024)).toFixed(0)} MB.`));
       }
     }
-    const targets = (tokens.length ? tokens : (activeRef.get() ? [activeRef.get()] : []));
+    const targets = resolveTargetsOrFail(tokens);
+    if (!targets.length) return fail(res, new Error('No target accounts selected'));
     const results = [];
     for (const n of targets) {
       const entry = clients.get(n);
@@ -1607,6 +1656,21 @@ function attachReactionListener({ tokens, scope, mode, emojis = [], buttonNames 
   for (const tName of tokens) {
     const c = getClientByName(tName);
     if (!c) continue;
+    const clickByCustomIdFallback = async (msg, customId) => {
+      try {
+        if (!msg?.channel?.id || !msg?.id || !customId || !c?.token) return false;
+        await axios.post(`https://discord.com/api/v9/interactions`, {
+          type: 3,
+          guild_id: msg.guild?.id || null,
+          channel_id: msg.channel.id,
+          message_id: msg.id,
+          application_id: msg.applicationId || msg.author?.id,
+          session_id: c.ws?.sessionId || undefined,
+          data: { component_type: 2, custom_id: customId }
+        }, { headers: discordHeaders(c.token) });
+        return true;
+      } catch (_) { return false; }
+    };
 
     // Auto-react on new messages
     const onMessage = async (msg) => {
@@ -1633,7 +1697,9 @@ function attachReactionListener({ tokens, scope, mode, emojis = [], buttonNames 
               const label = String(comp.label || '').trim().toLowerCase();
               if (label && wanted.includes(label)) {
                 try {
-                  if (typeof comp.click === 'function') await comp.click(msg);
+                  let clicked = false;
+                  if (typeof comp.click === 'function') { await comp.click(msg); clicked = true; }
+                  if (!clicked && comp.customId) clicked = await clickByCustomIdFallback(msg, comp.customId);
                 } catch (e) {}
                 await sleep(jitter(400, 900));
               }
@@ -1679,9 +1745,20 @@ app.post('/api/reactions/start', (req, res) => {
   try {
     const { tokens = [], scope, mode = 'mirror', emojis = [], buttonNames = [] } = req.body;
     if (!scope) return fail(res, new Error('scope required'));
+    if (!['mirror', 'specific'].includes(mode)) return fail(res, new Error('mode must be mirror or specific'));
+    if (mode === 'specific' && !emojis.length && !buttonNames.length) return fail(res, new Error('specific mode requires emojis or buttonNames'));
     const targets = (tokens.length ? tokens : (activeRef.get() ? [activeRef.get()] : []));
-    const id = attachReactionListener({ tokens: targets, scope, mode, emojis, buttonNames });
-    ok(res, { listenerId: id });
+    if (!targets.length) return fail(res, new Error('No target accounts selected'));
+    const saneEmojis = (Array.isArray(emojis) ? emojis : []).map(e => String(e).trim()).filter(Boolean).slice(0, 20);
+    const saneButtons = (Array.isArray(buttonNames) ? buttonNames : []).map(b => String(b).trim()).filter(Boolean).slice(0, 20);
+    // Prevent duplicated listeners for the exact same payload.
+    const key = JSON.stringify({ tokens: [...targets].sort(), scope, mode, emojis: saneEmojis, buttonNames: saneButtons });
+    for (const [existingId, l] of reactionListeners.entries()) {
+      const k2 = JSON.stringify({ tokens: [...(l.tokens || [])].sort(), scope: l.scope, mode: l.mode, emojis: l.emojis || [], buttonNames: l.buttonNames || [] });
+      if (k2 === key) return ok(res, { listenerId: existingId, deduped: true });
+    }
+    const id = attachReactionListener({ tokens: targets, scope, mode, emojis: saneEmojis, buttonNames: saneButtons });
+    ok(res, { listenerId: id, deduped: false });
   } catch (e) { fail(res, e); }
 });
 
@@ -2727,12 +2804,29 @@ async function createOneBot({ userToken, name, avatarDataUrl, bannerDataUrl, net
     });
     botToken = reset.token;
   }
+  if (!botToken) {
+    // Last fallback: a second reset often succeeds when Discord delays token issuance.
+    await new Promise(r => setTimeout(r, 1200));
+    const resetAgain = await discordRequestWithCaptcha({
+      method: 'POST', url: `https://discord.com/api/v9/applications/${appId}/bot/reset`,
+      token: userToken, body: withPw({}), netOpts
+    });
+    botToken = resetAgain.token;
+  }
+  if (!botToken) throw new Error('Discord did not return a bot token');
   const botUserId = botCreate.id || botCreate.user?.id || appId;
 
-  // 3) Apply avatar/banner via PATCH /applications/{id}/bot using user token
+  // 3) Apply bot settings (including privileged intents) and avatar/banner
   const patchBody = {};
   if (avatarDataUrl) patchBody.avatar = avatarDataUrl;
   if (bannerDataUrl) patchBody.banner = bannerDataUrl;
+  // Enable privileged intents where possible for newly created bots.
+  // Discord may ignore some bits depending on account/app eligibility.
+  const INTENT_GUILD_MEMBERS = 1 << 14;
+  const INTENT_GUILD_PRESENCES = 1 << 12;
+  const INTENT_MESSAGE_CONTENT = 1 << 18;
+  const desiredIntentFlags = INTENT_GUILD_MEMBERS | INTENT_GUILD_PRESENCES | INTENT_MESSAGE_CONTENT;
+  patchBody.flags = (Number(botCreate.flags || 0) | desiredIntentFlags);
   if (Object.keys(patchBody).length) {
     try {
       await discordRequestWithCaptcha({
@@ -2754,7 +2848,23 @@ async function createOneBot({ userToken, name, avatarDataUrl, bannerDataUrl, net
     validated = r.status === 200;
   } catch (e) {}
 
-  return { appId, botUserId, botToken, validated };
+  return { appId, botUserId, botToken, validated, avatarUrl: botAvatarUrl(botUserId, botCreate.avatar || botCreate.user?.avatar) };
+}
+
+async function createOneBotReliable(opts, maxAttempts = 3) {
+  let lastErr = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await createOneBot(opts);
+    } catch (e) {
+      lastErr = e;
+      const isRetryable = !!(e?.status === 429 || e?.status >= 500 || /timed out|timeout|network|token/i.test(String(e?.message || '')));
+      if (attempt >= maxAttempts || !isRetryable) break;
+      const delay = Math.min(12000, 1500 * (2 ** (attempt - 1))) + Math.floor(Math.random() * 700);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+  throw lastErr || new Error('Unknown bot creation failure');
 }
 
 async function validateUserTokenWorks(userToken, netOpts = {}) {
@@ -2770,6 +2880,91 @@ async function validateUserTokenWorks(userToken, netOpts = {}) {
   return { ok: false, error: r.data?.message || `Discord ${r.status}` };
 }
 
+function botAvatarUrl(botUserId, avatarHash) {
+  if (!botUserId || !avatarHash) return null;
+  const ext = String(avatarHash).startsWith('a_') ? 'gif' : 'png';
+  return `https://cdn.discordapp.com/avatars/${botUserId}/${avatarHash}.${ext}?size=128`;
+}
+
+async function fetchAccountApplications(userToken, netOpts = {}) {
+  const r = await axios.get('https://discord.com/api/v9/applications?with_team_applications=true', {
+    headers: { Authorization: userToken },
+    validateStatus: () => true,
+    timeout: 20000,
+    ...netOpts
+  });
+  if (r.status < 200 || r.status >= 300) {
+    throw new Error(r.data?.message || `Discord ${r.status}`);
+  }
+  return Array.isArray(r.data) ? r.data : [];
+}
+
+async function syncBotsLibraryFromConnectedAccounts() {
+  const d = ensureData();
+  if (!Array.isArray(d.bots)) d.bots = [];
+  const byAppId = new Map(d.bots.map(b => [String(b.appId || ''), b]).filter(([k]) => k));
+  let changed = false;
+
+  for (const [accountName, c] of clients.entries()) {
+    if (!c?.token) continue;
+    const netOpts = buildAxiosNetOpts(c.proxy);
+    let apps = [];
+    try {
+      apps = await fetchAccountApplications(c.token, netOpts);
+    } catch (e) {
+      continue;
+    }
+    for (const app of apps) {
+      const bot = app?.bot;
+      if (!bot?.token) continue;
+      const appId = String(app.id || '');
+      if (!appId) continue;
+      const team = app.team || null;
+      const ownerName = team?.name || app.owner?.username || accountName;
+      const avatarUrl = botAvatarUrl(bot.id, bot.avatar);
+      const existing = byAppId.get(appId);
+      if (existing) {
+        const updated = {
+          ...existing,
+          name: app.name || existing.name,
+          token: bot.token || existing.token,
+          botUserId: bot.id || existing.botUserId,
+          avatarUrl: avatarUrl || existing.avatarUrl || null,
+          team: team ? { id: team.id || null, name: team.name || null } : null,
+          createdBy: existing.createdBy || ownerName,
+        };
+        if (JSON.stringify(updated) !== JSON.stringify(existing)) {
+          Object.assign(existing, updated);
+          changed = true;
+        }
+      } else {
+        const num = (d.botsLastNumber || 0) + 1;
+        d.botsLastNumber = num;
+        const rec = {
+          id: 'bot_' + Date.now() + '_' + crypto.randomBytes(3).toString('hex'),
+          number: num,
+          name: app.name || `Bot ${String(num).padStart(2, '0')}`,
+          appId,
+          botUserId: bot.id || appId,
+          token: bot.token,
+          password: '',
+          validated: true,
+          avatar: !!avatarUrl,
+          avatarUrl: avatarUrl || null,
+          banner: false,
+          createdBy: ownerName,
+          team: team ? { id: team.id || null, name: team.name || null } : null,
+          createdAt: Date.now()
+        };
+        d.bots.push(rec);
+        byAppId.set(appId, rec);
+        changed = true;
+      }
+    }
+  }
+  if (changed) writeData(d);
+}
+
 async function runBotCreationTask({ ownerName, userToken, count, namePattern, avatarDataUrl, bannerDataUrl, customPasswordPattern, netOpts = {}, accountPassword = '' }) {
   botTask.state = 'running';
   botTask.startedAt = Date.now();
@@ -2780,10 +2975,13 @@ async function runBotCreationTask({ ownerName, userToken, count, namePattern, av
   botTask.current = '';
   botTask.lastError = null;
   botTask.cancelRequested = false;
+  botTask.rateLimitHits = 0;
+  botTask.successStreak = 0;
   pushBotEvent('bot_progress', { msg: 'starting' });
 
   for (let i = 0; i < count; i++) {
     if (botTask.cancelRequested) break;
+    let createdThisRound = false;
     const d = ensureData();
     const num = (d.botsLastNumber || 0) + 1;
     let name = String(namePattern || 'Bot {n}')
@@ -2797,7 +2995,7 @@ async function runBotCreationTask({ ownerName, userToken, count, namePattern, av
     botTask.current = name;
     pushBotEvent('bot_progress', { msg: `creating ${name}` });
     try {
-      const r = await createOneBot({ userToken, name, avatarDataUrl, bannerDataUrl, netOpts, accountPassword });
+      const r = await createOneBotReliable({ userToken, name, avatarDataUrl, bannerDataUrl, netOpts, accountPassword }, 3);
       // Local password is optional. Bot tokens are the real credential, so we no
       // longer auto-generate a meaningless local password. Only set one if the
       // user explicitly provided a pattern in customPasswordPattern.
@@ -2814,6 +3012,7 @@ async function runBotCreationTask({ ownerName, userToken, count, namePattern, av
         password,
         validated: r.validated,
         avatar: !!avatarDataUrl,
+        avatarUrl: r.avatarUrl || null,
         banner: !!bannerDataUrl,
         createdBy: ownerName,
         createdAt: Date.now()
@@ -2822,19 +3021,32 @@ async function runBotCreationTask({ ownerName, userToken, count, namePattern, av
       d.botsLastNumber = num;
       writeData(d);
       botTask.done += 1;
+      createdThisRound = true;
       pushBotEvent('bot_created', { bot: { ...record, token: undefined } });
       try { recordHistory({ account: ownerName, type: 'bot_create', target: { name, appId: r.appId }, status: 'success' }); } catch (e) {}
     } catch (e) {
       botTask.failed += 1;
+      botTask.successStreak = 0;
       botTask.lastError = e.message;
       pushBotEvent('bot_failed', { name, error: e.message });
       if (/Cancelled/i.test(e.message)) break;
       // If 429, sleep an extra 30s
-      if (e.status === 429) await new Promise(r => setTimeout(r, 30000));
+      if (e.status === 429) {
+        botTask.rateLimitHits = (botTask.rateLimitHits || 0) + 1;
+        await new Promise(r => setTimeout(r, Math.min(90000, 15000 * botTask.rateLimitHits)));
+      }
+    }
+    if (createdThisRound) {
+      botTask.successStreak = (botTask.successStreak || 0) + 1;
+      if (botTask.rateLimitHits > 0) botTask.rateLimitHits -= 1;
     }
     // Cooldown with ±20% jitter (skip after the last)
     if (i < count - 1 && !botTask.cancelRequested) {
-      const base = Math.max(30000, botTask.cooldownMs);
+      // Adaptive cooldown: speed up on stable success, slow down automatically on rate-limit pressure.
+      const floor = 5000;
+      const speedFactor = botTask.successStreak >= 3 ? 0.7 : 1;
+      const pressureFactor = 1 + Math.min(2.5, (botTask.rateLimitHits || 0) * 0.35);
+      const base = Math.max(floor, Math.round(botTask.cooldownMs * speedFactor * pressureFactor));
       const jitter = base * (0.8 + Math.random() * 0.4);
       pushBotEvent('bot_progress', { msg: `cooldown ${Math.round(jitter / 1000)}s` });
       await new Promise(r => setTimeout(r, jitter));
@@ -2847,9 +3059,14 @@ async function runBotCreationTask({ ownerName, userToken, count, namePattern, av
 
 // ── Endpoints
 app.get('/api/bots', (req, res) => {
-  const d = ensureData();
-  const list = (d.bots || []).slice().sort((a, b) => a.number - b.number);
-  ok(res, { bots: list });
+  Promise.resolve()
+    .then(() => syncBotsLibraryFromConnectedAccounts())
+    .catch(() => {})
+    .finally(() => {
+      const d = ensureData();
+      const list = (d.bots || []).slice().sort((a, b) => a.number - b.number);
+      ok(res, { bots: list });
+    });
 });
 
 app.get('/api/bots/all-tokens', (req, res) => {
@@ -2884,7 +3101,12 @@ app.post('/api/bots/create', (req, res) => {
   if (!c?.token) return fail(res, new Error('Account is not connected'));
   const netOpts = buildAxiosNetOpts(c.proxy);
   const n = Math.max(1, Math.min(50, parseInt(count || 1) || 1));
-  botTask.cooldownMs = Math.max(30000, parseInt(cooldownMs || 120000) || 120000);
+  // Allow faster runs; adaptive backoff in-task will auto-protect on pressure.
+  botTask.cooldownMs = Math.max(5000, parseInt(cooldownMs || 45000) || 45000);
+  const validDataUrl = (v) => !v || (typeof v === 'string' && /^data:image\/(png|jpe?g|webp|gif);base64,/i.test(v) && v.length <= 12 * 1024 * 1024);
+  if (!validDataUrl(avatarDataUrl)) return fail(res, new Error('Invalid avatar image format (must be image data URL, max 12MB)'));
+  if (!validDataUrl(bannerDataUrl)) return fail(res, new Error('Invalid banner image format (must be image data URL, max 12MB)'));
+  if (typeof namePattern !== 'undefined' && typeof namePattern !== 'string') return fail(res, new Error('namePattern must be a string'));
 
   validateUserTokenWorks(c.token, netOpts).then((tokenCheck) => {
     if (!tokenCheck.ok) throw new Error(`Account token validation failed: ${tokenCheck.error}`);
@@ -3924,6 +4146,14 @@ function isImageAttachment(a) {
   if (ct.startsWith('image/')) return true;
   return /\.(png|jpe?g|gif|webp|bmp)(\?|$)/i.test(a.url || '');
 }
+function classifyAttachment(a) {
+  const ct = (a?.contentType || a?.content_type || '').toLowerCase();
+  const url = a?.url || '';
+  if (ct.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp)(\?|$)/i.test(url)) return 'image';
+  if (ct.startsWith('video/') || /\.(mp4|mov|mkv|webm)(\?|$)/i.test(url)) return 'video';
+  if (ct.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|flac)(\?|$)/i.test(url)) return 'audio';
+  return 'file';
+}
 
 async function handlePicMessage(name, msg) {
   try {
@@ -3935,8 +4165,14 @@ async function handlePicMessage(name, msg) {
     if (cfg.scope === 'servers' && (!guildId || !cfg.servers?.includes(guildId))) return;
     if (cfg.scope === 'all' && !guildId) return; // only servers (per request)
 
-    const imgs = Array.from(msg.attachments?.values?.() || []).filter(isImageAttachment);
-    if (!imgs.length) return;
+    const media = Array.from(msg.attachments?.values?.() || []).map(a => ({
+      url: a.url, name: a.name || a.filename || 'file',
+      width: a.width, height: a.height,
+      contentType: a.contentType || a.content_type || '',
+      size: a.size || 0,
+      kind: classifyAttachment(a)
+    }));
+    if (!media.length) return;
 
     const meta = {
       id: msg.id,
@@ -3951,14 +4187,14 @@ async function handlePicMessage(name, msg) {
       guild: msg.guild ? { id: msg.guild.id, name: msg.guild.name, icon: msg.guild.iconURL?.({ size: 32 }) || null } : null,
       channel: { id: msg.channel.id, name: msg.channel.name || 'channel' },
       content: msg.content || '',
-      images: imgs.map(a => ({ url: a.url, name: a.name, width: a.width, height: a.height, contentType: a.contentType }))
+      media
     };
 
     if (cfg.inApp !== false) {
       const buf = d.picBuffer || [];
       // Dedupe: skip if we already saved this message ID (multiple connected
       // accounts can both see the same message → previously double-counted)
-      if (buf.some(x => x.id === meta.id && x.account === meta.account)) {
+      if (buf.some(x => x.id === meta.id)) {
         // already captured by this account — still mirror to webhook below if configured
       } else {
         buf.unshift(meta);
@@ -3969,7 +4205,7 @@ async function handlePicMessage(name, msg) {
       }
     }
     if (cfg.webhook) {
-      const lines = imgs.map(i => i.url).join('\n');
+      const lines = media.map(i => `${i.kind.toUpperCase()}: ${i.url}`).join('\n');
       const where = msg.guild ? `${msg.guild.name} · #${msg.channel.name}` : `#${msg.channel.name}`;
       const content = `**${meta.author.displayName}** · ${where}\n${meta.content ? meta.content + '\n' : ''}${lines}`;
       await postWebhook(cfg.webhook, {
@@ -3998,7 +4234,13 @@ app.get('/api/pic/config', (req, res) => {
 app.post('/api/pic/config', (req, res) => {
   try {
     const d = readData();
-    d.picConfig = { ...(d.picConfig || {}), ...(req.body || {}) };
+    const patch = req.body || {};
+    if (typeof patch.enabled !== 'undefined' && typeof patch.enabled !== 'boolean') return fail(res, new Error('enabled must be boolean'));
+    if (typeof patch.inApp !== 'undefined' && typeof patch.inApp !== 'boolean') return fail(res, new Error('inApp must be boolean'));
+    if (typeof patch.scope !== 'undefined' && !['all', 'servers'].includes(patch.scope)) return fail(res, new Error('scope must be all or servers'));
+    d.picConfig = { ...(d.picConfig || {}), ...patch };
+    d.picConfig.accounts = Array.from(new Set((d.picConfig.accounts || []).map(String))).slice(0, 100);
+    d.picConfig.servers = Array.from(new Set((d.picConfig.servers || []).map(String))).slice(0, 500);
     writeData(d);
     ok(res, { config: d.picConfig });
   } catch (e) { fail(res, e); }
@@ -4011,6 +4253,31 @@ app.get('/api/pic/buffer', (req, res) => {
 
 app.delete('/api/pic/buffer', (req, res) => {
   const d = readData(); d.picBuffer = []; writeData(d); ok(res);
+});
+
+app.get('/api/pic/media-proxy', async (req, res) => {
+  try {
+    const rawUrl = String(req.query.u || '');
+    const account = String(req.query.account || '');
+    if (!rawUrl) return fail(res, new Error('u is required'));
+    let parsed;
+    try { parsed = new URL(rawUrl); } catch { return fail(res, new Error('Invalid media URL')); }
+    if (!/discord(app)?\.com$|discordapp\.net$|discordcdn\.com$|cdn\.discordapp\.com$/i.test(parsed.hostname)) {
+      return fail(res, new Error('Only Discord media URLs are allowed'));
+    }
+    const c = getClientByName(account) || pickClient(req);
+    if (!c?.token) return fail(res, new Error('No connected account available for media proxy'));
+    const r = await axios.get(rawUrl, {
+      responseType: 'stream',
+      headers: discordHeaders(c.token),
+      timeout: 20000,
+      validateStatus: () => true
+    });
+    if (r.status >= 400) return fail(res, new Error(`Media fetch failed (${r.status})`));
+    res.setHeader('Content-Type', r.headers['content-type'] || 'application/octet-stream');
+    res.setHeader('Cache-Control', 'private, max-age=60');
+    r.data.pipe(res);
+  } catch (e) { fail(res, e); }
 });
 
 // ═══════════════════════════════════════════════
@@ -4084,25 +4351,60 @@ async function findInviteFor(client, guildId) {
 }
 
 const recentPruneHandled = new Set(); // dedupe per (guild, user)
+const antiPruneUserCooldown = new Map(); // userId -> nextAllowedTs
+const antiPruneQueues = new Map(); // accountName -> Promise chain
+const antiPruneQueueDepth = new Map(); // accountName -> integer
+const antiPruneAccountCooldown = new Map(); // accountName -> nextAllowedTs
+
+async function antiPruneEnqueueFor(accountName, task) {
+  const prev = antiPruneQueues.get(accountName) || Promise.resolve();
+  antiPruneQueueDepth.set(accountName, (antiPruneQueueDepth.get(accountName) || 0) + 1);
+  const next = prev.then(task).catch(() => {}).finally(() => {
+    antiPruneQueueDepth.set(accountName, Math.max(0, (antiPruneQueueDepth.get(accountName) || 1) - 1));
+  });
+  antiPruneQueues.set(accountName, next);
+  return next;
+}
+
+function pickLeastBusyAccount(accountNames = []) {
+  if (!accountNames.length) return null;
+  return accountNames.slice().sort((a, b) => (antiPruneQueueDepth.get(a) || 0) - (antiPruneQueueDepth.get(b) || 0))[0];
+}
+function accountCanWorkGuild(accountName, guildId) {
+  const e = clients.get(accountName);
+  return !!(e?.client?.guilds?.cache?.has(guildId));
+}
 
 async function handleAntiPrune(name, member) {
+  // Distribute load across allowed accounts by queue depth (fast + safer).
+  const d0 = readData();
+  const cfg0 = d0.antiPruneConfig || {};
+  const guildId = member.guild.id;
+  const eligible = Array.from(clients.keys()).filter(n =>
+    (!cfg0.accounts?.length || cfg0.accounts.includes(n)) && accountCanWorkGuild(n, guildId)
+  );
+  const worker = pickLeastBusyAccount(eligible) || name;
+  const run = async () => {
   try {
     const d = readData();
     const cfg = d.antiPruneConfig || {};
     if (!cfg.enabled) return;
     if (cfg.accounts?.length && !cfg.accounts.includes(name)) return;
-    const guildId = member.guild.id;
     if (cfg.scope === 'servers' && !cfg.servers?.includes(guildId)) return;
 
     const dedupeKey = `${guildId}|${member.id}`;
     if (recentPruneHandled.has(dedupeKey)) return;
+    const now = Date.now();
+    const nextOk = antiPruneUserCooldown.get(member.id) || 0;
+    if (now < nextOk) return;
 
-    const client = getClientByName(name);
+    const client = getClientByName(worker) || getClientByName(name);
     if (!client) return;
     const isPrune = await isPrunedRecently(client, guildId);
     if (!isPrune) return;
     recentPruneHandled.add(dedupeKey);
     setTimeout(() => recentPruneHandled.delete(dedupeKey), 30000);
+    antiPruneUserCooldown.set(member.id, Date.now() + 35000); // anti-spam but not too slow at scale
 
     const invite = await findInviteFor(client, guildId);
     const message = (cfg.message || 'You were removed from {server} by mistake — please rejoin: {invite}')
@@ -4110,8 +4412,14 @@ async function handleAntiPrune(name, member) {
       .replace('{invite}', invite || '(no invite available)')
       .replace('{user}', member.user?.username || '');
 
-    let attempt = await tryDmUser(client, member.id, message);
+    let attempt = null;
     let by = name;
+    // Per-account cooldown to avoid DM bursts (also applies in single-account mode).
+    const waitMs = Math.max(0, (antiPruneAccountCooldown.get(by) || 0) - Date.now());
+    if (waitMs > 0) await sleep(waitMs);
+    antiPruneAccountCooldown.set(by, Date.now() + jitter(900, 1500));
+
+    attempt = await tryDmUser(client, member.id, message);
     if (!attempt.ok && cfg.distribute !== false) {
       // Try other connected accounts that share a server with the user
       for (const [otherName, e] of clients.entries()) {
@@ -4119,10 +4427,20 @@ async function handleAntiPrune(name, member) {
         if (cfg.accounts?.length && !cfg.accounts.includes(otherName)) continue;
         const shares = Array.from(e.client.guilds.cache.values()).some(g => g.members.cache.has(member.id) || g.id === guildId);
         if (!shares) continue;
+        const waitOther = Math.max(0, (antiPruneAccountCooldown.get(otherName) || 0) - Date.now());
+        if (waitOther > 0) await sleep(waitOther);
+        antiPruneAccountCooldown.set(otherName, Date.now() + jitter(900, 1500));
         const r = await tryDmUser(e.client, member.id, message);
         if (r.ok) { attempt = r; by = otherName; break; }
-        await sleep(jitter(300, 600));
+        await sleep(jitter(350, 850));
       }
+    }
+    if (!attempt.ok) {
+      sseBroadcast('antiprune_warning', {
+        guildId,
+        guildName: member.guild.name,
+        message: `AntiPrune failed to DM ${member.user?.username || member.id}: ${attempt.error || 'unknown error'}`
+      });
     }
 
     const log = d.antiPruneLog || [];
@@ -4130,7 +4448,7 @@ async function handleAntiPrune(name, member) {
       ts: Date.now(),
       guild: { id: guildId, name: member.guild.name },
       user: { id: member.id, username: member.user?.username || 'unknown', avatar: member.user?.displayAvatarURL?.({ size: 32 }) || defaultAvatarUrl(member.id) },
-      detectedBy: name,
+      detectedBy: worker,
       sentBy: attempt.ok ? by : null,
       ok: attempt.ok, error: attempt.error || null,
       invite
@@ -4140,6 +4458,10 @@ async function handleAntiPrune(name, member) {
     writeData(d);
     sseBroadcast('antiprune', { event: log[0] });
   } catch (e) {}
+  };
+  // Single-account fast path (no extra queue overhead).
+  if (eligible.length <= 1) return run();
+  return antiPruneEnqueueFor(worker, run);
 }
 
 function attachAntiPruneListener(name, client, ownerUid) {
@@ -4158,7 +4480,16 @@ app.get('/api/antiprune/config', (req, res) => {
 app.post('/api/antiprune/config', (req, res) => {
   try {
     const d = readData();
-    d.antiPruneConfig = { ...(d.antiPruneConfig || {}), ...(req.body || {}) };
+    const patch = req.body || {};
+    if (typeof patch.enabled !== 'undefined' && typeof patch.enabled !== 'boolean') return fail(res, new Error('enabled must be boolean'));
+    if (typeof patch.scope !== 'undefined' && !['all', 'servers'].includes(patch.scope)) return fail(res, new Error('scope must be all or servers'));
+    if (typeof patch.message !== 'undefined' && typeof patch.message !== 'string') return fail(res, new Error('message must be string'));
+    if (patch.message && patch.message.length > 500) return fail(res, new Error('message too long (max 500)'));
+    if (typeof patch.accounts !== 'undefined' && !Array.isArray(patch.accounts)) return fail(res, new Error('accounts must be array'));
+    if (typeof patch.servers !== 'undefined' && !Array.isArray(patch.servers)) return fail(res, new Error('servers must be array'));
+    d.antiPruneConfig = { ...(d.antiPruneConfig || {}), ...patch };
+    d.antiPruneConfig.accounts = Array.from(new Set((d.antiPruneConfig.accounts || []).map(String))).slice(0, 100);
+    d.antiPruneConfig.servers = Array.from(new Set((d.antiPruneConfig.servers || []).map(String))).slice(0, 500);
     writeData(d);
     ok(res, { config: d.antiPruneConfig });
   } catch (e) { fail(res, e); }
@@ -4999,6 +5330,14 @@ function getVoiceClient(name) {
 }
 
 function voiceSessionKey(name, guildId) { return `${name}__${guildId}`; }
+function normalizeVoiceTargets(accounts) {
+  const arr = Array.isArray(accounts) ? accounts : [accounts].filter(Boolean);
+  return Array.from(new Set(arr.map(String).filter(Boolean)));
+}
+function resultSummary(results = []) {
+  const okCount = results.filter(r => r.ok).length;
+  return { total: results.length, ok: okCount, failed: results.length - okCount };
+}
 
 function isVoiceType(channel) {
   const t = channel?.type;
@@ -5095,9 +5434,10 @@ app.get('/api/voice/state-cycles', (req, res) => {
 // POST /api/voice/join — join a voice channel
 app.post('/api/voice/join', (req, res) => {
   const { accounts, guildId, channelId, selfMute = false, selfDeaf = false } = req.body;
-  const targets = Array.isArray(accounts) ? accounts : [accounts].filter(Boolean);
+  const targets = normalizeVoiceTargets(accounts);
   if (!targets.length) return fail(res, new Error('No accounts specified'));
   if (!guildId || !channelId) return fail(res, new Error('guildId and channelId required'));
+  if (typeof selfMute !== 'boolean' || typeof selfDeaf !== 'boolean') return fail(res, new Error('selfMute/selfDeaf must be boolean'));
   const results = [];
   for (const name of targets) {
     const client = getVoiceClient(name);
@@ -5111,13 +5451,14 @@ app.post('/api/voice/join', (req, res) => {
     }
     results.push({ name, ok: sent, error: sent ? null : 'Failed to send voice op' });
   }
-  ok(res, { results });
+  ok(res, { results, summary: resultSummary(results) });
 });
 
 // POST /api/voice/leave — leave voice channel
 app.post('/api/voice/leave', (req, res) => {
   const { accounts, guildId } = req.body;
-  const targets = Array.isArray(accounts) ? accounts : [accounts].filter(Boolean);
+  const targets = normalizeVoiceTargets(accounts);
+  if (!targets.length || !guildId) return fail(res, new Error('accounts and guildId required'));
   const results = [];
   for (const name of targets) {
     const client = getVoiceClient(name);
@@ -5127,13 +5468,20 @@ app.post('/api/voice/leave', (req, res) => {
     vsDel(key);
     results.push({ name, ok: sent });
   }
-  ok(res, { results });
+  ok(res, { results, summary: resultSummary(results) });
 });
 
 // POST /api/voice/state — update voice state (mute/deaf/video/stream)
 app.post('/api/voice/state', (req, res) => {
   const { accounts, guildId, selfMute, selfDeaf, selfVideo, selfStream } = req.body;
-  const targets = Array.isArray(accounts) ? accounts : [accounts].filter(Boolean);
+  const targets = normalizeVoiceTargets(accounts);
+  if (!targets.length || !guildId) return fail(res, new Error('accounts and guildId required'));
+  for (const v of [selfMute, selfDeaf, selfVideo, selfStream]) {
+    if (v !== undefined && typeof v !== 'boolean') return fail(res, new Error('voice state fields must be boolean'));
+  }
+  if (selfDeaf === true && (selfVideo === true || selfStream === true)) {
+    return fail(res, new Error('Cannot enable video/stream while self-deaf is true'));
+  }
   const results = [];
   for (const name of targets) {
     const client = getVoiceClient(name);
@@ -5153,7 +5501,7 @@ app.post('/api/voice/state', (req, res) => {
     if (sent && sess) { Object.assign(sess, { selfMute: sm, selfDeaf: sd, selfVideo: sv, selfStream: ss }); persistVoice(); }
     results.push({ name, ok: sent });
   }
-  ok(res, { results });
+  ok(res, { results, summary: resultSummary(results) });
 });
 
 // POST /api/voice/join-all — join all connected accounts to one channel
@@ -5169,14 +5517,14 @@ app.post('/api/voice/join-all', (req, res) => {
     if (sent) vsSet(voiceSessionKey(name, guildId), { name, guildId, channelId, selfMute, selfDeaf, selfVideo: false, selfStream: false, joinedAt: Date.now() });
     results.push({ name, ok: sent });
   }
-  ok(res, { results });
+  ok(res, { results, summary: resultSummary(results) });
 });
 
 // POST /api/voice/distribute-random — randomly distribute accounts across voice channels
 app.post('/api/voice/distribute-random', (req, res) => {
   const { accounts, guildId, channelIds } = req.body;
   if (!Array.isArray(channelIds) || !channelIds.length) return fail(res, new Error('channelIds required'));
-  const targets = Array.isArray(accounts) && accounts.length ? accounts : Array.from(clients.keys());
+  const targets = normalizeVoiceTargets(accounts).length ? normalizeVoiceTargets(accounts) : Array.from(clients.keys());
   const results = [];
   const shuffled = [...channelIds].sort(() => Math.random() - 0.5);
   targets.forEach((name, i) => {
@@ -5189,27 +5537,31 @@ app.post('/api/voice/distribute-random', (req, res) => {
     if (sent) vsSet(voiceSessionKey(name, guildId), { name, guildId, channelId, selfMute: false, selfDeaf: false, selfVideo: false, selfStream: false, joinedAt: Date.now() });
     results.push({ name, ok: sent, channelId });
   });
-  ok(res, { results });
+  ok(res, { results, summary: resultSummary(results) });
 });
 
 // POST /api/voice/rotation/start — rotate between voice channels on a timer
 app.post('/api/voice/rotation/start', (req, res) => {
   const { accounts, guildId, guildName, channelIds, intervalMs = 3600000, randomOrder = false } = req.body;
   if (!Array.isArray(channelIds) || channelIds.length < 2) return fail(res, new Error('At least 2 channelIds required'));
-  const targets = Array.isArray(accounts) && accounts.length ? accounts : Array.from(clients.keys());
+  const targets = normalizeVoiceTargets(accounts).length ? normalizeVoiceTargets(accounts) : Array.from(clients.keys());
+  if (!targets.length || !guildId) return fail(res, new Error('accounts and guildId required'));
+  const safeInterval = Math.max(15000, parseInt(intervalMs || 3600000) || 3600000);
+  if (voiceRotations.size >= 100) return fail(res, new Error('Too many active rotations'));
   const id = `vr_${Date.now()}`;
   const rotation = {
     id, accounts: targets, guildId, guildName: guildName || guildId,
-    channels: channelIds, intervalMs, randomOrder, currentIdx: 0,
-    nextAt: Date.now() + intervalMs
+    channels: Array.from(new Set(channelIds)), intervalMs: safeInterval, randomOrder: !!randomOrder, currentIdx: 0,
+    nextAt: Date.now() + safeInterval
   };
 
   function doRotate() {
+    const chList = rotation.channels;
     let idx;
-    if (randomOrder) idx = Math.floor(Math.random() * channelIds.length);
-    else { rotation.currentIdx = (rotation.currentIdx + 1) % channelIds.length; idx = rotation.currentIdx; }
-    const channelId = channelIds[idx];
-    rotation.nextAt = Date.now() + intervalMs;
+    if (rotation.randomOrder) idx = Math.floor(Math.random() * chList.length);
+    else { rotation.currentIdx = (rotation.currentIdx + 1) % chList.length; idx = rotation.currentIdx; }
+    const channelId = chList[idx];
+    rotation.nextAt = Date.now() + safeInterval;
     for (const name of targets) {
       const client = getVoiceClient(name);
       if (!client) continue;
@@ -5224,7 +5576,7 @@ app.post('/api/voice/rotation/start', (req, res) => {
   }
 
   // Join initial channel
-  const firstChannel = channelIds[0];
+  const firstChannel = rotation.channels[0];
   for (const name of targets) {
     const client = getVoiceClient(name);
     if (!client) continue;
@@ -5234,9 +5586,9 @@ app.post('/api/voice/rotation/start', (req, res) => {
     vsSet(voiceSessionKey(name, guildId), { name, guildId, channelId: firstChannel, selfMute: false, selfDeaf: false, selfVideo: false, selfStream: false, joinedAt: Date.now() });
   }
 
-  rotation.timer = setInterval(doRotate, intervalMs);
+  rotation.timer = setInterval(doRotate, safeInterval);
   voiceRotations.set(id, rotation);
-  ok(res, { id, message: 'Rotation started' });
+  ok(res, { id, message: 'Rotation started', intervalMs: safeInterval, channels: rotation.channels.length, accounts: targets.length });
 });
 
 // POST /api/voice/rotation/stop
@@ -5254,14 +5606,20 @@ app.post('/api/voice/state-cycle/start', (req, res) => {
   const { accounts, guildId, states, intervalMs = 3600000 } = req.body;
   // states: array of objects { selfMute, selfDeaf, selfVideo, selfStream }
   if (!Array.isArray(states) || states.length < 2) return fail(res, new Error('At least 2 states required'));
-  const targets = Array.isArray(accounts) && accounts.length ? accounts : Array.from(clients.keys());
+  const targets = normalizeVoiceTargets(accounts).length ? normalizeVoiceTargets(accounts) : Array.from(clients.keys());
+  if (!targets.length || !guildId) return fail(res, new Error('accounts and guildId required'));
+  const safeStates = states.map(s => ({
+    selfMute: !!s?.selfMute, selfDeaf: !!s?.selfDeaf, selfVideo: !!s?.selfVideo, selfStream: !!s?.selfStream
+  }));
+  const safeInterval = Math.max(15000, parseInt(intervalMs || 3600000) || 3600000);
+  if (voiceStateCycles.size >= 100) return fail(res, new Error('Too many active cycles'));
   const id = `vsc_${Date.now()}`;
-  const cycle = { id, accounts: targets, guildId, states, intervalMs, currentIdx: 0, nextAt: Date.now() + intervalMs };
+  const cycle = { id, accounts: targets, guildId, states: safeStates, intervalMs: safeInterval, currentIdx: 0, nextAt: Date.now() + safeInterval };
 
-  function applyState(stateObj) {
-    cycle.currentIdx = (cycle.currentIdx + 1) % states.length;
-    const s = states[cycle.currentIdx];
-    cycle.nextAt = Date.now() + intervalMs;
+  function applyState() {
+    cycle.currentIdx = (cycle.currentIdx + 1) % safeStates.length;
+    const s = safeStates[cycle.currentIdx];
+    cycle.nextAt = Date.now() + safeInterval;
     for (const name of targets) {
       const client = getVoiceClient(name);
       if (!client) continue;
@@ -5275,7 +5633,7 @@ app.post('/api/voice/state-cycle/start', (req, res) => {
   }
 
   // Apply first state immediately
-  const s0 = states[0];
+  const s0 = safeStates[0];
   for (const name of targets) {
     const client = getVoiceClient(name);
     if (!client) continue;
@@ -5287,9 +5645,9 @@ app.post('/api/voice/state-cycle/start', (req, res) => {
     if (sess) Object.assign(sess, { selfMute: !!s0.selfMute, selfDeaf: !!s0.selfDeaf, selfVideo: !!s0.selfVideo, selfStream: !!s0.selfStream });
   }
 
-  cycle.timer = setInterval(applyState, intervalMs);
+  cycle.timer = setInterval(applyState, safeInterval);
   voiceStateCycles.set(id, cycle);
-  ok(res, { id, message: 'State cycle started' });
+  ok(res, { id, message: 'State cycle started', intervalMs: safeInterval, states: safeStates.length, accounts: targets.length });
 });
 
 // POST /api/voice/state-cycle/stop

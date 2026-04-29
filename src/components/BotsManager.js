@@ -332,9 +332,11 @@ export class BotsManager {
     return `
       <div class="bm-card-bot" data-id="${escapeAttr(b.id)}">
         <div class="bm-bot-head">
+          ${b.avatarUrl ? `<img class="bm-bot-avatar" src="${escapeAttr(b.avatarUrl)}" alt="avatar" />` : ''}
           <span class="bm-bot-num">#${String(b.number).padStart(3, '0')}</span>
           <span class="bm-bot-name">${escapeHtml(b.name)}</span>
           <span class="bm-bot-meta">app: <code>${escapeHtml(b.appId)}</code></span>
+          ${b.team?.name ? `<span class="bm-bot-meta">team: <code>${escapeHtml(b.team.name)}</code></span>` : ''}
           ${b.validated ? `<span class="bm-bot-badge ok">✔ ${t('bm.validated')}</span>` : `<span class="bm-bot-badge warn">⚠ ${t('bm.not_validated')}</span>`}
         </div>
         <div class="bm-bot-row">

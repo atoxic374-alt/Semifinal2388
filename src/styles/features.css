@@ -262,6 +262,10 @@ body.rtl .fl-row:hover { transform: translateX(-2px); }
 .pc-card:hover { transform: translateY(-2px); border-color: var(--accent); }
 .pc-card-imgs { display: flex; flex-wrap: wrap; gap: 2px; max-height: 240px; overflow: hidden; }
 .pc-card-imgs img { width: 100%; max-height: 240px; object-fit: cover; display: block; }
+.pc-card-imgs video { width: 100%; max-height: 240px; object-fit: cover; display: block; background: #000; }
+.pc-media-file { width: 100%; padding: 8px; background: rgba(255,255,255,0.03); border-top: 1px solid rgba(255,255,255,0.06); }
+.pc-media-file audio { width: 100%; }
+.pc-media-file a { color: var(--accent); text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
 .pc-card-meta { padding: 10px 14px; }
 .pc-card-line { display: flex; align-items: center; gap: 6px; font-size: 13px; }
 .pc-card-acct { width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid rgba(88,101,242,0.5); }

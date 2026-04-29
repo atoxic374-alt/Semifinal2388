@@ -1566,6 +1566,7 @@ body.rtl .pm-toast { right: auto; left: 24px; }
 .bm-list { display: flex; flex-direction: column; gap: 10px; }
 .bm-card-bot { background: #1e2024; border: 1px solid #2a2d31; border-radius: 10px; padding: 12px 14px; }
 .bm-bot-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+.bm-bot-avatar { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; border: 1px solid #3a3d42; }
 .bm-bot-num { background: linear-gradient(135deg, #5865f2, #7984ff); color: #fff; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; }
 .bm-bot-name { font-weight: 700; color: #fff; font-size: 14px; }
 .bm-bot-meta { font-size: 11px; color: #72767d; }

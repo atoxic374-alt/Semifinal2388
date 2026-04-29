@@ -111,11 +111,11 @@ export class ReactionManager {
       return `<div class="mm-field"><label>${t('rm.tab.server')}</label><select onchange="window.reactionManager.scopeId = this.value"><option value="">${t('rm.select')}</option>${opts}</select></div>`;
     }
     if (this.activeTab === 'group') {
-      const opts = this.groups.map(g => `<option value="${g.id}">${this.escHtml(g.name)}</option>`).join('');
+      const opts = this.groups.map(g => `<option value="${g.id}" ${g.id === this.scopeId ? 'selected' : ''}>${this.escHtml(g.name)}</option>`).join('');
       return `<div class="mm-field"><label>${t('rm.group')}</label><select onchange="window.reactionManager.scopeId = this.value"><option value="">${t('rm.select')}</option>${opts}</select></div>`;
     }
     if (this.activeTab === 'dm') {
-      const opts = this.dms.map(d => `<option value="${d.id}">@${this.escHtml(d.username)}</option>`).join('');
+      const opts = this.dms.map(d => `<option value="${d.id}" ${d.id === this.scopeId ? 'selected' : ''}>@${this.escHtml(d.username)}</option>`).join('');
       return `<div class="mm-field"><label>${t('rm.dm')}</label><select onchange="window.reactionManager.scopeId = this.value"><option value="">${t('rm.select')}</option>${opts}</select></div>`;
     }
     return `<div class="mm-info-row">${icon('globe')} ${t('rm.scope.all_info')}</div>`;
@@ -127,7 +127,7 @@ export class ReactionManager {
       <div class="mm-token-grid">
         ${this.allTokens.map(tk => `
           <label class="mm-token-chip ${this.tokens.includes(tk.name) ? 'on' : ''}">
-            <input type="checkbox" ${this.tokens.includes(tk.name) ? 'checked' : ''} onchange="window.reactionManager.toggleToken('${tk.name}', this.checked)">
+            <input type="checkbox" ${this.tokens.includes(tk.name) ? 'checked' : ''} onchange="window.reactionManager.toggleToken('${this.escJs(tk.name)}', this.checked)">
             <img src="${tk.avatar || '/discord.png'}" onerror="this.src='/discord.png'">
             <div><strong>${this.escHtml(tk.name)}</strong><span>${this.escHtml(tk.username || '')}</span></div>
           </label>`).join('')}
@@ -195,4 +195,5 @@ export class ReactionManager {
   async stop(id) { await window.electronAPI.stopReactions(id); this.refreshListeners(); }
 
   escHtml(t) { if (t == null) return ''; return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  escJs(t) { return String(t).replace(/\\/g, '\\\\').replace(/'/g, "\\'"); }
 }

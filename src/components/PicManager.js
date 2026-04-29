@@ -102,10 +102,17 @@ export class PicManager {
 
   card(c) {
     const acct = this.accounts[c.account] || {};
+    const media = Array.isArray(c.media) ? c.media : (c.images || []);
+    const prox = (u) => this.mediaUrl(u, c.account);
     return `
       <div class="pc-card">
         <div class="pc-card-imgs">
-          ${c.images.map(i => `<a href="${i.url}" target="_blank" rel="noopener"><img src="${i.url}" alt="${this.escAttr(i.name)}" loading="lazy"></a>`).join('')}
+          ${media.map(i => {
+            if (i.kind === 'image') return `<a href="${prox(i.url)}" target="_blank" rel="noopener"><img src="${prox(i.url)}" alt="${this.escAttr(i.name)}" loading="lazy"></a>`;
+            if (i.kind === 'video') return `<a href="${prox(i.url)}" target="_blank" rel="noopener"><video src="${prox(i.url)}" controls preload="metadata"></video></a>`;
+            if (i.kind === 'audio') return `<div class="pc-media-file"><audio src="${prox(i.url)}" controls preload="none"></audio></div>`;
+            return `<div class="pc-media-file"><a href="${prox(i.url)}" target="_blank" rel="noopener">${icon('file')} ${this.escHtml(i.name || 'file')}</a></div>`;
+          }).join('')}
         </div>
         <div class="pc-card-meta">
           <div class="pc-card-line">
@@ -120,7 +127,7 @@ export class PicManager {
           ${c.content ? `<div class="pc-card-text">${this.escHtml(c.content.slice(0, 200))}</div>` : ''}
           <div class="pc-card-foot">
             <span>${this.fmtTime(c.ts)}</span>
-            <button class="mm-btn ghost small" data-url="${this.escAttr(c.images[0].url)}" onclick="navigator.clipboard.writeText(this.dataset.url);window.sfx?.click()">${icon('copy')} URL</button>
+            <button class="mm-btn ghost small" data-url="${this.escAttr(media[0]?.url || '')}" onclick="if(this.dataset.url){navigator.clipboard.writeText(this.dataset.url);window.sfx?.click()}">${icon('copy')} URL</button>
           </div>
         </div>
       </div>
@@ -295,4 +302,7 @@ export class PicManager {
   }
   escHtml(s = '') { return String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
   escAttr(s = '') { return this.escHtml(s); }
+  mediaUrl(url, account) {
+    return `/api/pic/media-proxy?u=${encodeURIComponent(url || '')}&account=${encodeURIComponent(account || '')}`;
+  }
 }
