@@ -1009,6 +1009,32 @@ function writeTokens(arr) {
   tokensStore.write(encrypted);
 }
 
+function normalizeAccountName(name) {
+  return String(name || '').trim().toLocaleLowerCase();
+}
+
+function findSavedTokenByName(name) {
+  const target = normalizeAccountName(name);
+  if (!target) return null;
+  const tokens = readTokens();
+  return tokens.find(t => normalizeAccountName(t.name) === target) || null;
+}
+
+function discordAuthHint(errLike = {}) {
+  const body = errLike?.response?.data || errLike?.body || {};
+  const msg = String(body?.message || errLike?.message || '');
+  const code = Number(body?.code || 0);
+  // Discord can return "2FA required" style errors even when account 2FA is off;
+  // this is often step-up verification/challenge for sensitive actions.
+  if (code === 60003 || /two[- ]factor|2fa|mfa/i.test(msg)) {
+    return 'Discord requested additional account verification for this action (not necessarily that 2FA is enabled).';
+  }
+  if (/password/i.test(msg)) {
+    return 'Discord requested the account password for this action.';
+  }
+  return '';
+}
+
 // One-shot migration runs lazily, the first time a user touches their
 // own tokens store. With per-user storage the migration is per-user and
 // idempotent (encrypted entries are left alone).
@@ -2875,7 +2901,9 @@ async function discordRequestWithCaptcha({ method, url, token, body, pageUrl: pa
       captchaKey = null; captchaRqtoken = null;
       captchaAttempts++;
       if (captchaAttempts > MAX_CAPTCHA_ATTEMPTS) {
-        throw new Error('Captcha retry exhausted — Discord rejected ' + MAX_CAPTCHA_ATTEMPTS + ' fresh tokens in a row. Common causes: (1) account requires the Discord password (set it in the Generator panel), (2) IP/VPN flagged by Discord, (3) account flagged for automation. Try a different account or wait ~10 minutes.');
+        const err = new Error('Captcha retry exhausted — Discord rejected ' + MAX_CAPTCHA_ATTEMPTS + ' fresh tokens in a row. Common causes: (1) account requires the Discord password (set it in the Generator panel), (2) IP/VPN flagged by Discord, (3) account flagged for automation. Try a different account or wait ~10 minutes.');
+        err.code = rqdata ? 'ERR_CAPTCHA_ENTERPRISE_MISMATCH' : 'ERR_CAPTCHA_RETRY_EXHAUSTED';
+        throw err;
       }
       const sitekey = e.captcha_sitekey || '';
       const service = e.captcha_service || 'hcaptcha';
@@ -2900,6 +2928,12 @@ async function discordRequestWithCaptcha({ method, url, token, body, pageUrl: pa
       continue; // retry with captcha key
     }
     const msg = e.message || e.errors?._errors?.[0]?.message || `Discord ${r.status}`;
+    if (/terms|tos|developer policy|accept/i.test(String(msg))) {
+      const err = new Error('Discord requires accepting Developer Terms for this account first. Open https://discord.com/developers/applications, accept terms, then retry.');
+      err.code = 'ERR_TERMS_REQUIRED';
+      err.status = r.status; err.body = e;
+      throw err;
+    }
     const err = new Error(msg);
     err.status = r.status; err.body = e;
     throw err;
@@ -2917,6 +2951,7 @@ function waitManualCaptcha({ sitekey, service, rqdata, rqtoken, pageUrl }) {
     botTask.state = 'waiting_captcha';
     botTask.pendingCaptcha = {
       nonce,
+      fingerprint: crypto.createHash('sha256').update(`${nonce}|${sitekey}|${rqdata || ''}`).digest('hex').slice(0, 16),
       sitekey, service, rqdata, rqtoken,
       pageUrl: pageUrl || 'https://discord.com',
       issuedAt: Date.now(),
@@ -2934,7 +2969,23 @@ function waitManualCaptcha({ sitekey, service, rqdata, rqtoken, pageUrl }) {
   });
 }
 
-async function createOneBot({ userToken, name, avatarDataUrl, bannerDataUrl, netOpts = {}, accountPassword = '' }) {
+app.get('/api/bots/captcha/health', (req, res) => {
+  const p = botTask.pendingCaptcha;
+  if (!p) return ok(res, { connected: false, state: botTask.state || 'idle' });
+  const ageMs = Date.now() - (p.issuedAt || Date.now());
+  const expired = ageMs > (10 * 60 * 1000);
+  ok(res, {
+    connected: !expired,
+    expired,
+    state: botTask.state || 'idle',
+    nonce: p.nonce,
+    fingerprint: p.fingerprint || '',
+    ageSec: Math.floor(ageMs / 1000),
+    issuedAt: p.issuedAt || null
+  });
+});
+
+async function createOneBot({ userToken, name, avatarDataUrl, bannerDataUrl, netOpts = {}, accountPassword = '', fetchTokenNow = true }) {
   const pw = String(accountPassword || '').trim();
   const withPw = (obj = {}) => (pw ? { ...obj, password: pw } : obj);
   const step = (s) => pushBotEvent('bot_progress', { msg: `${name}: ${s}` });
@@ -2949,38 +3000,65 @@ async function createOneBot({ userToken, name, avatarDataUrl, bannerDataUrl, net
   if (!appId) throw new Error('Discord did not return an application id');
   step(`step 1/4 ✓ application id ${appId}`);
 
-  // 2) Convert to bot (creates the bot user). Token is rarely returned here —
-  // we explicitly call /reset below to guarantee we get a fresh, valid token.
+  // 2) Convert to bot (creates the bot user when missing). Token is rarely
+  // returned here — we explicitly call /reset below to guarantee we get a
+  // fresh, valid token. If Discord says the application already has a bot
+  // user, treat that as success and continue.
   step('step 2/4 — converting application to bot user');
-  const botCreate = await discordRequestWithCaptcha({
-    method: 'POST', url: `https://discord.com/api/v9/applications/${appId}/bot`,
-    token: userToken, body: withPw({}), netOpts
-  });
+  let botCreate;
+  try {
+    botCreate = await discordRequestWithCaptcha({
+      method: 'POST', url: `https://discord.com/api/v9/applications/${appId}/bot`,
+      token: userToken, body: withPw({}), netOpts
+    });
+  } catch (e) {
+    const msg = String(e?.message || '');
+    if (/already.*bot|existing.*bot|already exists/i.test(msg)) {
+      const appInfo = await discordRequestWithCaptcha({
+        method: 'GET', url: `https://discord.com/api/v9/applications/${appId}`,
+        token: userToken, body: null, netOpts
+      });
+      botCreate = appInfo?.bot ? { ...appInfo.bot, user: appInfo.bot } : {};
+      step('step 2/4 ✓ application already had a bot user');
+    } else {
+      throw e;
+    }
+  }
   const botUserId = botCreate.id || botCreate.user?.id || appId;
   step(`step 2/4 ✓ bot user id ${botUserId}`);
 
   // 3) Get/reset bot token (the listing endpoint does NOT return the token, so
-  // a reset is the only reliable way to obtain it).
+  // a reset is the only reliable way to obtain it). In manual-captcha mode we
+  // can skip immediate reset to avoid a second captcha challenge in the same run.
   step('step 3/4 — fetching bot token');
   let botToken = botCreate.token;
-  if (!botToken) {
-    const reset = await discordRequestWithCaptcha({
-      method: 'POST', url: `https://discord.com/api/v9/applications/${appId}/bot/reset`,
-      token: userToken, body: withPw({}), netOpts
-    });
-    botToken = reset.token;
+  let tokenPendingReason = '';
+  if (!botToken && fetchTokenNow) {
+    try {
+      const reset = await discordRequestWithCaptcha({
+        method: 'POST', url: `https://discord.com/api/v9/applications/${appId}/bot/reset`,
+        token: userToken, body: withPw({}), netOpts
+      });
+      botToken = reset.token;
+      if (!botToken) {
+        await new Promise(r => setTimeout(r, 1500));
+        const resetAgain = await discordRequestWithCaptcha({
+          method: 'POST', url: `https://discord.com/api/v9/applications/${appId}/bot/reset`,
+          token: userToken, body: withPw({}), netOpts
+        });
+        botToken = resetAgain.token;
+      }
+    } catch (e) {
+      tokenPendingReason = e?.code || 'ERR_TOKEN_FETCH_DEFERRED';
+      botToken = '';
+    }
   }
-  if (!botToken) {
-    // Discord occasionally needs a moment before the bot user is fully provisioned
-    await new Promise(r => setTimeout(r, 1500));
-    const resetAgain = await discordRequestWithCaptcha({
-      method: 'POST', url: `https://discord.com/api/v9/applications/${appId}/bot/reset`,
-      token: userToken, body: withPw({}), netOpts
-    });
-    botToken = resetAgain.token;
+  if (!botToken && fetchTokenNow) throw new Error('Discord did not return a bot token after creating the bot user');
+  if (!botToken && !fetchTokenNow) {
+    step('step 3/4 ⚠ token fetch deferred (manual mode) — use "Fetch token" in Library');
+  } else {
+    step('step 3/4 ✓ token received');
   }
-  if (!botToken) throw new Error('Discord did not return a bot token after creating the bot user');
-  step('step 3/4 ✓ token received');
 
   // 4) Apply intents / avatar / banner (best-effort — bot itself is already created).
   const patchBody = {};
@@ -3005,24 +3083,53 @@ async function createOneBot({ userToken, name, avatarDataUrl, bannerDataUrl, net
 
   // Validate the bot token actually works against Discord
   let validated = false;
-  try {
-    const r = await axios.get('https://discord.com/api/v10/users/@me', {
-      headers: { Authorization: `Bot ${botToken}` }, validateStatus: () => true, timeout: 15000, ...netOpts
-    });
-    validated = r.status === 200;
-  } catch (e) {}
-  step(validated ? '✅ verified working with Discord' : '⚠ created but token validation failed');
+  if (botToken) {
+    try {
+      const r = await axios.get('https://discord.com/api/v10/users/@me', {
+        headers: { Authorization: `Bot ${botToken}` }, validateStatus: () => true, timeout: 15000, ...netOpts
+      });
+      validated = r.status === 200;
+    } catch (e) {}
+    step(validated ? '✅ verified working with Discord' : '⚠ created but token validation failed');
+  } else {
+    step('ℹ bot created; token not fetched yet');
+  }
 
-  return { appId, botUserId, botToken, validated, avatarUrl: botAvatarUrl(botUserId, botCreate.avatar || botCreate.user?.avatar) };
+  return { appId, botUserId, botToken, validated, tokenPendingReason, avatarUrl: botAvatarUrl(botUserId, botCreate.avatar || botCreate.user?.avatar) };
 }
 
 async function createOneBotReliable(opts, maxAttempts = 3) {
+  const classify = (e) => {
+    const msg = String(e?.message || '');
+    if (/terms|tos|developer policy|accept/i.test(msg)) return 'terms';
+    if (/password/i.test(msg)) return 'password';
+    if (/two[- ]factor|2fa|mfa/i.test(msg)) return 'stepup';
+    if (/captcha retry exhausted|captcha solve timed out|captcha/i.test(msg)) return 'captcha';
+    if (/unauthorized|invalid auth|account.*disabled|account.*locked/i.test(msg) || e?.status === 401 || e?.status === 403) return 'auth';
+    if (e?.status === 429) return 'ratelimit';
+    if (/ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|socket hang up|network error|request timed out/i.test(msg)) return 'network';
+    return 'unknown';
+  };
+
   let lastErr = null;
+  let triedWithoutPassword = false;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       return await createOneBot(opts);
     } catch (e) {
       lastErr = e;
+      const kind = classify(e);
+      // Common real-world case: saved password is stale/changed. Try once
+      // without password so Discord can proceed if it does not require one.
+      if (kind === 'password' && opts?.accountPassword && !triedWithoutPassword) {
+        triedWithoutPassword = true;
+        try {
+          pushBotEvent('bot_progress', { msg: 'password rejected — retrying once without saved password' });
+          return await createOneBot({ ...opts, accountPassword: '' });
+        } catch (e2) {
+          lastErr = e2;
+        }
+      }
       const msg = String(e?.message || '');
       // Bail out immediately on errors where retrying would just trigger another
       // captcha-storm or burn the user's time without a real chance of success.
@@ -3045,7 +3152,18 @@ async function createOneBotReliable(opts, maxAttempts = 3) {
       await new Promise(r => setTimeout(r, delay));
     }
   }
-  throw lastErr || new Error('Unknown bot creation failure');
+  const finalMsg = String(lastErr?.message || 'Unknown bot creation failure');
+  if (!lastErr) throw new Error(finalMsg);
+  if (/password/i.test(finalMsg)) {
+    throw new Error(`${finalMsg} — الحل: حدث كلمة المرور في Generator أو امسحها وأعد المحاولة / Solution: update or clear saved account password and retry.`);
+  }
+  if (/terms|tos|developer policy|accept/i.test(finalMsg)) {
+    throw new Error(`${finalMsg} — الحل: وافق على الشروط من https://discord.com/developers/applications ثم أعد المحاولة / Solution: accept Developer Terms then retry.`);
+  }
+  if (/captcha/i.test(finalMsg)) {
+    throw new Error(`${finalMsg} — الحل: استخدم Solve in browser مع نفس challenge وانتظر 5-10 دقائق عند الرفض المتكرر / Solution: solve using the in-browser flow and wait 5-10 minutes after repeated rejects.`);
+  }
+  throw lastErr;
 }
 
 async function validateUserTokenWorks(userToken, netOpts = {}) {
@@ -3238,10 +3356,28 @@ async function fetchAllTeams() {
       }
     } catch (e) { /* continue */ }
   }
+  // Fallback: if Discord /teams fails/returns empty for some accounts, still surface
+  // teams discovered from synced applications in the local library.
+  if (out.length === 0) {
+    const d = ensureData();
+    for (const b of (d.bots || [])) {
+      const tid = String(b?.team?.id || '');
+      if (!tid || seen.has(tid)) continue;
+      seen.add(tid);
+      out.push({
+        id: tid,
+        name: b.team?.name || 'Team',
+        ownerUserId: null,
+        icon: null,
+        memberCount: 0,
+        discoveredVia: b.ownerAccount || b.createdBy || 'library',
+      });
+    }
+  }
   return out;
 }
 
-async function runBotCreationTask({ ownerName, userToken, count, namePattern, avatarDataUrl, bannerDataUrl, customPasswordPattern, netOpts = {}, accountPassword = '' }) {
+async function runBotCreationTask({ ownerName, userToken, count, namePattern, avatarDataUrl, bannerDataUrl, customPasswordPattern, netOpts = {}, accountPassword = '', fetchTokenNow = true, strictMode = false }) {
   botTask.state = 'running';
   botTask.startedAt = Date.now();
   botTask.account = ownerName;
@@ -3271,7 +3407,7 @@ async function runBotCreationTask({ ownerName, userToken, count, namePattern, av
     botTask.current = name;
     pushBotEvent('bot_progress', { msg: `creating ${name}` });
     try {
-      const r = await createOneBotReliable({ userToken, name, avatarDataUrl, bannerDataUrl, netOpts, accountPassword }, 3);
+      const r = await createOneBotReliable({ userToken, name, avatarDataUrl, bannerDataUrl, netOpts, accountPassword, fetchTokenNow }, strictMode ? 1 : 3);
       // Local password is optional. Bot tokens are the real credential, so we no
       // longer auto-generate a meaningless local password. Only set one if the
       // user explicitly provided a pattern in customPasswordPattern.
@@ -3287,6 +3423,8 @@ async function runBotCreationTask({ ownerName, userToken, count, namePattern, av
         token: r.botToken,
         password,
         validated: r.validated,
+        tokenPending: !r.botToken,
+        tokenPendingReason: r.tokenPendingReason || '',
         avatar: !!avatarDataUrl,
         avatarUrl: r.avatarUrl || null,
         banner: !!bannerDataUrl,
@@ -3306,8 +3444,19 @@ async function runBotCreationTask({ ownerName, userToken, count, namePattern, av
       botTask.failed += 1;
       botTask.successStreak = 0;
       botTask.lastError = e.message;
-      pushBotEvent('bot_failed', { name, error: e.message });
+      // Ensure we never remain visually stuck in WAITING_CAPTCHA after a hard
+      // failure (e.g. captcha retry exhausted). The captcha promise may already
+      // be resolved/rejected, but state can still be "waiting_captcha".
+      if (botTask.state === 'waiting_captcha') botTask.state = 'running';
+      if (botTask.pendingCaptcha) botTask.pendingCaptcha = null;
+      pushBotEvent('bot_failed', { name, error: e.message, code: e.code || '' });
       if (/Cancelled/i.test(e.message)) break;
+      // Fatal captcha failures are account/session-level signals; continuing the
+      // same batch usually burns more attempts with the same outcome.
+      if (/captcha retry exhausted/i.test(String(e.message || ''))) {
+        botTask.cancelRequested = true;
+        break;
+      }
       // If 429, sleep an extra 30s
       if (e.status === 429) {
         botTask.rateLimitHits = (botTask.rateLimitHits || 0) + 1;
@@ -3398,7 +3547,7 @@ app.delete('/api/bots/:id', async (req, res) => {
     // Fall back to saved encrypted password if caller didn't provide one
     if (!accountPassword) {
       try {
-        const saved = readTokens().find(t => t.name === ownerAccount);
+        const saved = findSavedTokenByName(ownerAccount);
         if (saved?.accountPassword) accountPassword = saved.accountPassword;
       } catch (e) {}
     }
@@ -3413,8 +3562,9 @@ app.delete('/api/bots/:id', async (req, res) => {
     } catch (e) {
       const msg = e?.response?.data?.message || e?.message || 'Discord deletion failed';
       const code = e?.response?.status;
+      const hint = discordAuthHint(e);
       // 404 means the app no longer exists on Discord — proceed to remove from library.
-      if (code !== 404) return fail(res, new Error(`Discord refused deletion: ${msg}${/password/i.test(msg) ? ' (account password may be required)' : ''}`));
+      if (code !== 404) return fail(res, new Error(`Discord refused deletion: ${msg}${hint ? ` (${hint})` : ''}`));
     }
   }
 
@@ -3438,7 +3588,7 @@ app.post('/api/bots/:id/reset-token', async (req, res) => {
     let accountPassword = (req.body && req.body.accountPassword) || '';
     if (!accountPassword) {
       try {
-        const saved = readTokens().find(t => t.name === ownerAccount);
+        const saved = findSavedTokenByName(ownerAccount);
         if (saved?.accountPassword) accountPassword = saved.accountPassword;
       } catch (e) {}
     }
@@ -3452,7 +3602,8 @@ app.post('/api/bots/:id/reset-token', async (req, res) => {
       });
     } catch (e) {
       const msg = e?.response?.data?.message || e?.message || 'failed';
-      return fail(res, new Error(`Discord refused token reset: ${msg}${/password/i.test(msg) ? ' (account password is required)' : ''}`));
+      const hint = discordAuthHint(e);
+      return fail(res, new Error(`Discord refused token reset: ${msg}${hint ? ` (${hint})` : ''}`));
     }
     const newToken = resp?.token;
     if (!newToken) return fail(res, new Error('Discord did not return a new token'));
@@ -3474,6 +3625,43 @@ app.post('/api/bots/:id/reset-token', async (req, res) => {
 
 app.get('/api/bots/status', (req, res) => ok(res, { task: botSnapshot() }));
 
+app.get('/api/bots/preflight', async (req, res) => {
+  try {
+    const account = String(req.query.account || activeRef.get() || '').trim();
+    if (!account) return fail(res, new Error('account is required'));
+    const c = clients.get(account);
+    if (!c?.token) return fail(res, new Error('Account is not connected'));
+    const netOpts = buildAxiosNetOpts(c.proxy);
+    const checks = [];
+    const add = (key, okState, message) => checks.push({ key, ok: !!okState, message });
+
+    const tokenCheck = await validateUserTokenWorks(c.token, netOpts);
+    add('token_valid', tokenCheck.ok, tokenCheck.ok ? 'Account token is valid' : `Account token failed: ${tokenCheck.error}`);
+
+    try {
+      await fetchAccountApplications(c.token, netOpts);
+      add('developer_terms', true, 'Developer portal access OK');
+    } catch (e) {
+      const msg = String(e?.message || '');
+      if (/terms|tos|developer policy|accept/i.test(msg)) {
+        add('developer_terms', false, 'Accept Developer Terms first: https://discord.com/developers/applications');
+      } else {
+        add('developer_terms', true, 'Developer terms check skipped (Discord temporary issue)');
+      }
+    }
+
+    const saved = findSavedTokenByName(account);
+    add('saved_password', !!saved?.accountPassword, saved?.accountPassword ? 'Saved account password found' : 'No saved account password (might be okay unless Discord asks for it)');
+
+    const cfg = ensureData();
+    const has2cap = !!String(cfg?.botsConfig?.captcha2captchaKey || '').trim();
+    add('captcha_solver', has2cap, has2cap ? '2captcha key is configured' : 'No 2captcha key — manual captcha solving required');
+
+    const blockers = checks.filter(c => !c.ok && (c.key === 'token_valid' || c.key === 'developer_terms'));
+    ok(res, { account, checks, canStart: blockers.length === 0, blockers });
+  } catch (e) { fail(res, e); }
+});
+
 app.post('/api/bots/create', (req, res) => {
   if (botTask.state === 'running' || botTask.state === 'waiting_captcha') {
     return fail(res, new Error('A bot creation task is already running'));
@@ -3489,14 +3677,17 @@ app.post('/api/bots/create', (req, res) => {
   let resolvedAccountPassword = (accountPassword || '').toString();
   if (!resolvedAccountPassword) {
     try {
-      const saved = readTokens().find(t => t.name === resolvedAccount);
+      const saved = findSavedTokenByName(resolvedAccount);
       if (saved?.accountPassword) resolvedAccountPassword = saved.accountPassword;
     } catch (e) { /* non-fatal */ }
   }
   const netOpts = buildAxiosNetOpts(c.proxy);
   const n = Math.max(1, Math.min(50, parseInt(count || 1) || 1));
+  const strictMode = n === 1;
   // Allow faster runs; adaptive backoff in-task will auto-protect on pressure.
-  botTask.cooldownMs = Math.max(5000, parseInt(cooldownMs || 45000) || 45000);
+  botTask.cooldownMs = strictMode
+    ? Math.max(90000, parseInt(cooldownMs || 120000) || 120000)
+    : Math.max(5000, parseInt(cooldownMs || 45000) || 45000);
   const validDataUrl = (v) => !v || (typeof v === 'string' && /^data:image\/(png|jpe?g|webp|gif);base64,/i.test(v) && v.length <= 12 * 1024 * 1024);
   if (!validDataUrl(avatarDataUrl)) return fail(res, new Error('Invalid avatar image format (must be image data URL, max 12MB)'));
   if (!validDataUrl(bannerDataUrl)) return fail(res, new Error('Invalid banner image format (must be image data URL, max 12MB)'));
@@ -3525,7 +3716,11 @@ app.post('/api/bots/create', (req, res) => {
       bannerDataUrl: bannerDataUrl || null,
       customPasswordPattern: customPasswordPattern || '',
       netOpts,
-      accountPassword: resolvedAccountPassword
+      accountPassword: resolvedAccountPassword,
+      // In manual captcha mode (no auto-solver), defer token reset to avoid
+      // multiple captcha prompts for a single bot creation flow.
+      fetchTokenNow: strictMode ? false : !!String((ensureData()?.botsConfig?.captcha2captchaKey || '')).trim(),
+      strictMode
     });
   }).catch(e => {
     botTask.state = 'error';
@@ -3533,6 +3728,44 @@ app.post('/api/bots/create', (req, res) => {
     pushBotEvent('bot_done', {});
   });
   ok(res, { started: true, account: resolvedAccount, task: botSnapshot() });
+});
+
+app.post('/api/bots/verify-pending', async (req, res) => {
+  try {
+    const d = ensureData();
+    const pending = (d.bots || []).filter(b => !b.token && b.appId);
+    let checked = 0, fixed = 0, failed = 0;
+    for (const b of pending) {
+      checked += 1;
+      try {
+        const owner = b.ownerAccount || b.createdBy;
+        const c = owner ? clients.get(owner) : null;
+        if (!c?.token) { failed += 1; continue; }
+        const saved = findSavedTokenByName(owner);
+        const body = saved?.accountPassword ? { password: String(saved.accountPassword) } : {};
+        const netOpts = buildAxiosNetOpts(c.proxy);
+        const r = await discordRequestWithCaptcha({
+          method: 'POST', url: `https://discord.com/api/v9/applications/${b.appId}/bot/reset`,
+          token: c.token, body, netOpts
+        });
+        if (r?.token) {
+          b.token = r.token;
+          b.tokenPending = false;
+          b.tokenPendingReason = '';
+          fixed += 1;
+        } else {
+          failed += 1;
+        }
+      } catch (e) {
+        b.tokenPending = true;
+        b.tokenPendingReason = e?.code || 'ERR_TOKEN_VERIFY_FAILED';
+        failed += 1;
+      }
+      await new Promise(r => setTimeout(r, 2500));
+    }
+    writeData(d);
+    ok(res, { checked, fixed, failed });
+  } catch (e) { fail(res, e); }
 });
 
 app.post('/api/bots/cancel', (req, res) => {

@@ -429,9 +429,12 @@ window.electronAPI = {
   botsDeleteFromDiscord: (id, accountPassword = '') => apiCall('DELETE', `/api/bots/${encodeURIComponent(id)}?fromDiscord=true`, { accountPassword }),
   botsResetToken:     (id, accountPassword = '') => apiCall('POST', `/api/bots/${encodeURIComponent(id)}/reset-token`, { accountPassword }),
   botsStatus:         () => apiCall('GET', '/api/bots/status'),
+  botsPreflight:      (account) => apiCall('GET', `/api/bots/preflight?account=${encodeURIComponent(account || '')}`),
   botsCreate:         (cfg) => apiCall('POST', '/api/bots/create', cfg),
+  botsVerifyPending:  () => apiCall('POST', '/api/bots/verify-pending'),
   botsCancel:         () => apiCall('POST', '/api/bots/cancel'),
   botsSubmitCaptcha:  (captchaKey, nonce = '') => apiCall('POST', '/api/bots/captcha', { captchaKey, nonce }),
+  botsCaptchaHealth:  () => apiCall('GET', '/api/bots/captcha/health'),
   botsGetConfig:      () => apiCall('GET', '/api/bots/config'),
   botsSetConfig:      (cfg) => apiCall('POST', '/api/bots/config', cfg),
   // Per-account stored Discord password (encrypted server-side, never read back)
