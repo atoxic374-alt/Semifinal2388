@@ -2890,21 +2890,33 @@ function waitManualCaptcha({ sitekey, service, rqdata, rqtoken, pageUrl }) {
 async function createOneBot({ userToken, name, avatarDataUrl, bannerDataUrl, netOpts = {}, accountPassword = '' }) {
   const pw = String(accountPassword || '').trim();
   const withPw = (obj = {}) => (pw ? { ...obj, password: pw } : obj);
+  const step = (s) => pushBotEvent('bot_progress', { msg: `${name}: ${s}` });
+
   // 1) Create application
+  step('step 1/4 — creating Discord application');
   const app = await discordRequestWithCaptcha({
     method: 'POST', url: 'https://discord.com/api/v9/applications',
     token: userToken, body: withPw({ name, team_id: null }), netOpts
   });
   const appId = app.id;
+  if (!appId) throw new Error('Discord did not return an application id');
+  step(`step 1/4 ✓ application id ${appId}`);
 
-  // 2) Convert to bot (creates the bot user, returns initial token)
+  // 2) Convert to bot (creates the bot user). Token is rarely returned here —
+  // we explicitly call /reset below to guarantee we get a fresh, valid token.
+  step('step 2/4 — converting application to bot user');
   const botCreate = await discordRequestWithCaptcha({
     method: 'POST', url: `https://discord.com/api/v9/applications/${appId}/bot`,
     token: userToken, body: withPw({}), netOpts
   });
+  const botUserId = botCreate.id || botCreate.user?.id || appId;
+  step(`step 2/4 ✓ bot user id ${botUserId}`);
+
+  // 3) Get/reset bot token (the listing endpoint does NOT return the token, so
+  // a reset is the only reliable way to obtain it).
+  step('step 3/4 — fetching bot token');
   let botToken = botCreate.token;
   if (!botToken) {
-    // Some accounts must reset to receive the token
     const reset = await discordRequestWithCaptcha({
       method: 'POST', url: `https://discord.com/api/v9/applications/${appId}/bot/reset`,
       token: userToken, body: withPw({}), netOpts
@@ -2912,41 +2924,39 @@ async function createOneBot({ userToken, name, avatarDataUrl, bannerDataUrl, net
     botToken = reset.token;
   }
   if (!botToken) {
-    // Last fallback: a second reset often succeeds when Discord delays token issuance.
-    await new Promise(r => setTimeout(r, 1200));
+    // Discord occasionally needs a moment before the bot user is fully provisioned
+    await new Promise(r => setTimeout(r, 1500));
     const resetAgain = await discordRequestWithCaptcha({
       method: 'POST', url: `https://discord.com/api/v9/applications/${appId}/bot/reset`,
       token: userToken, body: withPw({}), netOpts
     });
     botToken = resetAgain.token;
   }
-  if (!botToken) throw new Error('Discord did not return a bot token');
-  const botUserId = botCreate.id || botCreate.user?.id || appId;
+  if (!botToken) throw new Error('Discord did not return a bot token after creating the bot user');
+  step('step 3/4 ✓ token received');
 
-  // 3) Apply bot settings (including privileged intents) and avatar/banner
+  // 4) Apply intents / avatar / banner (best-effort — bot itself is already created).
   const patchBody = {};
   if (avatarDataUrl) patchBody.avatar = avatarDataUrl;
   if (bannerDataUrl) patchBody.banner = bannerDataUrl;
-  // Enable privileged intents where possible for newly created bots.
-  // Discord may ignore some bits depending on account/app eligibility.
-  const INTENT_GUILD_MEMBERS = 1 << 14;
+  const INTENT_GUILD_MEMBERS   = 1 << 14;
   const INTENT_GUILD_PRESENCES = 1 << 12;
   const INTENT_MESSAGE_CONTENT = 1 << 18;
-  const desiredIntentFlags = INTENT_GUILD_MEMBERS | INTENT_GUILD_PRESENCES | INTENT_MESSAGE_CONTENT;
-  patchBody.flags = (Number(botCreate.flags || 0) | desiredIntentFlags);
+  patchBody.flags = (Number(botCreate.flags || 0) | INTENT_GUILD_MEMBERS | INTENT_GUILD_PRESENCES | INTENT_MESSAGE_CONTENT);
   if (Object.keys(patchBody).length) {
+    step('step 4/4 — applying intents' + (avatarDataUrl ? ' + avatar' : '') + (bannerDataUrl ? ' + banner' : ''));
     try {
       await discordRequestWithCaptcha({
         method: 'PATCH', url: `https://discord.com/api/v9/applications/${appId}/bot`,
         token: userToken, body: withPw(patchBody), netOpts
       });
+      step('step 4/4 ✓ settings applied');
     } catch (e) {
-      // Soft-fail: keep the bot, surface the error
-      pushBotEvent('bot_progress', { msg: `avatar/banner failed: ${e.message}` });
+      step(`step 4/4 ⚠ settings failed (bot still works): ${e.message}`);
     }
   }
 
-  // 4) Validate the bot token works
+  // Validate the bot token actually works against Discord
   let validated = false;
   try {
     const r = await axios.get('https://discord.com/api/v10/users/@me', {
@@ -2954,6 +2964,7 @@ async function createOneBot({ userToken, name, avatarDataUrl, bannerDataUrl, net
     });
     validated = r.status === 200;
   } catch (e) {}
+  step(validated ? '✅ verified working with Discord' : '⚠ created but token validation failed');
 
   return { appId, botUserId, botToken, validated, avatarUrl: botAvatarUrl(botUserId, botCreate.avatar || botCreate.user?.avatar) };
 }
@@ -3057,23 +3068,34 @@ async function syncBotsLibraryFromConnectedAccounts() {
       continue;
     }
     for (const app of apps) {
-      const bot = app?.bot;
-      if (!bot?.token) continue;
       const appId = String(app.id || '');
       if (!appId) continue;
+      // Discord's /applications listing does NOT include the bot token (token is
+      // only returned on POST /applications/{id}/bot/reset). So we cannot filter
+      // on `bot.token` — that would hide every existing bot from the library.
+      // Filter rule: include the app if it has a bot user (app.bot present) OR
+      // it has bot-related fields (bot_public/bot_require_code_grant), which are
+      // only set on apps that have been converted to bots.
+      const bot = app?.bot || null;
+      const looksLikeBot = !!bot || app.bot_public != null || app.bot_require_code_grant != null;
+      if (!looksLikeBot) continue;
       seenAppIds.add(appId);
       const team = app.team || null;
       const ownerName = team?.name || app.owner?.username || accountName;
-      const avatarUrl = botAvatarUrl(bot.id, bot.avatar);
+      const botUserId = bot?.id || app.id;
+      const avatarHash = bot?.avatar || app.icon || null;
+      const avatarUrl = botAvatarUrl(botUserId, avatarHash);
+      const botName = bot?.username || app.name || `Bot`;
       const existing = byAppId.get(appId);
       if (existing) {
         const updated = {
           ...existing,
-          name: app.name || existing.name,
-          token: bot.token || existing.token,
-          botUserId: bot.id || existing.botUserId,
+          name: existing.source === 'created' ? existing.name : (botName || existing.name),
+          // Only overwrite token if Discord actually returned one (it usually doesn't on listing)
+          token: bot?.token || existing.token,
+          botUserId: botUserId || existing.botUserId,
           avatarUrl: avatarUrl || existing.avatarUrl || null,
-          team: team ? { id: team.id || null, name: team.name || null } : null,
+          team: team ? { id: team.id || null, name: team.name || null } : (existing.team || null),
           createdBy: existing.createdBy || ownerName,
           ownerAccount: existing.ownerAccount || accountName,
           source: existing.source || 'synced',
@@ -3088,12 +3110,14 @@ async function syncBotsLibraryFromConnectedAccounts() {
         const rec = {
           id: 'bot_' + Date.now() + '_' + crypto.randomBytes(3).toString('hex'),
           number: num,
-          name: app.name || `Bot ${String(num).padStart(2, '0')}`,
+          name: botName,
           appId,
-          botUserId: bot.id || appId,
-          token: bot.token,
+          botUserId,
+          // No token until the user explicitly fetches it via "Fetch token" button.
+          // This is the correct behavior — Discord does not return bot tokens on listing.
+          token: bot?.token || '',
           password: '',
-          validated: true,
+          validated: false,
           avatar: !!avatarUrl,
           avatarUrl: avatarUrl || null,
           banner: false,
@@ -3267,9 +3291,12 @@ async function runBotCreationTask({ ownerName, userToken, count, namePattern, av
       await new Promise(r => setTimeout(r, jitter));
     }
   }
+  // Final sync against Discord so the Library reflects the live state, including
+  // any team/icon/name updates that happened during the run.
+  try { await syncBotsLibraryFromConnectedAccounts(); } catch (e) { /* non-fatal */ }
   botTask.state = botTask.cancelRequested ? 'cancelled' : 'done';
   botTask.current = '';
-  pushBotEvent('bot_done', {});
+  pushBotEvent('bot_done', { ok: botTask.done, failed: botTask.failed, total: botTask.total });
 }
 
 // ── Endpoints
