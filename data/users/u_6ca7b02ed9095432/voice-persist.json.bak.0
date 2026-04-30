@@ -1,12 +1,12 @@
 [
   {
-    "name": "acc_2",
-    "guildId": "1484362196468240500",
-    "channelId": "1491946914751447042",
+    "name": "acc_1",
+    "guildId": "1146796889887490048",
+    "channelId": "1261712476525821983",
     "selfMute": false,
     "selfDeaf": false,
     "selfVideo": false,
-    "selfStream": true,
-    "joinedAt": 1777432106758
+    "selfStream": false,
+    "joinedAt": 1777432991231
   }
 ]

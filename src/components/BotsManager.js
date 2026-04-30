@@ -124,7 +124,18 @@ export class BotsManager {
       </div>
     `;
     this.contentArea.querySelectorAll('.bm-tab').forEach(b => {
-      b.addEventListener('click', () => { this.tab = b.dataset.tab; sfx.click?.(); this.renderBody(); this.contentArea.querySelectorAll('.bm-tab').forEach(x => x.classList.toggle('active', x === b)); });
+      b.addEventListener('click', async () => {
+        this.tab = b.dataset.tab;
+        sfx.click?.();
+        this.contentArea.querySelectorAll('.bm-tab').forEach(x => x.classList.toggle('active', x === b));
+        this.renderBody();
+        // When entering the Library tab, force a fresh sync from Discord so the
+        // user sees Created/Synced/Teams/Capacity reflecting the live state.
+        if (this.tab === 'lib') {
+          await this.refreshAll().catch(() => {});
+          this.renderLibrary();
+        }
+      });
     });
     this.renderProgress();
     this.renderBody();
@@ -338,16 +349,9 @@ export class BotsManager {
     const teams = this.teams || [];
     const capacity = this.capacity || [];
 
-    if (!this.bots.length && !teams.length) {
-      body.innerHTML = `
-        <div class="bm-empty">
-          <div class="bm-empty-icon">${icon('users')}</div>
-          <div>${t('bm.empty_title')}</div>
-          <div class="bm-hint">${t('bm.empty_hint')}</div>
-        </div>
-      `;
-      return;
-    }
+    // Don't early-return on empty state anymore: even when this user has no bots,
+    // we still want to show the account capacity and the empty Created/Synced/Teams
+    // sections so the user can see the new layout and that nothing is missing.
 
     body.innerHTML = `
       <div class="bm-lib-head">

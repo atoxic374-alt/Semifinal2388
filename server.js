@@ -2812,8 +2812,12 @@ async function discordRequestWithCaptcha({ method, url, token, body, pageUrl: pa
   const baseHeaders = discordHeaders(token, { Referer: 'https://discord.com/developers/applications' });
   let captchaKey = null, captchaRqtoken = null;
   let captchaAttempts = 0;
-  const MAX_CAPTCHA_ATTEMPTS = 3;
-  for (let attempt = 0; attempt < 8; attempt++) {
+  // Limit how many times we ask the user to solve a captcha for a single API call.
+  // Each retry takes 30-60s of the user's time; if Discord rejects 2 fresh tokens
+  // in a row, it almost always means we're missing something (account password,
+  // proxy reputation, IP banned) and more captchas won't help.
+  const MAX_CAPTCHA_ATTEMPTS = 2;
+  for (let attempt = 0; attempt < 6; attempt++) {
     if (botTask.cancelRequested) throw new Error('Cancelled');
     const reqHeaders = { ...baseHeaders };
     if (captchaKey) {
@@ -2834,7 +2838,9 @@ async function discordRequestWithCaptcha({ method, url, token, body, pageUrl: pa
       // the previous one didn't satisfy them.
       captchaKey = null; captchaRqtoken = null;
       captchaAttempts++;
-      if (captchaAttempts > MAX_CAPTCHA_ATTEMPTS) throw new Error('Captcha retry exhausted (Discord kept rejecting tokens — try a different account or wait a few minutes)');
+      if (captchaAttempts > MAX_CAPTCHA_ATTEMPTS) {
+        throw new Error('Captcha retry exhausted — Discord rejected ' + MAX_CAPTCHA_ATTEMPTS + ' fresh tokens in a row. Common causes: (1) account requires the Discord password (set it in the Generator panel), (2) IP/VPN flagged by Discord, (3) account flagged for automation. Try a different account or wait ~10 minutes.');
+      }
       const sitekey = e.captcha_sitekey || '';
       const service = e.captcha_service || 'hcaptcha';
       const rqdata  = e.captcha_rqdata || null;
@@ -2959,7 +2965,23 @@ async function createOneBotReliable(opts, maxAttempts = 3) {
       return await createOneBot(opts);
     } catch (e) {
       lastErr = e;
-      const isRetryable = !!(e?.status === 429 || e?.status >= 500 || /timed out|timeout|network|token/i.test(String(e?.message || '')));
+      const msg = String(e?.message || '');
+      // Bail out immediately on errors where retrying would just trigger another
+      // captcha-storm or burn the user's time without a real chance of success.
+      const fatal =
+        /captcha retry exhausted/i.test(msg) ||
+        /captcha solve timed out/i.test(msg) ||
+        /password/i.test(msg) ||
+        /unauthorized|invalid auth|account.*disabled|account.*locked/i.test(msg) ||
+        /Cancelled/i.test(msg) ||
+        e?.status === 401 || e?.status === 403;
+      // Genuine transient errors only — narrowed network/timeout regex to avoid matching
+      // captcha-related "rejecting tokens" messages that are NOT actually retryable.
+      const isRetryable = !fatal && !!(
+        e?.status === 429 ||
+        e?.status >= 500 ||
+        /ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|socket hang up|network error|request timed out/i.test(msg)
+      );
       if (attempt >= maxAttempts || !isRetryable) break;
       const delay = Math.min(12000, 1500 * (2 ** (attempt - 1))) + Math.floor(Math.random() * 700);
       await new Promise(r => setTimeout(r, delay));
@@ -3231,9 +3253,17 @@ async function runBotCreationTask({ ownerName, userToken, count, namePattern, av
       const floor = 5000;
       const speedFactor = botTask.successStreak >= 3 ? 0.7 : 1;
       const pressureFactor = 1 + Math.min(2.5, (botTask.rateLimitHits || 0) * 0.35);
-      const base = Math.max(floor, Math.round(botTask.cooldownMs * speedFactor * pressureFactor));
+      // After a non-rate-limited failure, use a SHORT cooldown — a long wait
+      // helps nothing (the issue isn't pacing, it's the request itself).
+      const lastFailedNonRL = !createdThisRound && botTask.rateLimitHits === 0;
+      let base;
+      if (lastFailedNonRL) {
+        base = Math.max(3000, Math.min(15000, Math.round(botTask.cooldownMs * 0.15)));
+      } else {
+        base = Math.max(floor, Math.round(botTask.cooldownMs * speedFactor * pressureFactor));
+      }
       const jitter = base * (0.8 + Math.random() * 0.4);
-      pushBotEvent('bot_progress', { msg: `cooldown ${Math.round(jitter / 1000)}s` });
+      pushBotEvent('bot_progress', { msg: `cooldown ${Math.round(jitter / 1000)}s${lastFailedNonRL ? ' (short — last bot failed)' : ''}` });
       await new Promise(r => setTimeout(r, jitter));
     }
   }
