@@ -44,20 +44,29 @@ export class BotsManager {
 
   async refreshAll() {
     try {
-      const [list, status, cfg] = await Promise.all([
+      const [list, status, cfg, toks] = await Promise.all([
         window.electronAPI.botsList(),
         window.electronAPI.botsStatus(),
-        window.electronAPI.botsGetConfig()
+        window.electronAPI.botsGetConfig(),
+        // Pull saved tokens so we know which accounts have a stored password
+        window.electronAPI.getTokens ? window.electronAPI.getTokens() : Promise.resolve({ tokens: [] })
       ]);
       this.bots = list?.bots || [];
       this.sections = list?.sections || { created: this.bots, synced: [], teamBots: [] };
       this.task = status?.task || { state: 'idle' };
       this.config = cfg?.config || { has2captcha: false };
+      this.savedTokens = toks?.tokens || [];
     } catch (e) {
       showNotification('Failed to load bots: ' + e.message, 'error');
     }
     // Teams + capacity are non-fatal — load in the background.
     this.refreshLibraryAux();
+  }
+
+  hasStoredPassword(name) {
+    if (!name || !Array.isArray(this.savedTokens)) return false;
+    const t = this.savedTokens.find(x => x.name === name);
+    return !!t?.hasPassword;
   }
 
   async refreshLibraryAux() {
@@ -94,6 +103,11 @@ export class BotsManager {
             showNotification(`${t('bm.failed_for')} ${data.name}: ${data.error}`, 'error');
           }
           if (data.type === 'bot_captcha') {
+            // A NEW captcha challenge arrived — wipe any stale input the user may
+            // have already typed for the previous (now-expired) challenge.
+            const stale = this.contentArea.querySelector('#bm-captcha-input');
+            if (stale) stale.value = '';
+            this._lastCaptchaNonce = data.nonce || null;
             showNotification(t('bm.captcha_needed'));
           }
           this.renderHeader();
@@ -162,11 +176,19 @@ export class BotsManager {
     const _sitekey = t1.captcha?.sitekey || '';
     const _service = t1.captcha?.service || 'hcaptcha';
     const _pageUrl = t1.captcha?.pageUrl || 'https://discord.com';
-    const _demoUrl = `https://accounts.hcaptcha.com/demo?sitekey=${encodeURIComponent(_sitekey)}`;
+    const _nonce   = t1.captcha?.nonce || '';
+    const _hasRqdata = !!t1.captcha?.rqdata;
+    // Track this nonce so submitCaptcha can include it
+    if (_nonce) this._currentCaptchaNonce = _nonce;
     const captchaPanel = t1.waitingCaptcha ? `
       <div class="bm-captcha">
         <div class="bm-captcha-msg">${icon('shield')} ${t('bm.captcha_panel_msg')}</div>
         <div class="bm-captcha-meta">
+          <div class="bm-captcha-field">
+            <span class="bm-captcha-label">challenge</span>
+            <code class="bm-captcha-val" title="Unique id for this challenge — old solutions for previous challenges are rejected">#${escapeHtml(_nonce.slice(0,12))}</code>
+            <span class="bm-captcha-label" style="color:${_hasRqdata ? '#23a55a' : '#f0b232'}">${_hasRqdata ? '✔ enterprise (rqdata)' : 'basic'}</span>
+          </div>
           <div class="bm-captcha-field">
             <span class="bm-captcha-label">sitekey</span>
             <code class="bm-captcha-val" data-cap-copy="${escapeAttr(_sitekey)}" title="Click to copy">${escapeHtml(_sitekey)}</code>
@@ -177,17 +199,19 @@ export class BotsManager {
             <code class="bm-captcha-val" data-cap-copy="${escapeAttr(_pageUrl)}" title="Click to copy">${escapeHtml(_pageUrl)}</code>
             <button class="bm-btn ghost xsmall bm-cap-copy" data-cap-copy="${escapeAttr(_pageUrl)}" title="Copy URL">${icon('copy')}</button>
           </div>
-          <div class="bm-captcha-field">
-            <span class="bm-captcha-label">service</span>
-            <code class="bm-captcha-val">${escapeHtml(_service)}</code>
-            ${_sitekey ? `<a class="bm-btn ghost xsmall" href="${_demoUrl}" target="_blank" rel="noopener" title="Open hCaptcha demo">${icon('external')}</a>` : ''}
-          </div>
         </div>
         <div class="bm-captcha-row">
-          <input type="text" id="bm-captcha-input" placeholder="${t('bm.captcha_placeholder')}" />
-          <button class="bm-btn primary" id="bm-captcha-submit">${icon('check')} ${t('bm.submit')}</button>
+          <button class="bm-btn primary" id="bm-captcha-helper" title="Opens a window with the real hCaptcha bound to this exact challenge — recommended for enterprise sitekeys">${icon('shield')} Solve in browser (recommended)</button>
         </div>
-        <div class="bm-captcha-hint">${t('bm.captcha_hint')}</div>
+        <div class="bm-captcha-row">
+          <input type="text" id="bm-captcha-input" placeholder="…or paste hCaptcha token here manually" />
+          <button class="bm-btn" id="bm-captcha-submit">${icon('check')} ${t('bm.submit')}</button>
+        </div>
+        <div class="bm-captcha-hint">
+          ${_hasRqdata
+            ? '⚠ Discord uses hCaptcha <strong>Enterprise</strong> here — tokens from generic demo pages will be rejected. Use "Solve in browser" so the captcha is bound to the correct <code>rqdata</code>.'
+            : t('bm.captcha_hint')}
+        </div>
       </div>
     ` : '';
     wrap.innerHTML = `
@@ -205,6 +229,13 @@ export class BotsManager {
     wrap.querySelector('#bm-cancel')?.addEventListener('click', () => this.cancelTask());
     const sub = wrap.querySelector('#bm-captcha-submit');
     if (sub) sub.addEventListener('click', () => this.submitCaptcha());
+    const helperBtn = wrap.querySelector('#bm-captcha-helper');
+    if (helperBtn) helperBtn.addEventListener('click', () => {
+      // Open in a popup so the hCaptcha widget renders with the correct rqdata.
+      // The popup itself POSTs back to /api/bots/captcha and closes when done.
+      const w = window.open('/captcha-helper', 'discord-captcha-helper', 'width=600,height=720,resizable=yes,scrollbars=yes');
+      if (!w) showNotification('Pop-up blocked — please allow pop-ups and try again', 'error');
+    });
     // Copy buttons / clickable values for sitekey / page URL
     wrap.querySelectorAll('[data-cap-copy]').forEach(el => {
       el.addEventListener('click', async (ev) => {
@@ -251,9 +282,13 @@ export class BotsManager {
 
         <div class="bm-grid">
           <div class="bm-field">
-            <label>${t('bm.password')}</label>
-            <input type="password" id="bm-account-password" value="${escapeAttr(this.form.accountPassword || '')}" placeholder="${t('bm.password')} (optional)" autocomplete="off" />
-            <span class="bm-hint">Used only when Discord requires password confirmation for app/bot actions.</span>
+            <label>${t('bm.password')} ${this.hasStoredPassword(this.account) ? '<span style="color:#23a55a;font-size:11px;margin-left:6px">✔ saved for this account</span>' : ''}</label>
+            <div style="display:flex;gap:6px">
+              <input type="password" id="bm-account-password" value="${escapeAttr(this.form.accountPassword || '')}" placeholder="${this.hasStoredPassword(this.account) ? '(using saved — leave blank)' : t('bm.password') + ' (optional)'}" autocomplete="off" style="flex:1" />
+              <button class="bm-btn ghost small" id="bm-save-password" type="button" title="Encrypt and save this password for the selected account so you don't have to retype it">${icon('check')} Save</button>
+              ${this.hasStoredPassword(this.account) ? `<button class="bm-btn ghost small" id="bm-clear-password" type="button" title="Remove the saved password for this account">${icon('trash')}</button>` : ''}
+            </div>
+            <span class="bm-hint">Stored encrypted (AES-256-GCM). Used automatically for captcha-protected actions on this account.</span>
           </div>
           <div class="bm-field">
             <label>${icon('image')} ${t('bm.avatar')}</label>
@@ -301,10 +336,35 @@ export class BotsManager {
         </div>
       </div>
     `;
-    picker.bind(body, (name) => { this.account = name || null; });
+    picker.bind(body, (name) => {
+      this.account = name || null;
+      // Re-render the password row so the "saved" badge updates for the new account
+      this.renderBody();
+    });
     body.querySelector('#bm-name').addEventListener('input', e => this.form.namePattern = e.target.value);
     body.querySelector('#bm-count').addEventListener('input', e => this.form.count = Math.max(1, Math.min(50, parseInt(e.target.value || '1') || 1)));
     body.querySelector('#bm-account-password')?.addEventListener('input', e => this.form.accountPassword = e.target.value || '');
+    body.querySelector('#bm-save-password')?.addEventListener('click', async () => {
+      if (!this.account) return showNotification('Pick an account first', 'error');
+      const pw = (body.querySelector('#bm-account-password')?.value || '').trim();
+      if (!pw) return showNotification('Type the password first', 'error');
+      try {
+        await window.electronAPI.setAccountPassword(this.account, pw);
+        showNotification(`Password saved for ${this.account}`, 'success');
+        this.form.accountPassword = '';
+        await this.refreshAll();
+        this.renderBody();
+      } catch (e) { showNotification(e.message || 'Failed to save', 'error'); }
+    });
+    body.querySelector('#bm-clear-password')?.addEventListener('click', async () => {
+      if (!this.account) return;
+      try {
+        await window.electronAPI.setAccountPassword(this.account, '');
+        showNotification(`Saved password cleared for ${this.account}`, 'success');
+        await this.refreshAll();
+        this.renderBody();
+      } catch (e) { showNotification(e.message || 'Failed', 'error'); }
+    });
     const cd = body.querySelector('#bm-cooldown');
     const cdLbl = body.querySelector('#bm-cooldown-label');
     cd.addEventListener('input', e => { this.form.cooldownSec = parseInt(e.target.value); cdLbl.textContent = `${this.form.cooldownSec}s`; });
@@ -535,10 +595,15 @@ export class BotsManager {
     const inp = this.contentArea.querySelector('#bm-captcha-input');
     const v = (inp?.value || '').trim();
     if (!v) { showNotification(t('bm.captcha_empty'), 'error'); return; }
+    const nonce = this._currentCaptchaNonce || this.task?.captcha?.nonce || '';
     try {
-      const r = await window.electronAPI.botsSubmitCaptcha(v);
-      if (r?.success) { showNotification(t('bm.captcha_submitted')); }
-      else showNotification(r?.error || 'Failed', 'error');
+      const r = await window.electronAPI.botsSubmitCaptcha(v, nonce);
+      if (r?.success) {
+        showNotification(t('bm.captcha_submitted'));
+        if (inp) inp.value = '';
+      } else {
+        showNotification(r?.error || 'Failed', 'error');
+      }
     } catch (e) { showNotification(e.message, 'error'); }
   }
 

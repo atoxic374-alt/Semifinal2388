@@ -431,7 +431,9 @@ window.electronAPI = {
   botsStatus:         () => apiCall('GET', '/api/bots/status'),
   botsCreate:         (cfg) => apiCall('POST', '/api/bots/create', cfg),
   botsCancel:         () => apiCall('POST', '/api/bots/cancel'),
-  botsSubmitCaptcha:  (captchaKey) => apiCall('POST', '/api/bots/captcha', { captchaKey }),
+  botsSubmitCaptcha:  (captchaKey, nonce = '') => apiCall('POST', '/api/bots/captcha', { captchaKey, nonce }),
   botsGetConfig:      () => apiCall('GET', '/api/bots/config'),
   botsSetConfig:      (cfg) => apiCall('POST', '/api/bots/config', cfg),
+  // Per-account stored Discord password (encrypted server-side, never read back)
+  setAccountPassword: (name, password) => apiCall('PUT', `/api/tokens/${encodeURIComponent(name)}/password`, { password }),
 };

@@ -992,6 +992,9 @@ function readTokens() {
     ...t,
     token: t?.token ? (tryDecrypt(t.token) ?? t.token) : t?.token,
     proxy: t?.proxy ? (tryDecrypt(t.proxy) ?? t.proxy) : (t?.proxy || null),
+    // Discord account password (used for captcha-protected actions like creating
+    // bots, deleting apps, resetting bot tokens). Encrypted at rest.
+    accountPassword: t?.accountPassword ? (tryDecrypt(t.accountPassword) ?? t.accountPassword) : '',
   }));
 }
 function writeTokens(arr) {
@@ -999,6 +1002,9 @@ function writeTokens(arr) {
     ...t,
     token: t?.token ? (isEncrypted(t.token) ? t.token : encrypt(t.token)) : t?.token,
     proxy: t?.proxy ? (isEncrypted(t.proxy) ? t.proxy : encrypt(t.proxy)) : (t?.proxy || null),
+    accountPassword: t?.accountPassword
+      ? (isEncrypted(t.accountPassword) ? t.accountPassword : encrypt(t.accountPassword))
+      : '',
   }));
   tokensStore.write(encrypted);
 }
@@ -1025,13 +1031,18 @@ function migrateTokenEncryptionForCurrentUser() {
 app.get('/api/tokens', (req, res) => {
   try {
     const tokens = readTokens();
-    // Mark which are connected; mask proxy URL so credentials never reach the UI.
-    const enriched = tokens.map(t => ({
-      ...t,
-      connected: clients.has(t.name),
-      proxy: t.proxy ? maskProxy(t.proxy) : null,
-      hasProxy: !!t.proxy,
-    }));
+    // Mark which are connected; mask proxy URL & account password so credentials
+    // never reach the UI. Only expose hasPassword so the UI can show a badge.
+    const enriched = tokens.map(t => {
+      const { accountPassword, ...rest } = t;
+      return {
+        ...rest,
+        connected: clients.has(t.name),
+        proxy: t.proxy ? maskProxy(t.proxy) : null,
+        hasProxy: !!t.proxy,
+        hasPassword: !!(accountPassword && String(accountPassword).length),
+      };
+    });
     ok(res, { tokens: enriched });
   } catch (e) { fail(res, e); }
 });
@@ -1072,9 +1083,30 @@ app.patch('/api/tokens/:name', (req, res) => {
     const tokens = readTokens();
     const idx = tokens.findIndex(t => t.name === req.params.name);
     if (idx === -1) return fail(res, new Error('Token not found'));
-    tokens[idx] = { ...tokens[idx], ...req.body };
+    // Whitelist patchable fields. Never let arbitrary req.body fields overwrite
+    // sensitive credentials (token / accountPassword) — use the dedicated
+    // endpoints for those instead.
+    const allowed = ['autoConnect'];
+    const patch = {};
+    for (const k of allowed) if (k in req.body) patch[k] = req.body[k];
+    tokens[idx] = { ...tokens[idx], ...patch };
     writeTokens(tokens);
     ok(res);
+  } catch (e) { fail(res, e); }
+});
+
+// Set or clear the Discord account password for a saved account. The password
+// is encrypted at rest and never returned to the UI — only its presence
+// (`hasPassword: true/false`) is exposed via GET /api/tokens.
+app.put('/api/tokens/:name/password', (req, res) => {
+  try {
+    const tokens = readTokens();
+    const idx = tokens.findIndex(t => t.name === req.params.name);
+    if (idx === -1) return fail(res, new Error('Account not found'));
+    const pw = String(req.body?.password ?? '').trim();
+    tokens[idx].accountPassword = pw; // writeTokens will encrypt
+    writeTokens(tokens);
+    ok(res, { hasPassword: !!pw });
   } catch (e) { fail(res, e); }
 });
 
@@ -2757,10 +2789,14 @@ function botSnapshot() {
     cooldownMs: botTask.cooldownMs,
     waitingCaptcha: !!botTask.pendingCaptcha,
     captcha: botTask.pendingCaptcha ? {
+      // `nonce` uniquely identifies THIS specific captcha challenge so the UI
+      // can detect when a stale token is being submitted and refuse it.
+      nonce: botTask.pendingCaptcha.nonce,
       sitekey: botTask.pendingCaptcha.sitekey,
       service: botTask.pendingCaptcha.service,
       rqdata: botTask.pendingCaptcha.rqdata,
-      pageUrl: botTask.pendingCaptcha.pageUrl || 'https://discord.com'
+      pageUrl: botTask.pendingCaptcha.pageUrl || 'https://discord.com',
+      issuedAt: botTask.pendingCaptcha.issuedAt
     } : null,
     lastError: botTask.lastError
   };
@@ -2873,12 +2909,23 @@ async function discordRequestWithCaptcha({ method, url, token, body, pageUrl: pa
 
 function waitManualCaptcha({ sitekey, service, rqdata, rqtoken, pageUrl }) {
   return new Promise((resolve, reject) => {
+    // Each captcha challenge gets a fresh nonce. The submit endpoint requires
+    // this exact nonce, so a token solved against an OLD challenge cannot
+    // accidentally be submitted for a NEW one. This guarantees the captcha
+    // we send to Discord is the one Discord actually asked for.
+    const nonce = crypto.randomBytes(8).toString('hex');
     botTask.state = 'waiting_captcha';
-    botTask.pendingCaptcha = { sitekey, service, rqdata, rqtoken, pageUrl: pageUrl || 'https://discord.com', resolve, reject };
-    pushBotEvent('bot_captcha', { sitekey, service, pageUrl: pageUrl || 'https://discord.com' });
+    botTask.pendingCaptcha = {
+      nonce,
+      sitekey, service, rqdata, rqtoken,
+      pageUrl: pageUrl || 'https://discord.com',
+      issuedAt: Date.now(),
+      resolve, reject
+    };
+    pushBotEvent('bot_captcha', { nonce, sitekey, service, rqdata, pageUrl: pageUrl || 'https://discord.com' });
     // 10-minute timeout
     setTimeout(() => {
-      if (botTask.pendingCaptcha && botTask.pendingCaptcha.resolve === resolve) {
+      if (botTask.pendingCaptcha && botTask.pendingCaptcha.nonce === nonce) {
         botTask.pendingCaptcha = null;
         if (botTask.state === 'waiting_captcha') botTask.state = 'running';
         reject(new Error('Captcha solve timed out'));
@@ -3340,7 +3387,7 @@ app.delete('/api/bots/:id', async (req, res) => {
   if (i < 0) return fail(res, new Error('Not found'));
   const bot = d.bots[i];
   const fromDiscord = String(req.query.fromDiscord || '').toLowerCase() === 'true' || String(req.query.from_discord || '').toLowerCase() === 'true';
-  const accountPassword = (req.body && req.body.accountPassword) || req.query.accountPassword || '';
+  let accountPassword = (req.body && req.body.accountPassword) || req.query.accountPassword || '';
 
   if (fromDiscord) {
     // Try to delete the application on Discord using the owner account's user token.
@@ -3348,6 +3395,13 @@ app.delete('/api/bots/:id', async (req, res) => {
     const c = ownerAccount ? clients.get(ownerAccount) : null;
     if (!c?.token) return fail(res, new Error(`Owner account "${ownerAccount || 'unknown'}" must be connected to delete the Discord application`));
     if (!bot.appId) return fail(res, new Error('This bot has no Discord application id stored'));
+    // Fall back to saved encrypted password if caller didn't provide one
+    if (!accountPassword) {
+      try {
+        const saved = readTokens().find(t => t.name === ownerAccount);
+        if (saved?.accountPassword) accountPassword = saved.accountPassword;
+      } catch (e) {}
+    }
     try {
       const netOpts = buildAxiosNetOpts(c.proxy);
       const body = accountPassword ? { password: String(accountPassword) } : {};
@@ -3381,7 +3435,13 @@ app.post('/api/bots/:id/reset-token', async (req, res) => {
     const ownerAccount = bot.ownerAccount || bot.createdBy;
     const c = ownerAccount ? clients.get(ownerAccount) : null;
     if (!c?.token) return fail(res, new Error(`Owner account "${ownerAccount || 'unknown'}" must be connected to reset this bot's token`));
-    const accountPassword = (req.body && req.body.accountPassword) || '';
+    let accountPassword = (req.body && req.body.accountPassword) || '';
+    if (!accountPassword) {
+      try {
+        const saved = readTokens().find(t => t.name === ownerAccount);
+        if (saved?.accountPassword) accountPassword = saved.accountPassword;
+      } catch (e) {}
+    }
     const netOpts = buildAxiosNetOpts(c.proxy);
     const body = accountPassword ? { password: String(accountPassword) } : {};
     let resp;
@@ -3423,6 +3483,16 @@ app.post('/api/bots/create', (req, res) => {
   if (!resolvedAccount) return fail(res, new Error('account is required'));
   const c = clients.get(resolvedAccount);
   if (!c?.token) return fail(res, new Error('Account is not connected'));
+  // Resolve account password: prefer caller-provided, else fall back to the
+  // saved (encrypted) password for this account so the user doesn't have to
+  // re-enter it every run.
+  let resolvedAccountPassword = (accountPassword || '').toString();
+  if (!resolvedAccountPassword) {
+    try {
+      const saved = readTokens().find(t => t.name === resolvedAccount);
+      if (saved?.accountPassword) resolvedAccountPassword = saved.accountPassword;
+    } catch (e) { /* non-fatal */ }
+  }
   const netOpts = buildAxiosNetOpts(c.proxy);
   const n = Math.max(1, Math.min(50, parseInt(count || 1) || 1));
   // Allow faster runs; adaptive backoff in-task will auto-protect on pressure.
@@ -3455,7 +3525,7 @@ app.post('/api/bots/create', (req, res) => {
       bannerDataUrl: bannerDataUrl || null,
       customPasswordPattern: customPasswordPattern || '',
       netOpts,
-      accountPassword: accountPassword || ''
+      accountPassword: resolvedAccountPassword
     });
   }).catch(e => {
     botTask.state = 'error';
@@ -3476,15 +3546,143 @@ app.post('/api/bots/cancel', (req, res) => {
 
 app.post('/api/bots/captcha', (req, res) => {
   if (!botTask.pendingCaptcha) return fail(res, new Error('No captcha pending'));
-  const { captchaKey } = req.body || {};
+  const { captchaKey, nonce } = req.body || {};
   if (!captchaKey) return fail(res, new Error('captchaKey required'));
+  // Reject stale submissions — if the user solved an OLD challenge but Discord
+  // has since asked for a NEW one, the old token will be rejected by Discord
+  // anyway and waste a captcha attempt. Refuse it up front instead.
+  if (nonce && nonce !== botTask.pendingCaptcha.nonce) {
+    return fail(res, new Error(`Stale captcha — a new challenge was issued. Solve the current one (nonce ${botTask.pendingCaptcha.nonce.slice(0, 8)}…).`));
+  }
+  // Basic shape check on the hCaptcha token (real tokens are long base64-ish strings).
+  const tk = String(captchaKey).trim();
+  if (tk.length < 20) return fail(res, new Error('That does not look like a valid hCaptcha token'));
   try {
-    botTask.pendingCaptcha.resolve(captchaKey);
+    botTask.pendingCaptcha.resolve(tk);
     botTask.pendingCaptcha = null;
     botTask.state = 'running';
-    pushBotEvent('bot_progress', { msg: 'captcha received' });
+    pushBotEvent('bot_progress', { msg: `captcha received (nonce ${(nonce || '').slice(0, 8) || 'manual'})` });
     ok(res, { task: botSnapshot() });
   } catch (e) { fail(res, e); }
+});
+
+// ─── Dedicated hCaptcha solver page
+// Discord uses hCaptcha **Enterprise** with a signed `rqdata` payload bound to
+// the specific challenge. The public hcaptcha.com/demo page does NOT accept
+// rqdata, so any token solved there is rejected by Discord. This route serves
+// a tiny self-hosted page that loads the real hCaptcha widget with the correct
+// sitekey + rqdata, so the resulting token is bound to the EXACT challenge
+// Discord issued. This is the only reliable way to do manual captcha solving.
+app.get('/captcha-helper', (req, res) => {
+  if (!botTask.pendingCaptcha) {
+    res.status(404).type('html').send('<h2>No captcha is currently pending.</h2><p>Open this page only when the app is waiting for a captcha.</p>');
+    return;
+  }
+  const c = botTask.pendingCaptcha;
+  // Pass values via inline JSON so we don't have to escape querystrings.
+  const payload = JSON.stringify({
+    nonce: c.nonce,
+    sitekey: c.sitekey,
+    rqdata: c.rqdata || null,
+    pageUrl: c.pageUrl
+  }).replace(/</g, '\\u003c');
+  res.type('html').send(`<!doctype html>
+<html><head><meta charset="utf-8"><title>Solve Discord captcha</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<script src="https://js.hcaptcha.com/1/api.js" async defer></script>
+<style>
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#1e1f22;color:#dbdee1;margin:0;padding:24px;display:flex;flex-direction:column;align-items:center;gap:16px;min-height:100vh;box-sizing:border-box}
+.box{background:#2b2d31;border:1px solid #3f4147;border-radius:12px;padding:20px;max-width:520px;width:100%;box-shadow:0 8px 24px rgba(0,0,0,.3)}
+h1{font-size:18px;margin:0 0 8px}
+.muted{color:#949ba4;font-size:13px}
+.ok{color:#23a55a;font-weight:600}
+.err{color:#f23f43}
+.row{display:flex;gap:8px;margin-top:14px}
+button{flex:1;padding:10px 14px;border:0;border-radius:8px;background:#5865f2;color:#fff;font-weight:600;cursor:pointer;font-size:14px}
+button:disabled{opacity:.5;cursor:not-allowed}
+button.ghost{background:#3f4147}
+code{background:#1e1f22;padding:2px 6px;border-radius:4px;font-size:12px;color:#a8b6ec}
+</style></head>
+<body>
+<div class="box">
+  <h1>🔐 Solve Discord captcha</h1>
+  <div class="muted">Challenge nonce: <code id="nonce-display"></code></div>
+  <div class="muted" style="margin-top:4px">Bound to <code>rqdata</code>: <span id="rqdata-state"></span></div>
+  <div id="hcap" style="margin:18px 0;display:flex;justify-content:center"></div>
+  <div id="status" class="muted">Loading hCaptcha…</div>
+  <div class="row">
+    <button id="submit" disabled>Send token to Discord</button>
+    <button id="reset" class="ghost" type="button">Reset</button>
+  </div>
+</div>
+<script>
+const CFG = ${payload};
+let widgetId = null;
+let solved = null;
+
+document.getElementById('nonce-display').textContent = CFG.nonce.slice(0,12) + '…';
+document.getElementById('rqdata-state').innerHTML = CFG.rqdata
+  ? '<span class="ok">YES (enterprise — properly signed)</span>'
+  : '<span class="muted">no (basic challenge)</span>';
+
+window.hcaptchaOnLoad = function(){
+  try {
+    const opts = { sitekey: CFG.sitekey, callback: onSolved, 'expired-callback': onExpired, 'error-callback': onError };
+    if (CFG.rqdata) opts.rqdata = CFG.rqdata;
+    widgetId = hcaptcha.render('hcap', opts);
+    document.getElementById('status').textContent = 'Solve the captcha above, then click "Send token".';
+  } catch (e) {
+    document.getElementById('status').innerHTML = '<span class="err">Failed to load: ' + (e.message||e) + '</span>';
+  }
+};
+// hCaptcha API loads async; poll until ready.
+const _t = setInterval(() => {
+  if (window.hcaptcha && widgetId === null) { clearInterval(_t); window.hcaptchaOnLoad(); }
+}, 200);
+
+function onSolved(token){
+  solved = token;
+  document.getElementById('status').innerHTML = '<span class="ok">✓ Captcha solved — click "Send token to Discord".</span>';
+  document.getElementById('submit').disabled = false;
+}
+function onExpired(){
+  solved = null;
+  document.getElementById('status').innerHTML = '<span class="err">Token expired — solve again.</span>';
+  document.getElementById('submit').disabled = true;
+}
+function onError(err){
+  document.getElementById('status').innerHTML = '<span class="err">hCaptcha error: ' + (err||'unknown') + '</span>';
+}
+document.getElementById('reset').addEventListener('click', () => {
+  solved = null;
+  if (widgetId !== null && window.hcaptcha) try { hcaptcha.reset(widgetId); } catch {}
+  document.getElementById('submit').disabled = true;
+  document.getElementById('status').textContent = 'Solve the captcha above, then click "Send token".';
+});
+document.getElementById('submit').addEventListener('click', async () => {
+  if (!solved) return;
+  document.getElementById('submit').disabled = true;
+  document.getElementById('status').textContent = 'Sending to Discord…';
+  try {
+    const r = await fetch('/api/bots/captcha', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ captchaKey: solved, nonce: CFG.nonce })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (j.success) {
+      document.getElementById('status').innerHTML = '<span class="ok">✓ Submitted. You can close this window.</span>';
+      setTimeout(() => { try { window.close(); } catch{} }, 1200);
+    } else {
+      document.getElementById('status').innerHTML = '<span class="err">Server rejected: ' + (j.error||'unknown') + '</span>';
+      document.getElementById('submit').disabled = false;
+    }
+  } catch (e) {
+    document.getElementById('status').innerHTML = '<span class="err">Network error: ' + e.message + '</span>';
+    document.getElementById('submit').disabled = false;
+  }
+});
+</script>
+</body></html>`);
 });
 
 app.get('/api/bots/config', (req, res) => {
