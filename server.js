@@ -1390,6 +1390,9 @@ app.post('/api/presence/set', async (req, res) => {
                 rp.setParty(partyId, parseInt(activity.partySize), parseInt(activity.partyMax));
               } catch (_) {}
             }
+            if (activity.platform)       try { rp.setPlatform(String(activity.platform)); }       catch (_) {}
+            if (activity.applicationId)  try { rp.setApplicationId(String(activity.applicationId)); } catch (_) {}
+            if (activity.joinSecret)     try { rp.setJoinSecret(String(activity.joinSecret)); }     catch (_) {}
 
             // setPresence lets us set status + activity atomically
             const payload = { activities: [rp] };

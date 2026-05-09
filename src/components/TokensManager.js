@@ -8,7 +8,7 @@ export class TokensManager {
     this.contentArea = contentArea;
     this.tokens = [];
     this.clients = [];
-    this.activeTab = 'accounts'; // accounts | presence | bio | avatar | rotate | activity
+    this.activeTab = 'accounts'; // accounts | status | richpresence | profile | rotate | activity
     this.selected = [];
 
     this.pStatus = 'online';
@@ -30,10 +30,16 @@ export class TokensManager {
     this.pBtn2Name   = '';
     this.pBtn2Url    = '';
     this.pUseTimestamp = false;
+    this.pUseEndTimestamp = false;
+    this.pEndTsMin = '';
     // Party / group presence
     this.pPartySize = '';
     this.pPartyMax  = '';
     this.pPartyId   = '';
+    // Advanced RP fields
+    this.pPlatform   = 'desktop'; // desktop | mobile | web
+    this.pAppId      = '';        // Discord Application ID
+    this.pJoinSecret = '';        // join secret for Ask to Join
     // Live preview timer
     this._previewTimer = null;
     this._previewTimerStart = null;
@@ -84,12 +90,12 @@ export class TokensManager {
             </div>
           </div>
           <div class="mm-tabs">
-            ${this.tabBtn('accounts', 'key',         t('tk.tab.accounts'))}
-            ${this.tabBtn('presence', 'status_dot',  t('tk.tab.presence'))}
-            ${this.tabBtn('bio',      'file_text',   t('tk.tab.bio'))}
-            ${this.tabBtn('avatar',   'image',       t('tk.tab.avatar'))}
-            ${this.tabBtn('rotate',   'refresh',     t('tk.tab.rotate'))}
-            ${this.tabBtn('activity', 'brain',       t('tk.tab.activity'))}
+            ${this.tabBtn('accounts',     'key',        t('tk.tab.accounts'))}
+            ${this.tabBtn('status',       'status_dot', t('tk.tab.status'))}
+            ${this.tabBtn('richpresence', 'rocket',     t('tk.tab.richpresence'))}
+            ${this.tabBtn('profile',      'user',       t('tk.tab.profile'))}
+            ${this.tabBtn('rotate',       'refresh',    t('tk.tab.rotate'))}
+            ${this.tabBtn('activity',     'brain',      t('tk.tab.activity'))}
           </div>
         </div>
         <div class="mm-body fade-in">
@@ -97,7 +103,7 @@ export class TokensManager {
         </div>
       </div>
     `;
-    if (this.activeTab === 'presence' && this.pUseTimestamp) this.startPreviewTimer();
+    if (this.activeTab === 'richpresence' && this.pUseTimestamp) this.startPreviewTimer();
   }
 
   tabBtn(id, ic, label) {
@@ -106,17 +112,17 @@ export class TokensManager {
   switchTab(tab) {
     this.activeTab = tab;
     this.render();
-    if (tab === 'bio') this.fetchCurrentBio();
+    if (tab === 'bio' || tab === 'profile') this.fetchCurrentBio();
   }
 
   renderTab() {
     switch (this.activeTab) {
-      case 'accounts': return this.renderAccounts();
-      case 'presence': return this.renderPresence();
-      case 'bio':      return this.renderBio();
-      case 'avatar':   return this.renderAvatar();
-      case 'rotate':   return this.renderRotate();
-      case 'activity': return this.renderActivity();
+      case 'accounts':     return this.renderAccounts();
+      case 'status':       return this.renderStatus();
+      case 'richpresence': return this.renderPresence();
+      case 'profile':      return this.renderProfile();
+      case 'rotate':       return this.renderRotate();
+      case 'activity':     return this.renderActivity();
     }
     return '';
   }
@@ -295,7 +301,7 @@ export class TokensManager {
     return tokens;
   }
 
-  // ─── Presence tab
+  // ─── Rich Presence tab (comprehensive, numbered sections)
   renderPresence() {
     const isStreaming = this.pActivityType === 1;
     const hasActivity = this.pActivityType !== -1;
@@ -305,127 +311,206 @@ export class TokensManager {
         <!-- ── Controls column ── -->
         <div class="tk-presence-form">
 
-          <div class="mm-card lift">
-            <div class="mm-card-head"><span class="mm-card-icon">${icon('target')}</span><div><div class="mm-card-title">${t('tk.apply_to')}</div><div class="mm-card-desc">${t('tk.apply_to_desc')}</div></div></div>
-            ${this.renderTokenChips()}
+          <!-- §1 Account Selection -->
+          <div class="tk-section">
+            ${this.sHead(1, 'target', t('tk.apply_to'), t('tk.apply_to_desc'))}
+            <div class="tk-section-body">${this.renderTokenChips()}</div>
           </div>
 
-          <div class="mm-card lift">
-            <div class="mm-card-head"><span class="mm-card-icon">${icon('status_dot')}</span><div><div class="mm-card-title">${t('tk.online_status')}</div><div class="mm-card-desc">${t('tk.online_desc')}</div></div></div>
-            <div class="mm-radio-group">
-              ${['online','idle','dnd','invisible'].map(s => `
-                <label class="mm-radio ${this.pStatus === s ? 'active' : ''}">
-                  <input type="radio" name="tk-pstatus" value="${s}" ${this.pStatus === s ? 'checked' : ''} onchange="window.tokensManager.pStatus='${s}';document.getElementById('tk-invisible-warn').style.display='${s==='invisible'?'flex':'none'}';window.tokensManager.upp()">
-                  <div><strong>${s.toUpperCase()}</strong><span>${this.statusDesc(s)}</span></div>
-                </label>`).join('')}
-            </div>
-            <div id="tk-invisible-warn" class="tk-warn-row" style="display:${this.pStatus==='invisible'?'flex':'none'}">
-              ${icon('shield')} <span>${t('tk.rp.invisible_warn')}</span>
-            </div>
+          <!-- §2 Activity Type -->
+          <div class="tk-section">
+            ${this.sHead(2, 'rocket', t('tk.activity_type_title'), t('tk.activity_type_desc'))}
+            <div class="tk-section-body">${this.renderTypeCards()}</div>
           </div>
 
-          <div class="mm-card lift">
-            <div class="mm-card-head"><span class="mm-card-icon">${icon('message')}</span><div><div class="mm-card-title">${t('tk.custom_status')}</div><div class="mm-card-desc">${t('tk.custom_desc')}</div></div></div>
-            <div class="mm-row-fields">
-              <input placeholder="${t('tk.emoji')}" value="${this.escHtml(this.pEmoji)}" oninput="window.tokensManager.pEmoji=this.value;window.tokensManager.upp()">
-              <input placeholder="${t('tk.status_text')}" value="${this.escHtml(this.pCustom)}" oninput="window.tokensManager.pCustom=this.value;window.tokensManager.upp()">
-            </div>
-            <div class="mm-actions-row">
-              <button class="mm-btn primary glow" onclick="window.tokensManager.applyPresence()">${t('tk.apply')}</button>
-              <button class="mm-btn ghost" onclick="window.tokensManager.clearCustom()">${t('tk.clear_custom')}</button>
-              <button class="mm-btn success" onclick="window.tokensManager.applyPresence(true)">${t('tk.apply_all')}</button>
-            </div>
-          </div>
-
-          <div class="mm-card lift">
-            <div class="mm-card-head"><span class="mm-card-icon">${icon('rocket')}</span><div><div class="mm-card-title">${t('tk.activity_type_title')}</div><div class="mm-card-desc">${t('tk.activity_type_desc')}</div></div></div>
-            <div class="mm-row-fields">
-              <select id="tk-act-type" onchange="window.tokensManager.onActivityTypeChange(this.value)">
-                <option value="-1" ${this.pActivityType === -1 ? 'selected' : ''}>${t('tk.act_none')}</option>
-                <option value="0"  ${this.pActivityType === 0  ? 'selected' : ''}>${t('tk.act_playing')}</option>
-                <option value="1"  ${this.pActivityType === 1  ? 'selected' : ''}>${t('tk.act_streaming')}</option>
-                <option value="2"  ${this.pActivityType === 2  ? 'selected' : ''}>${t('tk.act_listening')}</option>
-                <option value="3"  ${this.pActivityType === 3  ? 'selected' : ''}>${t('tk.act_watching')}</option>
-                <option value="5"  ${this.pActivityType === 5  ? 'selected' : ''}>${t('tk.act_competing')}</option>
-              </select>
-              <input id="tk-act-name" placeholder="${t('tk.act_name_ph')}" value="${this.escHtml(this.pActivityName)}" oninput="window.tokensManager.pActivityName=this.value;window.tokensManager.upp()">
-            </div>
-
-            ${isStreaming ? `
-            <div class="tk-rp-section">
-              <div class="tk-rp-label">${icon('video')} ${t('tk.rp.stream_url')}</div>
-              <input id="tk-stream-url" placeholder="${t('tk.rp.stream_url_ph')}" value="${this.escHtml(this.pActivityUrl)}" oninput="window.tokensManager.pActivityUrl=this.value;window.tokensManager.upp()">
-              <div class="tk-rp-hint">${t('tk.rp.stream_warn')}</div>
-              <div class="tk-rp-quick-urls">
-                <button class="mm-btn ghost small" onclick="window.tokensManager.pActivityUrl='https://twitch.tv/discord';document.getElementById('tk-stream-url').value='https://twitch.tv/discord';window.tokensManager.upp()">Twitch</button>
-                <button class="mm-btn ghost small" onclick="window.tokensManager.pActivityUrl='https://www.youtube.com/watch?v=dQw4w9WgXcQ';document.getElementById('tk-stream-url').value='https://www.youtube.com/watch?v=dQw4w9WgXcQ';window.tokensManager.upp()">YouTube</button>
-              </div>
-            </div>` : ''}
-
-            ${hasActivity ? `
-            <div class="tk-rp-section">
-              <div class="tk-rp-label">${icon('file_text')} ${t('tk.rp.details_section')}</div>
-              <div class="mm-row-fields">
-                <input placeholder="${t('tk.rp.details_ph')}" value="${this.escHtml(this.pDetails)}" oninput="window.tokensManager.pDetails=this.value;window.tokensManager.upp()" maxlength="128">
-                <input placeholder="${t('tk.rp.state_ph')}" value="${this.escHtml(this.pState)}" oninput="window.tokensManager.pState=this.value;window.tokensManager.upp()" maxlength="128">
-              </div>
-              <div class="tk-rp-hint">${t('tk.rp.details_hint')}</div>
-            </div>
-
-            <div class="tk-rp-section">
-              <div class="tk-rp-label">${icon('users')} ${t('tk.rp.party')}</div>
-              <div class="mm-row-fields">
-                <input type="number" min="1" max="99" placeholder="${t('tk.rp.party_current')}" value="${this.escHtml(this.pPartySize)}" oninput="window.tokensManager.pPartySize=this.value;window.tokensManager.upp()">
-                <input type="number" min="1" max="99" placeholder="${t('tk.rp.party_max')}" value="${this.escHtml(this.pPartyMax)}" oninput="window.tokensManager.pPartyMax=this.value;window.tokensManager.upp()">
-                <input placeholder="${t('tk.rp.party_id_ph')}" value="${this.escHtml(this.pPartyId)}" oninput="window.tokensManager.pPartyId=this.value">
-              </div>
-              <div class="tk-rp-hint">${t('tk.rp.party_hint')}</div>
-            </div>
-
-            <div class="tk-rp-section">
-              <div class="tk-rp-label">${icon('image')} ${t('tk.rp.images')}</div>
-              <div class="tk-rp-hint" style="margin-bottom:6px">${t('tk.rp.img_hint')}</div>
-              <div class="mm-row-fields">
-                <input id="tk-large-img" placeholder="${t('tk.rp.large_img_ph')}" value="${this.escHtml(this.pLargeImage)}" oninput="window.tokensManager.pLargeImage=this.value;window.tokensManager.upp()">
-                <input placeholder="${t('tk.rp.large_text_ph')}" value="${this.escHtml(this.pLargeText)}" oninput="window.tokensManager.pLargeText=this.value;window.tokensManager.upp()" maxlength="128">
-              </div>
-              <div class="mm-row-fields" style="margin-top:4px">
-                <input placeholder="${t('tk.rp.small_img_ph')}" value="${this.escHtml(this.pSmallImage)}" oninput="window.tokensManager.pSmallImage=this.value;window.tokensManager.upp()">
-                <input placeholder="${t('tk.rp.small_text_ph')}" value="${this.escHtml(this.pSmallText)}" oninput="window.tokensManager.pSmallText=this.value;window.tokensManager.upp()" maxlength="128">
+          <!-- §3 Core Info -->
+          ${hasActivity ? `
+          <div class="tk-section">
+            ${this.sHead(3, 'file_text', 'Activity Info', this.coreInfoDesc())}
+            <div class="tk-section-body">
+              <div class="tk-field-wrap">
+                <label class="tk-field-label">${this.actNameLabel()}</label>
+                <input placeholder="${t('tk.act_name_ph')}" value="${this.escHtml(this.pActivityName)}" oninput="window.tokensManager.pActivityName=this.value;window.tokensManager.upp()">
               </div>
               ${isStreaming ? `
-              <div class="tk-rp-quick-urls" style="margin-top:6px">
+              <div class="tk-field-wrap" style="margin-top:10px">
+                <label class="tk-field-label">Stream URL — Twitch or YouTube</label>
+                <input id="tk-stream-url" placeholder="https://twitch.tv/channel  or  https://youtube.com/watch?v=..." value="${this.escHtml(this.pActivityUrl)}" oninput="window.tokensManager.pActivityUrl=this.value;window.tokensManager.upp()">
+                <div class="tk-rp-hint" style="margin-top:4px">${t('tk.rp.stream_warn')}</div>
+                <div class="tk-rp-quick-urls" style="margin-top:6px">
+                  <button class="mm-btn ghost small" onclick="window.tokensManager.pActivityUrl='https://twitch.tv/discord';document.getElementById('tk-stream-url').value='https://twitch.tv/discord';window.tokensManager.upp()">⟩ Twitch example</button>
+                  <button class="mm-btn ghost small" onclick="window.tokensManager.pActivityUrl='https://www.youtube.com/watch?v=dQw4w9WgXcQ';document.getElementById('tk-stream-url').value='https://www.youtube.com/watch?v=dQw4w9WgXcQ';window.tokensManager.upp()">⟩ YouTube example</button>
+                </div>
+              </div>` : ''}
+            </div>
+          </div>` : ''}
+
+          <!-- §4 Details & State -->
+          ${hasActivity ? `
+          <div class="tk-section">
+            ${this.sHead(4, 'message', t('tk.rp.details_section'), 'Two text lines under the activity name — 128 chars each')}
+            <div class="tk-section-body">
+              <div class="tk-field-wrap" style="margin-bottom:10px">
+                <label class="tk-field-label">Line 1 — Details</label>
+                <input placeholder="${t('tk.rp.details_ph')}" value="${this.escHtml(this.pDetails)}" oninput="window.tokensManager.pDetails=this.value;window.tokensManager.upp();var c=document.getElementById('tk-d-count');if(c)c.textContent=this.value.length" maxlength="128">
+                <div class="tk-char-count"><span id="tk-d-count">${this.pDetails.length}</span> / 128</div>
+              </div>
+              <div class="tk-field-wrap">
+                <label class="tk-field-label">Line 2 — State</label>
+                <input placeholder="${t('tk.rp.state_ph')}" value="${this.escHtml(this.pState)}" oninput="window.tokensManager.pState=this.value;window.tokensManager.upp();var c=document.getElementById('tk-s-count');if(c)c.textContent=this.value.length" maxlength="128">
+                <div class="tk-char-count"><span id="tk-s-count">${this.pState.length}</span> / 128</div>
+              </div>
+              <div class="tk-rp-hint" style="margin-top:6px">${t('tk.rp.details_hint')}</div>
+            </div>
+          </div>` : ''}
+
+          <!-- §5 Party / Group -->
+          ${hasActivity ? `
+          <div class="tk-section">
+            ${this.sHead(5, 'users', t('tk.rp.party'), t('tk.rp.party_hint'))}
+            <div class="tk-section-body">
+              <div class="tk-btn-row">
+                <div class="tk-field-wrap">
+                  <label class="tk-field-label">Current members</label>
+                  <input type="number" min="1" max="99" placeholder="2" value="${this.escHtml(this.pPartySize)}" oninput="window.tokensManager.pPartySize=this.value;window.tokensManager.upp()">
+                </div>
+                <div class="tk-field-wrap">
+                  <label class="tk-field-label">Max members</label>
+                  <input type="number" min="1" max="99" placeholder="5" value="${this.escHtml(this.pPartyMax)}" oninput="window.tokensManager.pPartyMax=this.value;window.tokensManager.upp()">
+                </div>
+                <div class="tk-field-wrap" style="flex:2">
+                  <label class="tk-field-label">Party ID (auto if empty)</label>
+                  <input placeholder="auto-generated" value="${this.escHtml(this.pPartyId)}" oninput="window.tokensManager.pPartyId=this.value">
+                </div>
+              </div>
+            </div>
+          </div>` : ''}
+
+          <!-- §6 Images -->
+          ${hasActivity ? `
+          <div class="tk-section">
+            ${this.sHead(6, 'image', t('tk.rp.images'), t('tk.rp.img_hint'))}
+            <div class="tk-section-body">
+              <div class="tk-img-row">
+                <div class="tk-img-preview large" style="${this.getImagePreviewUrl(this.pLargeImage) ? 'background-image:url(' + this.getImagePreviewUrl(this.pLargeImage) + ')' : ''}">
+                  ${!this.getImagePreviewUrl(this.pLargeImage) ? '<span>Large</span>' : ''}
+                </div>
+                <div class="tk-img-fields">
+                  <div class="tk-field-wrap">
+                    <label class="tk-field-label">Large image key</label>
+                    <input id="tk-large-img" placeholder="${t('tk.rp.large_img_ph')}" value="${this.escHtml(this.pLargeImage)}" oninput="window.tokensManager.pLargeImage=this.value;window.tokensManager.upp()">
+                  </div>
+                  <div class="tk-field-wrap" style="margin-top:6px">
+                    <label class="tk-field-label">Large image tooltip (max 128)</label>
+                    <input placeholder="${t('tk.rp.large_text_ph')}" value="${this.escHtml(this.pLargeText)}" oninput="window.tokensManager.pLargeText=this.value;window.tokensManager.upp()" maxlength="128">
+                  </div>
+                </div>
+              </div>
+              <div class="tk-img-row" style="margin-top:12px">
+                <div class="tk-img-preview small" style="${this.getImagePreviewUrl(this.pSmallImage) ? 'background-image:url(' + this.getImagePreviewUrl(this.pSmallImage) + ')' : ''}">
+                  ${!this.getImagePreviewUrl(this.pSmallImage) ? '<span>S</span>' : ''}
+                </div>
+                <div class="tk-img-fields">
+                  <div class="tk-field-wrap">
+                    <label class="tk-field-label">Small image key (corner overlay circle)</label>
+                    <input placeholder="${t('tk.rp.small_img_ph')}" value="${this.escHtml(this.pSmallImage)}" oninput="window.tokensManager.pSmallImage=this.value;window.tokensManager.upp()">
+                  </div>
+                  <div class="tk-field-wrap" style="margin-top:6px">
+                    <label class="tk-field-label">Small image tooltip (max 128)</label>
+                    <input placeholder="${t('tk.rp.small_text_ph')}" value="${this.escHtml(this.pSmallText)}" oninput="window.tokensManager.pSmallText=this.value;window.tokensManager.upp()" maxlength="128">
+                  </div>
+                </div>
+              </div>
+              ${isStreaming ? `
+              <div class="tk-rp-quick-urls" style="margin-top:10px">
                 <span class="tk-rp-hint" style="margin-bottom:0">${t('tk.rp.img_quick')}:</span>
                 <button class="mm-btn ghost small" onclick="const ch=(window.tokensManager.pActivityUrl.replace(/.*twitch\\.tv\\//, '')||'discord').split('?')[0].split('/')[0];window.tokensManager.pLargeImage='twitch:'+ch;document.getElementById('tk-large-img').value='twitch:'+ch;window.tokensManager.upp()">${t('tk.rp.img_from_twitch')}</button>
                 <button class="mm-btn ghost small" onclick="const id=(window.tokensManager.pActivityUrl.match(/[?&]v=([^&]+)/)||['',''])[1];window.tokensManager.pLargeImage='youtube:'+id;document.getElementById('tk-large-img').value='youtube:'+id;window.tokensManager.upp()">${t('tk.rp.img_from_youtube')}</button>
               </div>` : ''}
             </div>
+          </div>` : ''}
 
-            <div class="tk-rp-section">
-              <div class="tk-rp-label">${icon('external')} ${t('tk.rp.buttons')} <span class="tk-rp-hint" style="font-weight:normal;margin:0;text-transform:none;letter-spacing:0">${t('tk.rp.buttons_hint')}</span></div>
-              <div class="mm-row-fields" style="margin-bottom:4px">
-                <input placeholder="${t('tk.rp.btn_name')}" value="${this.escHtml(this.pBtn1Name)}" oninput="window.tokensManager.pBtn1Name=this.value;window.tokensManager.upp()" maxlength="32">
-                <input placeholder="${t('tk.rp.btn_url')}" value="${this.escHtml(this.pBtn1Url)}" oninput="window.tokensManager.pBtn1Url=this.value">
+          <!-- §7 Buttons -->
+          ${hasActivity ? `
+          <div class="tk-section">
+            ${this.sHead(7, 'external', t('tk.rp.buttons'), 'Up to 2 clickable buttons — label max 32 chars, URL must be https://')}
+            <div class="tk-section-body">
+              <div class="tk-btn-row">
+                <div class="tk-field-wrap">
+                  <label class="tk-field-label">Button 1 label (max 32)</label>
+                  <input placeholder="${t('tk.rp.btn_name')}" value="${this.escHtml(this.pBtn1Name)}" oninput="window.tokensManager.pBtn1Name=this.value;window.tokensManager.upp()" maxlength="32">
+                </div>
+                <div class="tk-field-wrap" style="flex:2">
+                  <label class="tk-field-label">Button 1 URL</label>
+                  <input placeholder="${t('tk.rp.btn_url')}" value="${this.escHtml(this.pBtn1Url)}" oninput="window.tokensManager.pBtn1Url=this.value">
+                </div>
               </div>
-              <div class="mm-row-fields">
-                <input placeholder="${t('tk.rp.btn2_name')}" value="${this.escHtml(this.pBtn2Name)}" oninput="window.tokensManager.pBtn2Name=this.value;window.tokensManager.upp()" maxlength="32">
-                <input placeholder="${t('tk.rp.btn2_url')}" value="${this.escHtml(this.pBtn2Url)}" oninput="window.tokensManager.pBtn2Url=this.value">
+              <div class="tk-btn-row" style="margin-top:8px">
+                <div class="tk-field-wrap">
+                  <label class="tk-field-label">Button 2 label (optional)</label>
+                  <input placeholder="${t('tk.rp.btn2_name')}" value="${this.escHtml(this.pBtn2Name)}" oninput="window.tokensManager.pBtn2Name=this.value;window.tokensManager.upp()" maxlength="32">
+                </div>
+                <div class="tk-field-wrap" style="flex:2">
+                  <label class="tk-field-label">Button 2 URL</label>
+                  <input placeholder="${t('tk.rp.btn2_url')}" value="${this.escHtml(this.pBtn2Url)}" oninput="window.tokensManager.pBtn2Url=this.value">
+                </div>
               </div>
             </div>
+          </div>` : ''}
 
-            <div class="tk-rp-section">
-              <label class="mm-toggle tk-rp-ts-toggle">
+          <!-- §8 Timestamps -->
+          ${hasActivity ? `
+          <div class="tk-section">
+            ${this.sHead(8, 'clock', 'Timestamps', 'Show elapsed time (counts up) or a countdown ("X remaining")')}
+            <div class="tk-section-body">
+              <label class="mm-toggle">
                 <input type="checkbox" ${this.pUseTimestamp ? 'checked' : ''} onchange="window.tokensManager.pUseTimestamp=this.checked;window.tokensManager.startPreviewTimer();window.tokensManager.upp()">
                 ${t('tk.rp.timestamp')}
               </label>
-            </div>` : ''}
-
-            ${this.activityRiskHtml()}
-            <div class="mm-actions-row">
-              <button class="mm-btn primary glow" onclick="window.tokensManager.applyActivity()">${t('tk.apply_activity')}</button>
-              <button class="mm-btn ghost" onclick="window.tokensManager.clearActivity()">${t('tk.clear_activity')}</button>
-              <button class="mm-btn success" onclick="window.tokensManager.applyActivity(true)">${t('tk.apply_all')}</button>
+              <label class="mm-toggle" style="margin-top:8px">
+                <input type="checkbox" ${this.pUseEndTimestamp ? 'checked' : ''} onchange="window.tokensManager.pUseEndTimestamp=this.checked;window.tokensManager.upp()">
+                Show end time — displays "HH:MM remaining" countdown in Discord
+              </label>
+              ${this.pUseEndTimestamp ? `
+              <div class="tk-field-wrap" style="margin-top:10px">
+                <label class="tk-field-label">Duration in minutes from now (e.g. 45 → "45:00 remaining")</label>
+                <input type="number" min="1" max="1440" placeholder="45" value="${this.escHtml(this.pEndTsMin)}" oninput="window.tokensManager.pEndTsMin=this.value">
+              </div>` : ''}
+              <div class="tk-rp-hint" style="margin-top:8px">Elapsed starts when you click Apply. Cannot combine both — elapsed takes priority.</div>
             </div>
+          </div>` : ''}
+
+          <!-- §9 Advanced Options -->
+          ${hasActivity ? `
+          <div class="tk-section">
+            ${this.sHead(9, 'settings', 'Advanced Options', 'Platform, Application ID, and activity invite secrets')}
+            <div class="tk-section-body">
+              <div class="tk-field-wrap" style="margin-bottom:14px">
+                <label class="tk-field-label">Platform — device icon shown in Discord</label>
+                <div class="tk-platform-tabs">
+                  ${['desktop','mobile','web'].map(p => `<button class="tk-platform-tab ${this.pPlatform === p ? 'active' : ''}" onclick="window.tokensManager.pPlatform='${p}';document.querySelectorAll('.tk-platform-tab').forEach(x=>x.classList.remove('active'));this.classList.add('active')">${p === 'desktop' ? '🖥 Desktop' : p === 'mobile' ? '📱 Mobile' : '🌐 Web'}</button>`).join('')}
+                </div>
+                <div class="tk-rp-hint">Changes the small device icon next to your activity in Discord</div>
+              </div>
+              <div class="tk-field-wrap" style="margin-bottom:14px">
+                <label class="tk-field-label">Application ID (optional)</label>
+                <input placeholder="e.g. 356869581083099137 (League of Legends app ID)" value="${this.escHtml(this.pAppId)}" oninput="window.tokensManager.pAppId=this.value">
+                <div class="tk-rp-hint">Links to a registered Discord app — allows using its image assets by name</div>
+              </div>
+              <div class="tk-field-wrap">
+                <label class="tk-field-label">Join Secret (optional)</label>
+                <input placeholder="Secret string that enables Ask to Join on your profile" value="${this.escHtml(this.pJoinSecret)}" oninput="window.tokensManager.pJoinSecret=this.value">
+                <div class="tk-rp-hint">When set, other users see an "Ask to Join" button on your profile card</div>
+              </div>
+            </div>
+          </div>` : ''}
+
+          <!-- Risk indicator + Action bar -->
+          ${this.activityRiskHtml()}
+          <div class="tk-section-actions">
+            <button class="mm-btn primary glow" onclick="window.tokensManager.applyActivity()">${t('tk.apply_activity')}</button>
+            <button class="mm-btn ghost"        onclick="window.tokensManager.clearActivity()">${t('tk.clear_activity')}</button>
+            <button class="mm-btn success"      onclick="window.tokensManager.applyActivity(true)">${t('tk.apply_all')}</button>
           </div>
 
         </div><!-- /tk-presence-form -->
@@ -438,12 +523,13 @@ export class TokensManager {
           </div>
           <div id="tk-preview-wrap">${this.renderDiscordCard()}</div>
           <div class="tk-preview-tips">
-            <div class="tk-tip-item">${icon('image')}<div><strong>Image formats:</strong> twitch:channel · youtube:videoId · https://... (direct URL)</div></div>
+            <div class="tk-tip-item">${icon('image')}<div><strong>Images:</strong> twitch:channel · youtube:id · https://img.url</div></div>
             <div class="tk-tip-item">${icon('video')}<div><strong>Streaming badge:</strong> URL must be twitch.tv or youtube.com</div></div>
             <div class="tk-tip-item">${icon('external')}<div><strong>Buttons:</strong> max 32-char label + any https:// URL</div></div>
-            <div class="tk-tip-item">${icon('users')}<div><strong>Party:</strong> "X of Y" appears after State text in Discord</div></div>
-            <div class="tk-tip-item">${icon('clock')}<div><strong>Timestamp:</strong> sent at apply time, shows elapsed in Discord</div></div>
-            <div class="tk-tip-item">${icon('shield')}<div><strong>Invisible:</strong> activity applied but hidden from others</div></div>
+            <div class="tk-tip-item">${icon('users')}<div><strong>Party:</strong> shows "(current of max)" after state text</div></div>
+            <div class="tk-tip-item">${icon('clock')}<div><strong>Timestamps:</strong> applied at click time</div></div>
+            <div class="tk-tip-item">${icon('settings')}<div><strong>Platform:</strong> desktop / mobile / web icon in Discord</div></div>
+            <div class="tk-tip-item">${icon('shield')}<div><strong>Invisible:</strong> activity hidden from others</div></div>
           </div>
         </div>
 
@@ -524,6 +610,17 @@ export class TokensManager {
       if (this.pPartyId.trim()) activity.partyId = this.pPartyId.trim();
     }
 
+    // Advanced: platform, applicationId, joinSecret
+    if (this.pPlatform && this.pPlatform !== 'desktop') activity.platform = this.pPlatform;
+    if (this.pAppId.trim())      activity.applicationId = this.pAppId.trim();
+    if (this.pJoinSecret.trim()) activity.joinSecret    = this.pJoinSecret.trim();
+
+    // End timestamp (countdown — ignored if elapsed is enabled)
+    if (!this.pUseTimestamp && this.pUseEndTimestamp && this.pEndTsMin) {
+      const mins = parseInt(this.pEndTsMin);
+      if (mins > 0) activity.endTimestamp = Date.now() + mins * 60 * 1000;
+    }
+
     try {
       const r = await window.electronAPI.setPresence({ tokens, status: this.pStatus, activity });
       const ok = (r.results || []).filter(x => x.ok).length;
@@ -546,10 +643,15 @@ export class TokensManager {
     this.pBtn1Url        = '';
     this.pBtn2Name       = '';
     this.pBtn2Url        = '';
-    this.pUseTimestamp   = false;
-    this.pPartySize      = '';
-    this.pPartyMax       = '';
-    this.pPartyId        = '';
+    this.pUseTimestamp    = false;
+    this.pUseEndTimestamp = false;
+    this.pEndTsMin        = '';
+    this.pPartySize       = '';
+    this.pPartyMax        = '';
+    this.pPartyId         = '';
+    this.pPlatform        = 'desktop';
+    this.pAppId           = '';
+    this.pJoinSecret      = '';
     const tokens = this.selected.length ? this.selected : this._allConnectedNames();
     await window.electronAPI.setPresence({ tokens, status: this.pStatus, customStatus: this.pCustom || '', emoji: this.pEmoji || undefined });
     this.render();
@@ -695,6 +797,310 @@ export class TokensManager {
     }, 1000);
   }
 
+  // ─── Section header helper (numbered badge + icon + title + desc)
+  sHead(num, ic, title, desc = '') {
+    return `<div class="tk-section-header">
+      <div class="tk-section-badge">${num}</div>
+      <span class="tk-section-icon">${icon(ic)}</span>
+      <div class="tk-section-meta">
+        <div class="tk-section-title">${title}</div>
+        ${desc ? `<div class="tk-section-desc">${desc}</div>` : ''}
+      </div>
+    </div>`;
+  }
+
+  coreInfoDesc() {
+    const m = { '-1': '', '0': 'The game or app you are playing', '1': 'Stream title + Twitch/YouTube URL', '2': 'Track or show you are listening to', '3': 'Show or movie you are watching', '5': 'Competition or event name' };
+    return m[String(this.pActivityType)] || '';
+  }
+
+  actNameLabel() {
+    const m = { '-1': '', '0': 'Game / App Name', '1': 'Stream Title', '2': 'Track or Show Name', '3': 'Show / Movie Name', '5': 'Event Name' };
+    return m[String(this.pActivityType)] || 'Activity Name';
+  }
+
+  // ─── Activity type visual cards (replaces dropdown)
+  renderTypeCards() {
+    const types = [
+      { id: -1, emoji: '✕',  name: 'None',      desc: 'No activity'      },
+      { id:  0, emoji: '🎮', name: 'Playing',    desc: 'Game / App'       },
+      { id:  1, emoji: '📺', name: 'Streaming',  desc: 'Twitch / YouTube' },
+      { id:  2, emoji: '🎵', name: 'Listening',  desc: 'Music / Podcast'  },
+      { id:  3, emoji: '👁',  name: 'Watching',   desc: 'Show / Movie'     },
+      { id:  5, emoji: '🏆', name: 'Competing',  desc: 'Tournament'       },
+    ];
+    return `<div class="tk-type-grid">
+      ${types.map(ty => `
+        <div class="tk-type-card ${this.pActivityType === ty.id ? 'active' : ''}" onclick="window.tokensManager.onActivityTypeChange(${ty.id})">
+          <span class="tk-tc-emoji">${ty.emoji}</span>
+          <span class="tk-tc-name">${ty.name}</span>
+          <span class="tk-tc-desc">${ty.desc}</span>
+        </div>`).join('')}
+    </div>`;
+  }
+
+  // ─── Status visual cards (replaces radio buttons)
+  renderStatusCards() {
+    const statuses = [
+      { id: 'online',    color: '#23a55a', name: 'Online',          desc: 'Available and visible'        },
+      { id: 'idle',      color: '#f0b232', name: 'Idle',            desc: 'Away from keyboard'           },
+      { id: 'dnd',       color: '#f23f43', name: 'Do Not Disturb',  desc: 'Suppress all notifications'  },
+      { id: 'invisible', color: '#80848e', name: 'Invisible',       desc: 'Hidden — appear offline'      },
+    ];
+    return statuses.map(s => `
+      <div class="tk-status-card ${this.pStatus === s.id ? 'active' : ''}"
+           onclick="window.tokensManager.pStatus='${s.id}';document.querySelectorAll('.tk-status-card').forEach(c=>c.classList.remove('active'));this.classList.add('active');var w=document.getElementById('tk-invisible-warn');if(w)w.style.display='${s.id==='invisible'?'flex':'none'}';window.tokensManager.uppStatus()">
+        <span class="tk-sc-ring" style="background:${s.color}"></span>
+        <div class="tk-sc-body">
+          <div class="tk-sc-name">${s.name}</div>
+          <div class="tk-sc-desc">${s.desc}</div>
+        </div>
+        <span class="tk-sc-check">${icon('check')}</span>
+      </div>`).join('');
+  }
+
+  // ─── Mini status preview card (Status tab sidebar)
+  renderStatusPreview() {
+    const clientName = this.selected[0] || this.clients[0]?.name;
+    const client = this.clients.find(c => c.name === clientName) || this.clients[0];
+    const avatarUrl = client?.avatar || '/discord.png';
+    const displayName = client?.displayName || client?.username || clientName || 'Preview';
+    const col = this.statusColor(this.pStatus);
+    const isInvis = this.pStatus === 'invisible';
+    const label = { online: 'Online', idle: 'Idle', dnd: 'Do Not Disturb', invisible: 'Invisible' }[this.pStatus] || 'Online';
+    return `
+      <div class="tk-sp-card">
+        <div class="tk-sp-av-wrap">
+          <img class="tk-sp-av" src="${avatarUrl}" onerror="this.src='/discord.png'">
+          <span class="tk-sp-dot" style="background:${isInvis ? '#80848e' : col}"></span>
+        </div>
+        <div class="tk-sp-info">
+          <div class="tk-sp-name">${this.escHtml(displayName)}</div>
+          <div class="tk-sp-status" style="color:${col}">${label}</div>
+          ${(this.pEmoji || this.pCustom.trim()) ? `<div class="tk-sp-custom">
+            ${this.pEmoji ? `<span>${this.escHtml(this.pEmoji)}</span>` : ''}
+            ${this.pCustom.trim() ? `<span>${this.escHtml(this.pCustom.trim())}</span>` : ''}
+          </div>` : ''}
+        </div>
+      </div>`;
+  }
+
+  // Live-update status preview without full re-render
+  uppStatus() {
+    const el = document.getElementById('tk-status-preview-wrap');
+    if (el) el.innerHTML = this.renderStatusPreview();
+    const cnt = document.getElementById('tk-custom-count');
+    if (cnt) cnt.textContent = this.pCustom.length;
+  }
+
+  // Quick emoji picker for Status tab
+  pickEmoji(e) {
+    this.pEmoji = e;
+    const inp = document.getElementById('tk-emoji-input');
+    if (inp) inp.value = e;
+    this.uppStatus();
+  }
+
+  // ─── Status tab (online status + custom status)
+  renderStatus() {
+    return `
+      <div class="tk-status-layout">
+        <div class="tk-status-form">
+
+          <div class="tk-section">
+            ${this.sHead(1, 'target', t('tk.apply_to'), t('tk.apply_to_desc'))}
+            <div class="tk-section-body">${this.renderTokenChips()}</div>
+          </div>
+
+          <div class="tk-section">
+            ${this.sHead(2, 'status_dot', 'Online Status', 'Control how you appear to others on Discord')}
+            <div class="tk-section-body">
+              <div class="tk-status-grid">
+                ${this.renderStatusCards()}
+              </div>
+              <div id="tk-invisible-warn" class="tk-warn-row" style="display:${this.pStatus === 'invisible' ? 'flex' : 'none'};margin-top:10px">
+                ${icon('shield')} <span>${t('tk.rp.invisible_warn')}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="tk-section">
+            ${this.sHead(3, 'message', 'Custom Status', 'A message shown on your profile and in server member lists — max 128 chars')}
+            <div class="tk-section-body">
+              <div class="tk-cs-row">
+                <input id="tk-emoji-input" placeholder="Emoji (e.g. 🎮)" value="${this.escHtml(this.pEmoji)}" oninput="window.tokensManager.pEmoji=this.value;window.tokensManager.uppStatus()">
+                <input placeholder="Status text (max 128 chars)" value="${this.escHtml(this.pCustom)}" oninput="window.tokensManager.pCustom=this.value;window.tokensManager.uppStatus()" maxlength="128">
+              </div>
+              <div class="tk-char-count"><span id="tk-custom-count">${this.pCustom.length}</span> / 128</div>
+              <div class="tk-quick-emojis">
+                ${['🎮','🎵','📺','🏆','💻','🔥','⚡','✨','🎯','🎨','📚','🌙','☕','🚀','💫','🎶','🎤','🎲','🏋️','❤️','🌍','😴','👾','🤖','🎪','🎭','🍕','🎸','💎','🌸'].map(e =>
+                  `<button class="tk-emoji-btn" title="${e}" onclick="window.tokensManager.pickEmoji('${e}')">${e}</button>`
+                ).join('')}
+              </div>
+            </div>
+          </div>
+
+          <div class="tk-section-actions">
+            <button class="mm-btn primary glow" onclick="window.tokensManager.applyPresence()">${t('tk.apply')}</button>
+            <button class="mm-btn ghost"        onclick="window.tokensManager.clearCustom()">${t('tk.clear_custom')}</button>
+            <button class="mm-btn success"      onclick="window.tokensManager.applyPresence(true)">${t('tk.apply_all')}</button>
+          </div>
+
+        </div><!-- /tk-status-form -->
+
+        <div class="tk-status-sidebar">
+          <div class="tk-preview-label">${icon('monitor')} Status Preview <span class="tk-preview-badge">live</span></div>
+          <div id="tk-status-preview-wrap">${this.renderStatusPreview()}</div>
+          <div class="tk-preview-tips">
+            <div class="tk-tip-item">${icon('status_dot')}<div><strong>Custom status:</strong> emoji + text shown on your profile and in DMs</div></div>
+            <div class="tk-tip-item">${icon('shield')}<div><strong>Invisible:</strong> you appear offline — can still use Discord normally</div></div>
+            <div class="tk-tip-item">${icon('zap')}<div><strong>DND:</strong> suppresses all notification popups and pings</div></div>
+            <div class="tk-tip-item">${icon('moon')}<div><strong>Idle:</strong> Discord may auto-override this after inactivity</div></div>
+          </div>
+        </div>
+
+      </div>`;
+  }
+
+  // ─── Profile card preview (used in Profile tab sidebar)
+  renderProfileCard() {
+    const clientName = this.selected[0] || this.clients[0]?.name;
+    const client = this.clients.find(c => c.name === clientName) || this.clients[0];
+    const avatarUrl = this.avatarDataUrl || client?.avatar || '/discord.png';
+    const displayName = client?.displayName || client?.username || clientName || 'Preview';
+    const username = client?.username || '';
+    const statusCol = this.statusColor(this.pStatus);
+    const bannerUrl = this.bannerDataUrl;
+    return `
+      <div class="dk-card">
+        <div class="dk-banner" style="${bannerUrl
+          ? 'background-image:url(' + bannerUrl + ');background-size:cover;background-position:center;height:80px'
+          : 'background:linear-gradient(135deg,#5865f2 0%,#3444b8 100%);height:80px'}"></div>
+        <div class="dk-avatar-area">
+          <div class="dk-av-wrap">
+            <img class="dk-av" src="${avatarUrl}" onerror="this.src='/discord.png'">
+            <span class="dk-status-ring" style="background:${statusCol}"></span>
+          </div>
+        </div>
+        <div class="dk-name-section">
+          <div class="dk-display-name">${this.escHtml(displayName)}</div>
+          ${username && username !== displayName ? `<div class="dk-username-sub">@${this.escHtml(username)}</div>` : ''}
+        </div>
+        ${this.bioText.trim() ? `
+        <div class="dk-divider"></div>
+        <div class="dk-section">
+          <div class="dk-section-title">ABOUT ME</div>
+          <div class="dk-bio-text">${this.escHtml(this.bioText.trim())}</div>
+        </div>` : `
+        <div class="dk-section dk-empty-state">
+          <div class="dk-empty-icon">📝</div>
+          <div class="dk-empty-text">No bio yet</div>
+          <div class="dk-empty-sub">Add one in the About Me field</div>
+        </div>`}
+      </div>`;
+  }
+
+  // ─── Profile tab (merged bio + avatar + banner)
+  renderProfile() {
+    return `
+      <div class="tk-profile-layout">
+        <div class="tk-profile-form">
+
+          <div class="tk-section">
+            ${this.sHead(1, 'target', t('tk.apply_to'), t('tk.apply_to_desc'))}
+            <div class="tk-section-body">${this.renderTokenChips()}</div>
+          </div>
+
+          <div class="tk-section">
+            ${this.sHead(2, 'file_text', 'About Me', 'Bio shown on your profile card — max 190 characters')}
+            <div class="tk-section-body">
+              <textarea rows="5" placeholder="Tell the world about yourself..." oninput="window.tokensManager.onBioInput(this.value)" maxlength="190">${this.escHtml(this.bioText)}</textarea>
+              <div class="tk-char-count"><span id="tk-bio-count">${190 - this.bioText.length}</span> characters remaining</div>
+              ${this.currentBio ? `
+              <div class="tk-current-bio"><strong>Currently on Discord:</strong> <span>${this.escHtml(this.currentBio)}</span></div>` : ''}
+              <div class="tk-section-actions" style="padding:12px 0 0;border:none">
+                <button class="mm-btn primary glow" onclick="window.tokensManager.applyBio()">${t('tk.apply_bio')}</button>
+                <button class="mm-btn success"      onclick="window.tokensManager.applyBio(true)">${t('tk.apply_all')}</button>
+                <button class="mm-btn ghost"        onclick="window.tokensManager.fetchCurrentBio()">${icon('refresh')} Fetch current</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="tk-section">
+            ${this.sHead(3, 'image', 'Profile Picture', 'PNG, JPG, GIF, WebP — max 8 MB. Animated GIF requires Nitro')}
+            <div class="tk-section-body">
+              <div class="tk-avatar-pick">
+                <div class="tk-avatar-preview">
+                  <img id="tk-av-img" src="${this.avatarDataUrl || '/discord.png'}" onerror="this.src='/discord.png'">
+                </div>
+                <div class="tk-avatar-controls">
+                  <input type="file" id="tk-av-file" accept="image/png,image/jpeg,image/gif,image/webp" hidden onchange="window.tokensManager.onPickAvatar(event)">
+                  <button class="mm-btn ghost" onclick="document.getElementById('tk-av-file').click()">${icon('folder')} ${t('tk.choose_image')}</button>
+                  <span class="tk-av-name">${this.escHtml(this.avatarFileName || '—')}</span>
+                </div>
+              </div>
+              <div class="tk-section-actions" style="padding:12px 0 0;border:none">
+                <button class="mm-btn primary glow" onclick="window.tokensManager.applyAvatar()">${t('tk.apply_avatar')}</button>
+                <button class="mm-btn success"      onclick="window.tokensManager.applyAvatar(true)">${t('tk.apply_all')}</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="tk-section">
+            ${this.sHead(4, 'image', 'Profile Banner', 'Wide image at the top of your profile — requires Discord Nitro')}
+            <div class="tk-section-body">
+              <div class="tk-banner-pick">
+                <div class="tk-banner-preview">
+                  ${this.bannerDataUrl
+                    ? `<img id="tk-bn-img" src="${this.bannerDataUrl}">`
+                    : `<div class="tk-banner-empty">${t('tk.banner_empty')}</div>`}
+                </div>
+                <div class="tk-avatar-controls">
+                  <input type="file" id="tk-bn-file" accept="image/png,image/jpeg,image/gif" hidden onchange="window.tokensManager.onPickBanner(event)">
+                  <button class="mm-btn ghost" onclick="document.getElementById('tk-bn-file').click()">${icon('folder')} ${t('tk.choose_image')}</button>
+                  <span class="tk-av-name">${this.escHtml(this.bannerFileName || '—')}</span>
+                </div>
+              </div>
+              <div class="tk-warn-row" style="margin-top:8px">
+                ${icon('shield')} <span>${t('tk.banner_warn')}</span>
+              </div>
+              <div class="tk-section-actions" style="padding:12px 0 0;border:none;flex-wrap:wrap">
+                <button class="mm-btn primary glow" onclick="window.tokensManager.applyBanner()">${t('tk.apply_banner')}</button>
+                <button class="mm-btn ghost"        onclick="window.tokensManager.removeBanner()">${t('tk.remove_banner')}</button>
+                <button class="mm-btn success"      onclick="window.tokensManager.applyBanner(true)">${t('tk.apply_all')}</button>
+              </div>
+            </div>
+          </div>
+
+        </div><!-- /tk-profile-form -->
+
+        <div class="tk-profile-sidebar">
+          <div class="tk-preview-label">${icon('user')} Profile Preview <span class="tk-preview-badge">live</span></div>
+          <div id="tk-profile-card-wrap">${this.renderProfileCard()}</div>
+          <div class="tk-preview-tips">
+            <div class="tk-tip-item">${icon('file_text')}<div><strong>Bio:</strong> plain text, max 190 chars, no markdown</div></div>
+            <div class="tk-tip-item">${icon('image')}<div><strong>Avatar:</strong> PNG/JPG/GIF/WebP, max 8 MB</div></div>
+            <div class="tk-tip-item">${icon('shield')}<div><strong>Banner:</strong> Discord Nitro required</div></div>
+          </div>
+        </div>
+
+      </div>`;
+  }
+
+  // Live-update profile card preview without full re-render
+  uppProfile() {
+    const el = document.getElementById('tk-profile-card-wrap');
+    if (el) el.innerHTML = this.renderProfileCard();
+  }
+
+  // Bio textarea oninput handler
+  onBioInput(v) {
+    this.bioText = v;
+    const c = document.getElementById('tk-bio-count');
+    if (c) c.textContent = 190 - v.length;
+    this.uppProfile();
+  }
+
   async applyPresence(all = false) {
     try {
       const tokens = all ? this._allConnectedNames() : this.selected;
@@ -813,8 +1219,9 @@ export class TokensManager {
       this.avatarFileName = file.name;
       const img = document.getElementById('tk-av-img');
       if (img) img.src = r.result;
-      const span = document.querySelector('.tk-av-name');
-      if (span) span.textContent = file.name;
+      const spans = document.querySelectorAll('.tk-av-name');
+      spans.forEach(s => s.textContent = file.name);
+      this.uppProfile();
     };
     r.readAsDataURL(file);
   }

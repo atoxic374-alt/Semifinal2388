@@ -1714,7 +1714,7 @@ body.rtl .tk-rp-section { direction: rtl; }
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 0;
 }
 .tk-presence-preview-col {
   width: 296px;
@@ -1950,3 +1950,245 @@ body.rtl .tk-rp-section { direction: rtl; }
 .dk-empty-icon { font-size: 28px; margin-bottom: 8px; }
 .dk-empty-text { font-size: 14px; font-weight: 700; color: #80848e; }
 .dk-empty-sub  { font-size: 11px; color: #4f545c; margin-top: 4px; }
+.dk-bio-text {
+  font-size: 13px; color: #dcddde; line-height: 1.6;
+  white-space: pre-wrap; word-break: break-word;
+}
+.dk-username-sub { font-size: 13px; color: #80848e; margin-top: 2px; }
+
+/* ══════════════════════════════════════════
+   TK Section System (numbered sections)
+══════════════════════════════════════════ */
+.tk-section {
+  background: rgba(255,255,255,.025);
+  border: 1px solid rgba(255,255,255,.07);
+  border-radius: 12px;
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+.tk-section:last-child { margin-bottom: 0; }
+.tk-section-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: rgba(255,255,255,.03);
+  border-bottom: 1px solid rgba(255,255,255,.06);
+}
+.tk-section-badge {
+  width: 22px; height: 22px;
+  background: rgba(88,101,242,.25);
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 800;
+  color: #7983f5; flex-shrink: 0;
+}
+.tk-section-icon { opacity: .55; flex-shrink: 0; }
+.tk-section-icon svg { width: 14px; height: 14px; }
+.tk-section-meta { min-width: 0; }
+.tk-section-title { font-size: 12px; font-weight: 700; color: var(--text-primary); }
+.tk-section-desc  { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+.tk-section-body  { padding: 14px 16px; }
+.tk-section-actions {
+  display: flex; gap: 8px; flex-wrap: wrap;
+  padding: 10px 16px 14px;
+  border-top: 1px solid rgba(255,255,255,.05);
+}
+
+/* ── Field label ── */
+.tk-field-label {
+  display: block;
+  font-size: 10px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-secondary);
+  margin-bottom: 5px;
+}
+.tk-field-wrap { flex: 1; min-width: 0; }
+.tk-char-count {
+  font-size: 11px; color: var(--text-secondary);
+  text-align: right; margin-top: 4px;
+}
+.tk-current-bio {
+  background: rgba(255,255,255,.04);
+  border-radius: 8px; padding: 10px 12px;
+  font-size: 12px; color: var(--text-secondary);
+  margin-top: 10px; line-height: 1.5;
+}
+.tk-current-bio strong { color: var(--text-primary); }
+
+/* ── Row helpers ── */
+.tk-btn-row, .tk-img-row {
+  display: flex; gap: 10px; align-items: flex-start;
+}
+.tk-img-fields { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+
+/* ── Image thumbnails ── */
+.tk-img-preview {
+  border-radius: 8px;
+  background: rgba(255,255,255,.08) center/cover no-repeat;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 9px; color: var(--text-secondary);
+  flex-shrink: 0;
+}
+.tk-img-preview.large { width: 64px; height: 64px; }
+.tk-img-preview.small { width: 36px; height: 36px; border-radius: 50%; }
+
+/* ══════════════════════════════════════════
+   Activity Type Visual Cards
+══════════════════════════════════════════ */
+.tk-type-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.tk-type-card {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 4px; padding: 12px 8px;
+  background: rgba(255,255,255,.04);
+  border: 1.5px solid rgba(255,255,255,.07);
+  border-radius: 10px; cursor: pointer;
+  transition: background .15s, border-color .15s, transform .1s;
+  text-align: center;
+}
+.tk-type-card:hover {
+  background: rgba(255,255,255,.08);
+  border-color: rgba(255,255,255,.14);
+  transform: translateY(-1px);
+}
+.tk-type-card.active {
+  background: rgba(88,101,242,.15);
+  border-color: rgba(88,101,242,.55);
+}
+.tk-tc-emoji { font-size: 22px; line-height: 1; }
+.tk-tc-name  { font-size: 11px; font-weight: 700; color: var(--text-primary); }
+.tk-tc-desc  { font-size: 10px; color: var(--text-secondary); }
+
+/* ══════════════════════════════════════════
+   Platform Selector Tabs
+══════════════════════════════════════════ */
+.tk-platform-tabs {
+  display: flex; gap: 6px; margin-bottom: 6px;
+}
+.tk-platform-tab {
+  flex: 1; padding: 8px 6px;
+  background: rgba(255,255,255,.05);
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-size: 12px; font-weight: 600;
+  cursor: pointer; transition: all .2s;
+}
+.tk-platform-tab:hover {
+  background: rgba(255,255,255,.09);
+  border-color: rgba(255,255,255,.14);
+}
+.tk-platform-tab.active {
+  background: rgba(88,101,242,.2);
+  border-color: rgba(88,101,242,.55);
+  color: #7983f5;
+}
+
+/* ══════════════════════════════════════════
+   Status Tab Layout
+══════════════════════════════════════════ */
+.tk-status-layout {
+  display: flex; gap: 20px; align-items: flex-start; width: 100%;
+}
+.tk-status-form {
+  flex: 1; min-width: 0;
+}
+.tk-status-sidebar {
+  width: 240px; flex-shrink: 0;
+  position: sticky; top: 0;
+  display: flex; flex-direction: column; gap: 12px;
+}
+
+/* Status visual cards */
+.tk-status-grid { display: flex; flex-direction: column; gap: 8px; }
+.tk-status-card {
+  display: flex; align-items: center; gap: 12px;
+  padding: 11px 14px;
+  background: rgba(255,255,255,.04);
+  border: 1.5px solid rgba(255,255,255,.07);
+  border-radius: 10px; cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.tk-status-card:hover {
+  background: rgba(255,255,255,.07);
+  border-color: rgba(255,255,255,.14);
+}
+.tk-status-card.active {
+  background: rgba(88,101,242,.12);
+  border-color: rgba(88,101,242,.45);
+}
+.tk-sc-ring {
+  width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0;
+}
+.tk-status-card.active .tk-sc-ring { box-shadow: 0 0 7px currentColor; }
+.tk-sc-body { flex: 1; min-width: 0; }
+.tk-sc-name { font-size: 13px; font-weight: 700; color: var(--text-primary); }
+.tk-sc-desc { font-size: 11px; color: var(--text-secondary); margin-top: 1px; }
+.tk-sc-check { opacity: 0; transition: opacity .2s; color: #5865f2; }
+.tk-sc-check svg { width: 14px; height: 14px; }
+.tk-status-card.active .tk-sc-check { opacity: 1; }
+
+/* Custom status row */
+.tk-cs-row { display: flex; gap: 8px; }
+.tk-cs-row input:first-child { max-width: 120px; flex-shrink: 0; }
+.tk-cs-row input:last-child  { flex: 1; }
+
+/* Quick emoji grid */
+.tk-quick-emojis {
+  display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px;
+}
+.tk-emoji-btn {
+  width: 32px; height: 32px;
+  background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 6px; font-size: 16px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background .12s, transform .12s;
+}
+.tk-emoji-btn:hover {
+  background: rgba(255,255,255,.14); transform: scale(1.15);
+}
+
+/* Mini status preview card */
+.tk-sp-card {
+  background: #2b2d31; border-radius: 10px;
+  padding: 14px; display: flex; align-items: center; gap: 12px;
+  border: 1px solid rgba(255,255,255,.06);
+}
+.tk-sp-av-wrap { position: relative; flex-shrink: 0; }
+.tk-sp-av {
+  width: 48px; height: 48px; border-radius: 50%;
+  border: 3px solid #2b2d31; object-fit: cover;
+}
+.tk-sp-dot {
+  position: absolute; bottom: -1px; right: -1px;
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 3px solid #2b2d31;
+}
+.tk-sp-info { flex: 1; min-width: 0; }
+.tk-sp-name   { font-size: 15px; font-weight: 800; color: #fff; }
+.tk-sp-status { font-size: 12px; margin-top: 1px; }
+.tk-sp-custom { font-size: 12px; color: #dcddde; margin-top: 4px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+
+/* ══════════════════════════════════════════
+   Profile Tab Layout
+══════════════════════════════════════════ */
+.tk-profile-layout {
+  display: flex; gap: 20px; align-items: flex-start; width: 100%;
+}
+.tk-profile-form { flex: 1; min-width: 0; }
+.tk-profile-sidebar {
+  width: 260px; flex-shrink: 0;
+  position: sticky; top: 0;
+  display: flex; flex-direction: column; gap: 12px;
+}
+
+@media (max-width: 900px) {
+  .tk-status-layout, .tk-profile-layout { flex-direction: column; }
+  .tk-status-sidebar, .tk-profile-sidebar { width: 100%; position: static; }
+  .tk-type-grid { grid-template-columns: repeat(2, 1fr); }
+}

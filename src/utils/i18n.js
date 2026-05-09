@@ -37,7 +37,10 @@ const DICT = {
 
     'tk.title': 'Tokens Manager',
     'tk.subtitle': 'Save, connect & control multiple accounts at once.',
-    'tk.tab.accounts': 'Accounts',
+    'tk.tab.accounts':     'Accounts',
+    'tk.tab.status':       'Status',
+    'tk.tab.richpresence': 'Rich Presence',
+    'tk.tab.profile':      'Profile',
     'tk.tab.presence': 'Presence',
     'tk.tab.bio': 'Bio',
     'tk.tab.avatar': 'Avatar',
@@ -1140,7 +1143,10 @@ const DICT = {
 
     'tk.title': 'إدارة التوكنات',
     'tk.subtitle': 'احفظ، واتصل، وتحكم في عدة حسابات في نفس الوقت.',
-    'tk.tab.accounts': 'الحسابات',
+    'tk.tab.accounts':     'الحسابات',
+    'tk.tab.status':       'الحالة',
+    'tk.tab.richpresence': 'النشاط',
+    'tk.tab.profile':      'الملف الشخصي',
     'tk.tab.presence': 'الحالة',
     'tk.tab.bio': 'البايو',
     'tk.tab.avatar': 'الصورة',
