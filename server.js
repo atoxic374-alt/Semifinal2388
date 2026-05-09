@@ -4304,7 +4304,7 @@ const ts = require('./lib/trueStudio');
     if (s.state === 'running' || s.state === 'waiting') {
       return fail(res, new Error('A session is already running'));
     }
-    const { email, rules, count, prefix, waitMinutes, proxyUrl, speed, selectedTeamId } = req.body || {};
+    const { email, rules, count, prefix, waitMinutes, proxyUrl, speed, selectedTeamId, brightData } = req.body || {};
     const acct = tsFindAccount(email);
     if (!acct) return fail(res, new Error('Account not found — save it first'));
     const creds = tsDecryptAccount(acct);
@@ -4324,6 +4324,11 @@ const ts = require('./lib/trueStudio');
     const speedFactor = speedMap[speed] != null ? speedMap[speed] : 1.0;
     const selTeamId = (typeof selectedTeamId === 'string' && selectedTeamId.trim()) ? selectedTeamId.trim() : null;
 
+    // Validate Bright Data config if provided
+    const bd = (brightData && brightData.enabled && brightData.customerId && brightData.zoneName && brightData.zonePassword)
+      ? { customerId: String(brightData.customerId).trim(), zoneName: String(brightData.zoneName).trim(), zonePassword: String(brightData.zonePassword), protocol: brightData.protocol === 'socks5h' ? 'socks5h' : 'http' }
+      : null;
+
     // Reset session
     Object.assign(s, ts.makeSession());
     s.account = creds.email;
@@ -4338,7 +4343,7 @@ const ts = require('./lib/trueStudio');
     const uid = currentUserId();
     ok(res, { snapshot: tsSnapshot() });
 
-    withUser(uid, () => runTsSession({ creds, rules: r, count: n, prefix: pfx, waitMinutes: wait, proxyList, speedFactor, selectedTeamId: selTeamId })
+    withUser(uid, () => runTsSession({ creds, rules: r, count: n, prefix: pfx, waitMinutes: wait, proxyList, speedFactor, selectedTeamId: selTeamId, brightData: bd })
       .catch(e => {
         const ses = tsSession();
         ses.state = 'error';
@@ -4348,7 +4353,28 @@ const ts = require('./lib/trueStudio');
       }));
   });
 
-  async function runTsSession({ creds, rules, count, prefix, waitMinutes, proxyList = [], speedFactor = 1.0, selectedTeamId }) {
+  // ── Bright Data URL builder ──────────────────────────────────────────────
+  // Builds a correctly-formatted Bright Data proxy URL.
+  // username = brd-customer-<CUSTOMER_ID>-zone-<ZONE_NAME>[-session-<SID>]
+  // HTTP  → http://user:pass@brd.superproxy.io:33335
+  // SOCKS5 → socks5h://user:pass@brd.superproxy.io:22228   (MUST use socks5h, not socks5)
+  //
+  // Per-bot IP rotation: pass a unique sessionId per bot → Bright Data pins that
+  // session to ONE IP for its lifetime, so the bot creation sequence stays on a
+  // single IP while the NEXT bot automatically gets a different one.
+  // Without sessionId the proxy is "truly rotating" (new IP on every request).
+  function buildBrightDataUrl(bd, sessionId) {
+    const host  = 'brd.superproxy.io';
+    const sid   = sessionId ? ('-session-' + String(sessionId).replace(/[^a-z0-9_-]/gi, '')) : '';
+    const user  = encodeURIComponent(`brd-customer-${bd.customerId}-zone-${bd.zoneName}${sid}`);
+    const pass  = encodeURIComponent(bd.zonePassword);
+    if (bd.protocol === 'socks5h') {
+      return `socks5h://${user}:${pass}@${host}:22228`;
+    }
+    return `http://${user}:${pass}@${host}:33335`;
+  }
+
+  async function runTsSession({ creds, rules, count, prefix, waitMinutes, proxyList = [], speedFactor = 1.0, selectedTeamId, brightData: bd = null }) {
     const s = tsSession();
     try {
       // Reuse the token + warmed client cached by Test/verify so cookies and
@@ -4362,9 +4388,11 @@ const ts = require('./lib/trueStudio');
         tsLog('info', 'استخدام جلسة دخول محفوظة لـ ' + creds.email + ' (الكوكيز محفوظة)');
       } else if (creds.directToken) {
         token = creds.directToken;
-        const loginProxy = proxyList[0] || null;
+        // For Bright Data: use a fixed session so the warm-up stays on one IP.
+        const loginProxy = bd ? buildBrightDataUrl(bd, 'login') : (proxyList[0] || null);
         client = ts.createClient(loginProxy);
-        if (loginProxy) tsLog('info', 'الجلسة تمر عبر Proxy: ' + loginProxy.replace(/:[^:@]+@/, ':***@'));
+        if (bd)         tsLog('info', 'الجلسة عبر Bright Data — ' + (bd.protocol === 'socks5h' ? 'SOCKS5h' : 'HTTP') + ' · Zone: ' + bd.zoneName);
+        else if (loginProxy) tsLog('info', 'الجلسة تمر عبر Proxy: ' + loginProxy.replace(/:[^:@]+@/, ':***@'));
         tsLog('info', 'استخدام التوكن المباشر — جاري تسخين الجلسة…');
         try { await ts.warmUpClient(client); } catch (e) {
           tsLog('warn', 'تعذر تسخين الجلسة: ' + (e.message || e));
@@ -4373,9 +4401,10 @@ const ts = require('./lib/trueStudio');
         tsLog('info', 'جاهز — التوكن المباشر مع جلسة دافئة ✓');
       } else {
         tsLog('info', 'جاري تسجيل الدخول إلى ' + creds.email + '…');
-        const loginProxy = proxyList[0] || null;
+        const loginProxy = bd ? buildBrightDataUrl(bd, 'login') : (proxyList[0] || null);
         client = ts.createClient(loginProxy);
-        if (loginProxy) tsLog('info', 'الجلسة تمر عبر Proxy: ' + loginProxy.replace(/:[^:@]+@/, ':***@'));
+        if (bd)         tsLog('info', 'الجلسة عبر Bright Data — ' + (bd.protocol === 'socks5h' ? 'SOCKS5h' : 'HTTP') + ' · Zone: ' + bd.zoneName);
+        else if (loginProxy) tsLog('info', 'الجلسة تمر عبر Proxy: ' + loginProxy.replace(/:[^:@]+@/, ':***@'));
         const loginNetOpts = { solveCaptcha: buildSolveCaptcha(), client, speedFactor };
         const r = await ts.login({ email: creds.email, password: creds.password, totpSecret: creds.totpSecret, netOpts: loginNetOpts });
         token = r.token;
@@ -4385,7 +4414,8 @@ const ts = require('./lib/trueStudio');
       }
       // Build netOpts ONCE per session, carrying the warmed client + speedFactor.
       const netOpts = { solveCaptcha: buildSolveCaptcha(), client, totpSecret: creds.totpSecret || undefined, password: creds.password || undefined, speedFactor };
-      if (proxyList.length > 1) tsLog('info', 'قائمة Proxy: ' + proxyList.length + ' عنوان — سيتغير IP تلقائياً مع كل بوت ✓');
+      if (bd) tsLog('info', 'Bright Data IP rotation: كل بوت ← session ID عشوائي → IP مختلف تلقائياً ✓ (Zone: ' + bd.zoneName + ')');
+      else if (proxyList.length > 1) tsLog('info', 'قائمة Proxy: ' + proxyList.length + ' عنوان — سيتغير IP تلقائياً مع كل بوت ✓');
       else if (proxyList.length === 1) tsLog('info', 'Proxy ثابت: ' + proxyList[0].replace(/:[^:@]+@/, ':***@'));
 
       // Behavioural warm-up — once per cached client.
@@ -4519,7 +4549,16 @@ const ts = require('./lib/trueStudio');
           // shared CookieJar (Cloudflare cookies) and X-Fingerprint intact.
           let botClient = client;
           let botNetOpts = netOpts;
-          if (proxyList.length > 1) {
+          if (bd) {
+            // Bright Data — each bot gets a unique session ID so Bright Data
+            // pins it to ONE residential/datacenter IP that doesn't change
+            // mid-creation, while the NEXT bot automatically gets a fresh IP.
+            const sessionId = 'bot' + (i + 1) + '_' + Math.random().toString(36).slice(2, 8);
+            const bdProxy = buildBrightDataUrl(bd, sessionId);
+            botClient = ts.cloneClientWithProxy(client, bdProxy);
+            botNetOpts = { ...netOpts, client: botClient };
+            tsLog('info', 'بوت #' + (i + 1) + ' ← Bright Data session: ' + sessionId);
+          } else if (proxyList.length > 1) {
             const botProxy = proxyList[i % proxyList.length];
             botClient = ts.cloneClientWithProxy(client, botProxy);
             botNetOpts = { ...netOpts, client: botClient };

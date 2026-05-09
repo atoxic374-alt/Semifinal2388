@@ -28,6 +28,13 @@ export class TrueStudioManager {
       proxyUrl: '',
       speed: 'medium',
       selectedTeamId: '',
+      brightData: {
+        enabled:      false,
+        customerId:   '',
+        zoneName:     '',
+        zonePassword: '',
+        protocol:     'http', // 'http' (port 33335) | 'socks5h' (port 22228)
+      },
     };
     this.sse = null;
     this._countdownTimer = null;
@@ -546,12 +553,59 @@ export class TrueStudioManager {
 
   // Speed + Proxy section — shown in automation rules card
   _renderAdvancedOptions() {
-    const pr = this._proxyTestResult;
+    const pr  = this._proxyTestResult;
+    const bd  = this.form.brightData || {};
     const proxyStatus = pr
       ? (pr.ok
-          ? `<span style="color:#3ba55d;font-size:11px;">✓ Proxy يعمل — IP: ${escapeHtml(pr.ip || '?')}</span>`
+          ? `<span style="color:#3ba55d;font-size:11px;">✓ يعمل — IP: ${escapeHtml(pr.ip || '?')}</span>`
           : `<span style="color:#ed4245;font-size:11px;">✕ ${escapeHtml(pr.error || 'فشل الاتصال')}</span>`)
       : '';
+
+    // ── Bright Data credential form (shown when toggle is ON) ───────────────
+    const bdForm = bd.enabled ? `
+      <div style="margin-top:8px;display:grid;gap:6px;">
+        <input type="text" id="ts-bd-customer" class="ts-input ltr"
+          placeholder="Account ID  (لوحة Bright Data → Settings → Account)"
+          value="${escapeAttr(bd.customerId || '')}" autocomplete="off" />
+        <div class="ts-account-row">
+          <input type="text" id="ts-bd-zone" class="ts-input ltr"
+            placeholder="Zone Name  (مثلاً: residential_rotating1)"
+            value="${escapeAttr(bd.zoneName || '')}" style="flex:1;" autocomplete="off" />
+          <select id="ts-bd-proto" class="ts-input" style="flex:0 0 140px;">
+            <option value="http"    ${bd.protocol !== 'socks5h' ? 'selected' : ''}>HTTP — 33335</option>
+            <option value="socks5h" ${bd.protocol === 'socks5h' ? 'selected' : ''}>SOCKS5h — 22228</option>
+          </select>
+        </div>
+        <div class="ts-account-row">
+          <input type="password" id="ts-bd-pass" class="ts-input ltr"
+            placeholder="Zone Password"
+            value="${escapeAttr(bd.zonePassword || '')}" style="flex:1;" autocomplete="new-password" />
+          <button class="ts-btn" id="ts-proxy-test" style="white-space:nowrap;">اختبار</button>
+        </div>
+        ${proxyStatus ? `<div>${proxyStatus}</div>` : ''}
+        <div class="ts-field-hint" style="line-height:1.6;">
+          كل بوت يحصل على <b>session ID عشوائي</b> → IP مختلف من نفس الاشتراك ✓<br>
+          يدعم: Residential · Datacenter · ISP · Mobile<br>
+          <a href="https://brightdata.com" target="_blank" rel="noopener"
+            style="color:var(--ts-muted,#7e8592);font-size:10px;text-decoration:none;">brightdata.com →</a>
+        </div>
+      </div>
+    ` : `
+      <div class="ts-account-row" style="align-items:flex-start;margin-top:6px;">
+        <textarea id="ts-proxy-url" class="ts-input ltr" rows="3"
+          style="resize:vertical;font-size:11px;line-height:1.6;min-height:60px;font-family:monospace;"
+          placeholder="بروكسي واحد لكل سطر — يتغير IP مع كل بوت&#10;socks5://user:pass@host:port&#10;http://user:pass@host:port">${escapeHtml(this.form.proxyUrl || '')}</textarea>
+        <button class="ts-btn" id="ts-proxy-test" style="white-space:nowrap;align-self:flex-start;">اختبار</button>
+      </div>
+      ${proxyStatus ? `<div style="margin-top:4px;">${proxyStatus}</div>` : ''}
+      <div class="ts-field-hint">http · https · socks · socks5h — كل بوت يستخدم IP مختلف عند وجود عدة بروكسيات</div>
+    `;
+
+    // ── Proxy header row with Bright Data toggle ────────────────────────────
+    const proxyCountBadge = !bd.enabled && (this.form.proxyUrl || '').split(/\n/).filter(l => l.trim()).length > 1
+      ? `<span style="font-size:10px;color:#3ba55d;margin-right:4px;">✓ ${(this.form.proxyUrl || '').split(/\n/).filter(l => l.trim()).length} بروكسي</span>`
+      : '';
+
     return `
       <div class="ts-field" style="margin-top:12px;">
         <div class="ts-field-label">سرعة التنفيذ</div>
@@ -562,22 +616,23 @@ export class TrueStudioManager {
         </select>
         <div class="ts-field-hint">Very Fast يرفع خطر الاكتشاف — استخدمه فقط مع Proxy موثوق</div>
       </div>
+
       <div class="ts-field" style="margin-top:8px;">
-        <div class="ts-field-label" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-          Proxy للجلسة
-          <span style="font-size:10px;color:var(--ts-muted,#7e8592);">(اختياري — بروكسي لكل سطر)</span>
-          ${(this.form.proxyUrl || '').split(/\n/).filter(l => l.trim()).length > 1
-            ? `<span style="font-size:10px;color:#3ba55d;">✓ ${(this.form.proxyUrl || '').split(/\n/).filter(l => l.trim()).length} بروكسي — IP rotation تلقائي</span>`
-            : ''}
+        <div class="ts-field-label" style="display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap;">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+            <span>${bd.enabled ? 'Bright Data Proxy' : 'Proxy للجلسة'}</span>
+            ${!bd.enabled
+              ? `<span style="font-size:10px;color:var(--ts-muted,#7e8592);">(اختياري)</span>${proxyCountBadge}`
+              : `<span style="font-size:10px;color:#3ba55d;">IP rotation تلقائي ✓</span>`}
+          </div>
+          <label style="display:flex;align-items:center;gap:5px;cursor:pointer;flex-shrink:0;user-select:none;">
+            <span style="font-size:10px;color:var(--ts-muted,#7e8592);">Bright Data</span>
+            <div class="ts-toggle ${bd.enabled ? 'on' : ''}" id="ts-bd-toggle"
+              role="switch" aria-checked="${bd.enabled}"
+              title="استخدام Bright Data rotating proxy — IP جديد لكل بوت تلقائياً"></div>
+          </label>
         </div>
-        <div class="ts-account-row" style="align-items:flex-start;">
-          <textarea id="ts-proxy-url" class="ts-input ltr" rows="3"
-            style="resize:vertical;font-size:11px;line-height:1.6;min-height:60px;font-family:monospace;"
-            placeholder="بروكسي واحد لكل سطر — يتغير IP تلقائياً مع كل بوت&#10;socks5://user:pass@host:port&#10;http://user:pass@host:port">${escapeHtml(this.form.proxyUrl || '')}</textarea>
-          <button class="ts-btn" id="ts-proxy-test" style="white-space:nowrap;align-self:flex-start;">اختبار</button>
-        </div>
-        ${proxyStatus ? `<div style="margin-top:4px;">${proxyStatus}</div>` : ''}
-        <div class="ts-field-hint">http · https · socks · socks5 — كل بوت يستخدم IP مختلف عند وجود عدة بروكسيات</div>
+        ${bdForm}
       </div>
     `;
   }
@@ -2020,10 +2075,54 @@ export class TrueStudioManager {
       this._proxyTestResult = null;
     });
 
-    // Proxy test button — tests the first proxy in the list
+    // ── Bright Data toggle ──────────────────────────────────────────
+    $('#ts-bd-toggle')?.addEventListener('click', () => {
+      if (!this.form.brightData) this.form.brightData = { enabled: false, customerId: '', zoneName: '', zonePassword: '', protocol: 'http' };
+      this.form.brightData.enabled = !this.form.brightData.enabled;
+      this._proxyTestResult = null;
+      this.render();
+    });
+
+    // ── Bright Data credential inputs ───────────────────────────────
+    $('#ts-bd-customer')?.addEventListener('input', (e) => {
+      if (!this.form.brightData) return;
+      this.form.brightData.customerId = e.target.value.trim();
+      this._proxyTestResult = null;
+    });
+    $('#ts-bd-zone')?.addEventListener('input', (e) => {
+      if (!this.form.brightData) return;
+      this.form.brightData.zoneName = e.target.value.trim();
+      this._proxyTestResult = null;
+    });
+    $('#ts-bd-pass')?.addEventListener('input', (e) => {
+      if (!this.form.brightData) return;
+      this.form.brightData.zonePassword = e.target.value;
+      this._proxyTestResult = null;
+    });
+    $('#ts-bd-proto')?.addEventListener('change', (e) => {
+      if (!this.form.brightData) return;
+      this.form.brightData.protocol = e.target.value || 'http';
+    });
+
+    // Proxy test button — handles both manual proxy list and Bright Data mode
     $('#ts-proxy-test')?.addEventListener('click', async () => {
-      const url = (this.form.proxyUrl || '').split(/[\n,]+/).map(s => s.trim()).filter(Boolean)[0] || '';
-      if (!url) { showNotification('أدخل رابط Proxy أولاً', 'error'); return; }
+      const bd = this.form.brightData;
+      let url = '';
+      if (bd?.enabled) {
+        // Build a test URL from Bright Data credentials (using a fixed test session)
+        if (!bd.customerId || !bd.zoneName || !bd.zonePassword) {
+          showNotification('أدخل Customer ID وZone Name وPassword أولاً', 'error'); return;
+        }
+        const host = 'brd.superproxy.io';
+        const user = encodeURIComponent(`brd-customer-${bd.customerId}-zone-${bd.zoneName}-session-test`);
+        const pass = encodeURIComponent(bd.zonePassword);
+        url = bd.protocol === 'socks5h'
+          ? `socks5h://${user}:${pass}@${host}:22228`
+          : `http://${user}:${pass}@${host}:33335`;
+      } else {
+        url = (this.form.proxyUrl || '').split(/[\n,]+/).map(s => s.trim()).filter(Boolean)[0] || '';
+        if (!url) { showNotification('أدخل رابط Proxy أولاً', 'error'); return; }
+      }
       const btn = $('#ts-proxy-test');
       if (btn) { btn.disabled = true; btn.textContent = '…'; }
       try {
@@ -2201,6 +2300,7 @@ export class TrueStudioManager {
         proxyUrl: this.form.proxyUrl || '',
         speed: this.form.speed || 'medium',
         selectedTeamId: this.form.selectedTeamId || '',
+        brightData: this.form.brightData || null,
       });
       showNotification(t('ts.session_started'), 'success');
       sfx.ding?.();
