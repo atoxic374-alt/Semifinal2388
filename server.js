@@ -1308,13 +1308,32 @@ function resolveTargetsOrFail(tokens = []) {
   return targets;
 }
 
+// ── Streaming URL validator — Discord only shows the streaming badge for Twitch / YouTube
+function isValidStreamUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  try {
+    const h = new URL(url).hostname.replace(/^www\./, '');
+    return ['twitch.tv', 'youtube.com', 'youtu.be'].includes(h);
+  } catch { return false; }
+}
+
 app.post('/api/presence/set', async (req, res) => {
   try {
     const { tokens = [], status, customStatus, activity, emoji } = req.body;
     const targets = resolveTargetsOrFail(tokens);
     if (!targets.length) return fail(res, new Error('No target accounts selected'));
-    if (activity && (!activity.name || typeof activity.name !== 'string' || activity.name.trim().length < 2)) {
-      return fail(res, new Error('Activity name must be at least 2 characters'));
+    if (activity) {
+      if (!activity.name || typeof activity.name !== 'string' || activity.name.trim().length < 2) {
+        return fail(res, new Error('Activity name must be at least 2 characters'));
+      }
+      // Validate buttons early
+      if (Array.isArray(activity.buttons)) {
+        if (activity.buttons.length > 2) return fail(res, new Error('Maximum 2 buttons allowed'));
+        for (const btn of activity.buttons) {
+          if (!btn.name || !btn.url) return fail(res, new Error('Each button needs name and url'));
+          try { new URL(btn.url); } catch { return fail(res, new Error(`Invalid button URL: ${btn.url}`)); }
+        }
+      }
     }
     if (customStatus !== undefined && typeof customStatus !== 'string') return fail(res, new Error('customStatus must be a string'));
     if (emoji !== undefined && typeof emoji !== 'string') return fail(res, new Error('emoji must be a string'));
@@ -1323,18 +1342,67 @@ app.post('/api/presence/set', async (req, res) => {
       const c = getClientByName(n);
       if (!c) { results.push({ name: n, ok: false, error: 'not connected' }); continue; }
       try {
-        if (status) c.user.setStatus(resolvePresence(status));
+        const resolvedStatus = status ? resolvePresence(status) : undefined;
+
         if (customStatus !== undefined) {
+          if (resolvedStatus) c.user.setStatus(resolvedStatus);
           const cs = new CustomStatus(c).setState(customStatus || null);
           if (emoji) cs.setEmoji(emoji);
           c.user.setActivity(cs.toJSON ? cs.toJSON() : cs);
+        } else if (activity) {
+          // Determine whether to use RichPresence builder (supports buttons, images, details…)
+          const hasRich = !!(
+            activity.details || activity.state ||
+            activity.largeImage || activity.smallImage ||
+            (activity.buttons && activity.buttons.length) ||
+            activity.startTimestamp || activity.endTimestamp
+          );
+
+          if (hasRich) {
+            const rp = new RichPresence(c)
+              .setName(activity.name.trim())
+              .setType(activity.type || 0);
+
+            // Streaming URL — must be Twitch or YouTube for the purple badge
+            if (activity.type === 1) {
+              const streamUrl = isValidStreamUrl(activity.url)
+                ? activity.url
+                : 'https://twitch.tv/discord'; // safe fallback so streaming badge still appears
+              try { rp.setURL(streamUrl); } catch (_) {}
+            }
+
+            if (activity.details)    try { rp.setDetails(String(activity.details).slice(0, 128)); }    catch (_) {}
+            if (activity.state)      try { rp.setState(String(activity.state).slice(0, 128)); }        catch (_) {}
+            if (activity.largeImage) try { rp.setAssetsLargeImage(String(activity.largeImage)); }      catch (_) {}
+            if (activity.largeText)  try { rp.setAssetsLargeText(String(activity.largeText).slice(0, 128)); }  catch (_) {}
+            if (activity.smallImage) try { rp.setAssetsSmallImage(String(activity.smallImage)); }      catch (_) {}
+            if (activity.smallText)  try { rp.setAssetsSmallText(String(activity.smallText).slice(0, 128)); }  catch (_) {}
+            if (activity.startTimestamp) try { rp.setStartTimestamp(Number(activity.startTimestamp)); } catch (_) {}
+            if (activity.endTimestamp)   try { rp.setEndTimestamp(Number(activity.endTimestamp)); }     catch (_) {}
+            if (Array.isArray(activity.buttons)) {
+              for (const btn of activity.buttons.slice(0, 2)) {
+                try { if (btn.name && btn.url) rp.addButton(String(btn.name).slice(0, 32), btn.url); } catch (_) {}
+              }
+            }
+
+            // setPresence lets us set status + activity atomically
+            const payload = { activities: [rp] };
+            if (resolvedStatus) payload.status = resolvedStatus;
+            c.user.setPresence(payload);
+          } else {
+            // Simple activity — no rich fields needed
+            if (resolvedStatus) c.user.setStatus(resolvedStatus);
+            const opts = { type: activity.type || 0 };
+            if (activity.type === 1) {
+              opts.url = isValidStreamUrl(activity.url) ? activity.url : 'https://twitch.tv/discord';
+            }
+            c.user.setActivity(activity.name, opts);
+          }
+        } else {
+          // Status-only change
+          if (resolvedStatus) c.user.setStatus(resolvedStatus);
         }
-        if (activity) {
-          // activity: { name, type, url? } - 0 playing, 1 streaming, 2 listening, 3 watching, 5 competing
-          const opts = { type: activity.type || 0 };
-          if (activity.url) opts.url = activity.url;
-          c.user.setActivity(activity.name, opts);
-        }
+
         results.push({ name: n, ok: true });
       } catch (e) { results.push({ name: n, ok: false, error: e.message }); }
     }

@@ -17,7 +17,19 @@ export class TokensManager {
     // Activity type: 0=playing, 1=streaming, 2=listening, 3=watching, 5=competing, -1=none
     this.pActivityType = -1;
     this.pActivityName = '';
-    this.pActivityUrl  = ''; // for streaming
+    this.pActivityUrl  = ''; // for streaming — must be twitch.tv or youtube.com
+    // Rich Presence extended fields
+    this.pDetails    = '';   // line 1 under activity name
+    this.pState      = '';   // line 2 under details
+    this.pLargeImage = '';   // twitch:channel | youtube:videoId | mp:external/hash
+    this.pLargeText  = '';   // hover text for large image
+    this.pSmallImage = '';   // same formats as large
+    this.pSmallText  = '';   // hover text for small image
+    this.pBtn1Name   = '';
+    this.pBtn1Url    = '';
+    this.pBtn2Name   = '';
+    this.pBtn2Url    = '';
+    this.pUseTimestamp = false;
     this.bioText = '';
     this.currentBio = '';
     this.avatarDataUrl = '';
@@ -276,6 +288,8 @@ export class TokensManager {
 
   // ─── Presence tab
   renderPresence() {
+    const isStreaming = this.pActivityType === 1;
+    const hasActivity = this.pActivityType !== -1;
     return `
       <div class="mm-card lift">
         <div class="mm-card-head"><span class="mm-card-icon">${icon('target')}</span><div><div class="mm-card-title">${t('tk.apply_to')}</div><div class="mm-card-desc">${t('tk.apply_to_desc')}</div></div></div>
@@ -287,9 +301,12 @@ export class TokensManager {
         <div class="mm-radio-group">
           ${['online','idle','dnd','invisible'].map(s => `
             <label class="mm-radio ${this.pStatus === s ? 'active' : ''}">
-              <input type="radio" name="tk-pstatus" value="${s}" ${this.pStatus === s ? 'checked' : ''} onchange="window.tokensManager.pStatus='${s}'">
+              <input type="radio" name="tk-pstatus" value="${s}" ${this.pStatus === s ? 'checked' : ''} onchange="window.tokensManager.pStatus='${s}'; document.getElementById('tk-invisible-warn').style.display='${s==='invisible'?'flex':'none'}'">
               <div><strong>${s.toUpperCase()}</strong><span>${this.statusDesc(s)}</span></div>
             </label>`).join('')}
+        </div>
+        <div id="tk-invisible-warn" class="tk-warn-row" style="display:${this.pStatus==='invisible'?'flex':'none'}">
+          ${icon('shield')} <span>${t('tk.rp.invisible_warn')}</span>
         </div>
       </div>
 
@@ -308,6 +325,7 @@ export class TokensManager {
 
       <div class="mm-card mm-span-2 lift">
         <div class="mm-card-head"><span class="mm-card-icon">${icon('rocket')}</span><div><div class="mm-card-title">${t('tk.activity_type_title')}</div><div class="mm-card-desc">${t('tk.activity_type_desc')}</div></div></div>
+
         <div class="mm-row-fields">
           <select id="tk-act-type" onchange="window.tokensManager.onActivityTypeChange(this.value)">
             <option value="-1" ${this.pActivityType === -1 ? 'selected' : ''}>${t('tk.act_none')}</option>
@@ -318,10 +336,69 @@ export class TokensManager {
             <option value="5"  ${this.pActivityType === 5  ? 'selected' : ''}>${t('tk.act_competing')}</option>
           </select>
           <input id="tk-act-name" placeholder="${t('tk.act_name_ph')}" value="${this.escHtml(this.pActivityName)}" oninput="window.tokensManager.pActivityName=this.value">
-          ${this.pActivityType === 1
-            ? `<input id="tk-act-url" placeholder="https://twitch.tv/..." value="${this.escHtml(this.pActivityUrl)}" oninput="window.tokensManager.pActivityUrl=this.value">`
-            : ''}
         </div>
+
+        ${isStreaming ? `
+        <div class="tk-rp-section">
+          <div class="tk-rp-label">${icon('link')} ${t('tk.rp.stream_url')}</div>
+          <div class="mm-row-fields">
+            <input placeholder="${t('tk.rp.stream_url_ph')}" value="${this.escHtml(this.pActivityUrl)}" oninput="window.tokensManager.pActivityUrl=this.value" style="flex:1">
+          </div>
+          <div class="tk-rp-hint">${t('tk.rp.stream_warn')}</div>
+          <div class="tk-rp-quick-urls">
+            <button class="mm-btn ghost small" onclick="window.tokensManager.pActivityUrl='https://twitch.tv/discord';document.querySelector('#tk-act-type~.tk-rp-section input').value='https://twitch.tv/discord'">Twitch</button>
+            <button class="mm-btn ghost small" onclick="window.tokensManager.pActivityUrl='https://www.youtube.com/watch?v=dQw4w9WgXcQ';document.querySelector('#tk-act-type~.tk-rp-section input').value='https://www.youtube.com/watch?v=dQw4w9WgXcQ'">YouTube</button>
+          </div>
+        </div>` : ''}
+
+        ${hasActivity ? `
+        <div class="tk-rp-section">
+          <div class="tk-rp-label">${icon('file_text')} ${t('tk.rp.details_section')}</div>
+          <div class="mm-row-fields">
+            <input placeholder="${t('tk.rp.details_ph')}" value="${this.escHtml(this.pDetails)}" oninput="window.tokensManager.pDetails=this.value" maxlength="128">
+            <input placeholder="${t('tk.rp.state_ph')}"   value="${this.escHtml(this.pState)}"   oninput="window.tokensManager.pState=this.value"   maxlength="128">
+          </div>
+          <div class="tk-rp-hint">${t('tk.rp.details_hint')}</div>
+        </div>
+
+        <div class="tk-rp-section">
+          <div class="tk-rp-label">${icon('image')} ${t('tk.rp.images')}</div>
+          <div class="tk-rp-hint" style="margin-bottom:6px">${t('tk.rp.img_hint')}</div>
+          <div class="mm-row-fields">
+            <input placeholder="${t('tk.rp.large_img_ph')}" value="${this.escHtml(this.pLargeImage)}" oninput="window.tokensManager.pLargeImage=this.value">
+            <input placeholder="${t('tk.rp.large_text_ph')}" value="${this.escHtml(this.pLargeText)}" oninput="window.tokensManager.pLargeText=this.value" maxlength="128">
+          </div>
+          <div class="mm-row-fields" style="margin-top:4px">
+            <input placeholder="${t('tk.rp.small_img_ph')}" value="${this.escHtml(this.pSmallImage)}" oninput="window.tokensManager.pSmallImage=this.value">
+            <input placeholder="${t('tk.rp.small_text_ph')}" value="${this.escHtml(this.pSmallText)}" oninput="window.tokensManager.pSmallText=this.value" maxlength="128">
+          </div>
+          ${isStreaming ? `
+          <div class="tk-rp-quick-urls" style="margin-top:6px">
+            <span class="tk-rp-hint" style="margin-bottom:0">${t('tk.rp.img_quick')}:</span>
+            <button class="mm-btn ghost small" onclick="window.tokensManager.pLargeImage='twitch:'+window.tokensManager.pActivityUrl.replace(/.*twitch\\.tv\\//,'').split('/')[0];window.tokensManager.render()">${t('tk.rp.img_from_twitch')}</button>
+            <button class="mm-btn ghost small" onclick="window.tokensManager.pLargeImage='youtube:'+(window.tokensManager.pActivityUrl.match(/[?&]v=([^&]+)/)||['',''])[1];window.tokensManager.render()">${t('tk.rp.img_from_youtube')}</button>
+          </div>` : ''}
+        </div>
+
+        <div class="tk-rp-section">
+          <div class="tk-rp-label">${icon('link')} ${t('tk.rp.buttons')} <span class="tk-rp-hint" style="font-weight:normal;margin:0">${t('tk.rp.buttons_hint')}</span></div>
+          <div class="mm-row-fields" style="margin-bottom:4px">
+            <input placeholder="${t('tk.rp.btn_name')}" value="${this.escHtml(this.pBtn1Name)}" oninput="window.tokensManager.pBtn1Name=this.value" maxlength="32">
+            <input placeholder="${t('tk.rp.btn_url')}"  value="${this.escHtml(this.pBtn1Url)}"  oninput="window.tokensManager.pBtn1Url=this.value">
+          </div>
+          <div class="mm-row-fields">
+            <input placeholder="${t('tk.rp.btn2_name')}" value="${this.escHtml(this.pBtn2Name)}" oninput="window.tokensManager.pBtn2Name=this.value" maxlength="32">
+            <input placeholder="${t('tk.rp.btn2_url')}"  value="${this.escHtml(this.pBtn2Url)}"  oninput="window.tokensManager.pBtn2Url=this.value">
+          </div>
+        </div>
+
+        <div class="tk-rp-section">
+          <label class="mm-toggle tk-rp-ts-toggle">
+            <input type="checkbox" ${this.pUseTimestamp ? 'checked' : ''} onchange="window.tokensManager.pUseTimestamp=this.checked">
+            ${t('tk.rp.timestamp')}
+          </label>
+        </div>` : ''}
+
         ${this.activityRiskHtml()}
         <div class="mm-actions-row">
           <button class="mm-btn primary glow" onclick="window.tokensManager.applyActivity()">${t('tk.apply_activity')}</button>
@@ -334,7 +411,11 @@ export class TokensManager {
 
   onActivityTypeChange(v) {
     this.pActivityType = parseInt(v);
-    if (this.pActivityType !== 1) this.pActivityUrl = '';
+    if (this.pActivityType !== 1) {
+      this.pActivityUrl = '';
+    } else if (!this.pActivityUrl) {
+      this.pActivityUrl = 'https://twitch.tv/discord';
+    }
     this.render();
   }
 
@@ -359,7 +440,6 @@ export class TokensManager {
 
   async applyActivity(all = false) {
     if (this.pActivityType === -1) {
-      // Clear by setting empty activity
       const tokens = all ? this._allConnectedNames() : this.selected;
       const r = await window.electronAPI.setPresence({ tokens, status: this.pStatus, customStatus: this.pCustom, emoji: this.pEmoji || undefined });
       const ok = (r.results || []).filter(x => x.ok).length;
@@ -370,18 +450,54 @@ export class TokensManager {
     const name = String(this.pActivityName || '').trim();
     if (!name) return showNotification(t('tk.act_need_name'));
     const tokens = all ? this._allConnectedNames() : this.selected;
+
     const activity = { name, type: this.pActivityType };
-    if (this.pActivityType === 1 && this.pActivityUrl) activity.url = this.pActivityUrl;
-    const r = await window.electronAPI.setPresence({ tokens, status: this.pStatus, activity });
-    const ok = (r.results || []).filter(x => x.ok).length;
-    const fail = (r.results || []).length - ok;
-    showNotification(`${t('tk.apply_activity')} ${t('common.ok')} ${ok}  ${t('common.fail')} ${fail}`);
+
+    // Streaming URL (auto-fallback to twitch.tv/discord if empty)
+    if (this.pActivityType === 1) {
+      activity.url = this.pActivityUrl.trim() || 'https://twitch.tv/discord';
+    }
+
+    // Rich Presence extended fields
+    if (this.pDetails.trim())    activity.details    = this.pDetails.trim();
+    if (this.pState.trim())      activity.state      = this.pState.trim();
+    if (this.pLargeImage.trim()) activity.largeImage = this.pLargeImage.trim();
+    if (this.pLargeText.trim())  activity.largeText  = this.pLargeText.trim();
+    if (this.pSmallImage.trim()) activity.smallImage = this.pSmallImage.trim();
+    if (this.pSmallText.trim())  activity.smallText  = this.pSmallText.trim();
+    if (this.pUseTimestamp)      activity.startTimestamp = Date.now();
+
+    // Buttons (max 2, both name and url required)
+    const buttons = [];
+    if (this.pBtn1Name.trim() && this.pBtn1Url.trim())
+      buttons.push({ name: this.pBtn1Name.trim(), url: this.pBtn1Url.trim() });
+    if (this.pBtn2Name.trim() && this.pBtn2Url.trim())
+      buttons.push({ name: this.pBtn2Name.trim(), url: this.pBtn2Url.trim() });
+    if (buttons.length) activity.buttons = buttons;
+
+    try {
+      const r = await window.electronAPI.setPresence({ tokens, status: this.pStatus, activity });
+      const ok = (r.results || []).filter(x => x.ok).length;
+      const fail = (r.results || []).length - ok;
+      showNotification(`${t('tk.apply_activity')} ${t('common.ok')} ${ok}  ${t('common.fail')} ${fail}${fail ? ' ⚠' : ''}`);
+    } catch (e) { showNotification(`${t('mm.failed')}: ${e.message}`); }
   }
 
   async clearActivity() {
-    this.pActivityType = -1;
-    this.pActivityName = '';
-    this.pActivityUrl  = '';
+    this.pActivityType   = -1;
+    this.pActivityName   = '';
+    this.pActivityUrl    = '';
+    this.pDetails        = '';
+    this.pState          = '';
+    this.pLargeImage     = '';
+    this.pLargeText      = '';
+    this.pSmallImage     = '';
+    this.pSmallText      = '';
+    this.pBtn1Name       = '';
+    this.pBtn1Url        = '';
+    this.pBtn2Name       = '';
+    this.pBtn2Url        = '';
+    this.pUseTimestamp   = false;
     const tokens = this.selected.length ? this.selected : this._allConnectedNames();
     await window.electronAPI.setPresence({ tokens, status: this.pStatus, customStatus: this.pCustom || '', emoji: this.pEmoji || undefined });
     this.render();
