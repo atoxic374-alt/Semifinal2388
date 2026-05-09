@@ -1,0 +1,118 @@
+/* ── Inline SVG icons ── */
+.ic {
+  width: 1em;
+  height: 1em;
+  display: inline-block;
+  vertical-align: -0.18em;
+  flex-shrink: 0;
+}
+
+.ic.lg { width: 1.4em; height: 1.4em; }
+.ic.xl { width: 1.8em; height: 1.8em; }
+
+/* Decorative chip icons (mm-* containers have fixed dimensions) */
+.mm-icon .ic,
+.mm-card-icon .ic {
+  width: 60%;
+  height: 60%;
+  color: var(--accent);
+}
+
+/* om-* uses font-size only — let SVG follow font-size */
+.om-icon .ic,
+.om-card-icon .ic {
+  width: 1em;
+  height: 1em;
+  color: var(--accent);
+  vertical-align: -0.12em;
+}
+
+/* Tab icons sit beside text */
+.mm-tab .ic,
+.om-tab .ic { width: 1.05em; height: 1.05em; vertical-align: -0.18em; }
+
+/* Action button icons */
+.mm-btn .ic { width: 1em; height: 1em; vertical-align: -0.18em; }
+
+/* Pulsing accent for hero icon */
+.mm-icon.pulse .ic { color: var(--accent); }
+
+/* Inline message-card icons (calendar, pin) */
+.om-msg-time .ic,
+.om-msg-footer .ic,
+.om-copy-link-btn .ic { width: 1em; height: 1em; vertical-align: -0.18em; }
+.om-error .ic { width: 1.1em; height: 1.1em; vertical-align: -0.2em; color: #e74c3c; }
+
+/* Snowfall layer */
+.snow {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+
+.snow span {
+  position: absolute;
+  top: -10px;
+  display: block;
+  width: 6px;
+  height: 6px;
+  background: rgba(255,255,255,0.32);
+  border-radius: 50%;
+  filter: blur(0.6px);
+  opacity: 0;
+  will-change: transform, opacity;
+  animation-name: snow-fall;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+body.light-theme .snow span {
+  background: rgba(88,101,242,0.22);
+  filter: blur(0.7px);
+}
+
+@keyframes snow-fall {
+  0%   { transform: translate3d(0, -10vh, 0) scale(0.6); opacity: 0; }
+  10%  { opacity: 0.5; }
+  50%  { transform: translate3d(20px, 50vh, 0) scale(1); opacity: 0.42; }
+  90%  { opacity: 0.28; }
+  100% { transform: translate3d(-20px, 110vh, 0) scale(0.7); opacity: 0; }
+}
+
+/* Reduced motion: disable snow */
+@media (prefers-reduced-motion: reduce) {
+  .snow span { animation: none; opacity: 0; }
+}
+
+/* Small screens: snow eats CPU + obscures content on mobile, hide it. */
+@media (max-width: 768px) {
+  .snow { display: none; }
+}
+
+/* Coarse pointer (touch) devices also benefit from the no-snow path. */
+@media (hover: none) and (pointer: coarse) {
+  .snow { display: none; }
+}
+
+/* Viewport-safe modals on small screens — keep them within the visible area
+ * even when the address bar is showing or the keyboard is open. Uses the
+ * dynamic viewport unit (`dvh`) when supported, with a vh fallback. */
+@media (max-width: 600px) {
+  .modal-content,
+  .modal-content.info-modal {
+    max-height: 90vh;
+    max-height: 90dvh;
+    max-width: 96vw;
+    width: auto;
+    margin: 2vh auto;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  .modal-overlay {
+    padding: 8px;
+    align-items: flex-start;
+  }
+}

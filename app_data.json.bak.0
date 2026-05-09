@@ -1,0 +1,812 @@
+{
+  "history": [
+    {
+      "id": "mogrd4wye8e0",
+      "ts": 1777267807522,
+      "account": "alice",
+      "type": "save_token",
+      "target": {
+        "name": "alice"
+      },
+      "status": "success"
+    },
+    {
+      "id": "mogr385mqd6a",
+      "ts": 1777267345162,
+      "account": "test_alice",
+      "type": "save_token",
+      "target": {
+        "name": "test_alice"
+      },
+      "status": "success"
+    },
+    {
+      "id": "mofnzgxm97ny",
+      "ts": 1777201664890,
+      "account": "B",
+      "type": "delete_token",
+      "target": {
+        "name": "B"
+      },
+      "status": "success"
+    },
+    {
+      "id": "mofmxq33n40d",
+      "ts": 1777199903823,
+      "account": "acc_2",
+      "type": "connect",
+      "target": {
+        "username": "g4oo",
+        "id": "1484757880056840324"
+      },
+      "status": "success"
+    },
+    {
+      "id": "mofmmnnijrvm",
+      "ts": 1777199387454,
+      "account": "acc_2",
+      "type": "connect",
+      "target": {
+        "username": "g4oo",
+        "id": "1484757880056840324"
+      },
+      "status": "success"
+    },
+    {
+      "id": "mofmf5d97wtq",
+      "ts": 1777199037165,
+      "account": "acc_2",
+      "type": "disconnect",
+      "target": {},
+      "status": "success"
+    },
+    {
+      "id": "mofmf28cbp5n",
+      "ts": 1777199033100,
+      "account": "acc_2",
+      "type": "connect",
+      "target": {
+        "username": "g4oo",
+        "id": "1484757880056840324"
+      },
+      "status": "success"
+    },
+    {
+      "id": "mofmaour3bv1",
+      "ts": 1777198829139,
+      "account": "acc_2",
+      "type": "disconnect",
+      "target": {},
+      "status": "success"
+    },
+    {
+      "id": "mofmaeoaydd0",
+      "ts": 1777198815946,
+      "account": "acc_2",
+      "type": "connect",
+      "target": {
+        "username": "g4oo",
+        "id": "1484757880056840324"
+      },
+      "status": "success"
+    },
+    {
+      "id": "mofm97g4r7bg",
+      "ts": 1777198759924,
+      "account": "acc_1",
+      "type": "disconnect",
+      "target": {},
+      "status": "success"
+    },
+    {
+      "id": "mofm94nzt1a3",
+      "ts": 1777198756319,
+      "account": "B",
+      "type": "connect",
+      "target": {
+        "username": "g4oo",
+        "id": "1484757880056840324"
+      },
+      "status": "success"
+    },
+    {
+      "id": "mofm8yap5vst",
+      "ts": 1777198748065,
+      "account": "acc_1",
+      "type": "connect",
+      "target": {
+        "username": "g4oo",
+        "id": "1484757880056840324"
+      },
+      "status": "success"
+    },
+    {
+      "id": "mofm8u0gab00",
+      "ts": 1777198742512,
+      "account": "B",
+      "type": "save_token",
+      "target": {
+        "name": "B"
+      },
+      "status": "success"
+    },
+    {
+      "id": "mofldnqzxgv4",
+      "ts": 1777197288059,
+      "account": "acc_1",
+      "type": "disconnect",
+      "target": {},
+      "status": "success"
+    },
+    {
+      "id": "moflagq7y2b4",
+      "ts": 1777197138991,
+      "account": "acc_1",
+      "type": "connect",
+      "target": {
+        "username": "g4oo",
+        "id": "1484757880056840324"
+      },
+      "status": "success"
+    }
+  ],
+  "tokenHealth": {
+    "B": {
+      "name": "B",
+      "ok": true,
+      "status": "healthy",
+      "user": {
+        "id": "1484757880056840324",
+        "username": "g4oo",
+        "displayName": "g4oo",
+        "avatar": "https://cdn.discordapp.com/avatars/1484757880056840324/059742f35b96795915411150769bfc05.png?size=64"
+      },
+      "checkedAt": 1777200700485
+    }
+  },
+  "cloneSnapshots": [],
+  "picConfig": {
+    "enabled": true,
+    "accounts": [],
+    "scope": "all",
+    "servers": [],
+    "webhook": "",
+    "inApp": true
+  },
+  "picBuffer": [
+    {
+      "id": "1497914198255075361",
+      "account": "B",
+      "ts": 1777200974764,
+      "author": {
+        "id": "1218778513910399007",
+        "username": "Triggers System",
+        "displayName": "Triggers System",
+        "avatar": "https://cdn.discordapp.com/avatars/1218778513910399007/abd3fa30b7d7e4bbb9a68dcf9e22f494.webp?size=64",
+        "bot": true
+      },
+      "guild": {
+        "id": "829437101119373342",
+        "name": "Triggers",
+        "icon": "https://cdn.discordapp.com/icons/829437101119373342/a_159286d50967b261f5a104bb406de027.webp?size=32"
+      },
+      "channel": {
+        "id": "829437101119373350",
+        "name": "✈〡𝖶𝖾𝗅𝖼𝗈𝗆𝖾"
+      },
+      "content": "",
+      "images": [
+        {
+          "url": "https://cdn.discordapp.com/attachments/829437101119373350/1497914198209073171/vice.png?ex=69ef40ce&is=69edef4e&hm=c6fdfbbb94cfe97415bfec86a412215ed33038e6081d97bf96e019509288147c&",
+          "name": "vice.png",
+          "width": 500,
+          "height": 156,
+          "contentType": "image/png"
+        }
+      ]
+    },
+    {
+      "id": "1497914198255075361",
+      "account": "B",
+      "ts": 1777200974764,
+      "author": {
+        "id": "1218778513910399007",
+        "username": "Triggers System",
+        "displayName": "Triggers System",
+        "avatar": "https://cdn.discordapp.com/avatars/1218778513910399007/abd3fa30b7d7e4bbb9a68dcf9e22f494.webp?size=64",
+        "bot": true
+      },
+      "guild": {
+        "id": "829437101119373342",
+        "name": "Triggers",
+        "icon": "https://cdn.discordapp.com/icons/829437101119373342/a_159286d50967b261f5a104bb406de027.webp?size=32"
+      },
+      "channel": {
+        "id": "829437101119373350",
+        "name": "✈〡𝖶𝖾𝗅𝖼𝗈𝗆𝖾"
+      },
+      "content": "",
+      "images": [
+        {
+          "url": "https://cdn.discordapp.com/attachments/829437101119373350/1497914198209073171/vice.png?ex=69ef40ce&is=69edef4e&hm=c6fdfbbb94cfe97415bfec86a412215ed33038e6081d97bf96e019509288147c&",
+          "name": "vice.png",
+          "width": 500,
+          "height": 156,
+          "contentType": "image/png"
+        }
+      ]
+    },
+    {
+      "id": "1497913913474285679",
+      "account": "B",
+      "ts": 1777200906867,
+      "author": {
+        "id": "1218778513910399007",
+        "username": "Triggers System",
+        "displayName": "Triggers System",
+        "avatar": "https://cdn.discordapp.com/avatars/1218778513910399007/abd3fa30b7d7e4bbb9a68dcf9e22f494.webp?size=64",
+        "bot": true
+      },
+      "guild": {
+        "id": "829437101119373342",
+        "name": "Triggers",
+        "icon": "https://cdn.discordapp.com/icons/829437101119373342/a_159286d50967b261f5a104bb406de027.webp?size=32"
+      },
+      "channel": {
+        "id": "829437101119373350",
+        "name": "✈〡𝖶𝖾𝗅𝖼𝗈𝗆𝖾"
+      },
+      "content": "",
+      "images": [
+        {
+          "url": "https://cdn.discordapp.com/attachments/829437101119373350/1497913913235214408/vice.png?ex=69ef408a&is=69edef0a&hm=46a149519aa5ec64d1d7ef4bf1802149f47174ba6b6e8a538570d10b73e22def&",
+          "name": "vice.png",
+          "width": 500,
+          "height": 156,
+          "contentType": "image/png"
+        }
+      ]
+    },
+    {
+      "id": "1497913913474285679",
+      "account": "B",
+      "ts": 1777200906867,
+      "author": {
+        "id": "1218778513910399007",
+        "username": "Triggers System",
+        "displayName": "Triggers System",
+        "avatar": "https://cdn.discordapp.com/avatars/1218778513910399007/abd3fa30b7d7e4bbb9a68dcf9e22f494.webp?size=64",
+        "bot": true
+      },
+      "guild": {
+        "id": "829437101119373342",
+        "name": "Triggers",
+        "icon": "https://cdn.discordapp.com/icons/829437101119373342/a_159286d50967b261f5a104bb406de027.webp?size=32"
+      },
+      "channel": {
+        "id": "829437101119373350",
+        "name": "✈〡𝖶𝖾𝗅𝖼𝗈𝗆𝖾"
+      },
+      "content": "",
+      "images": [
+        {
+          "url": "https://cdn.discordapp.com/attachments/829437101119373350/1497913913235214408/vice.png?ex=69ef408a&is=69edef0a&hm=46a149519aa5ec64d1d7ef4bf1802149f47174ba6b6e8a538570d10b73e22def&",
+          "name": "vice.png",
+          "width": 500,
+          "height": 156,
+          "contentType": "image/png"
+        }
+      ]
+    },
+    {
+      "id": "1497913169887232020",
+      "account": "B",
+      "ts": 1777200729582,
+      "author": {
+        "id": "1218778513910399007",
+        "username": "Triggers System",
+        "displayName": "Triggers System",
+        "avatar": "https://cdn.discordapp.com/avatars/1218778513910399007/abd3fa30b7d7e4bbb9a68dcf9e22f494.webp?size=64",
+        "bot": true
+      },
+      "guild": {
+        "id": "829437101119373342",
+        "name": "Triggers",
+        "icon": "https://cdn.discordapp.com/icons/829437101119373342/a_159286d50967b261f5a104bb406de027.webp?size=32"
+      },
+      "channel": {
+        "id": "829437101119373350",
+        "name": "✈〡𝖶𝖾𝗅𝖼𝗈𝗆𝖾"
+      },
+      "content": "",
+      "images": [
+        {
+          "url": "https://cdn.discordapp.com/attachments/829437101119373350/1497913169681715250/vice.png?ex=69ef3fd9&is=69edee59&hm=c539805a506cc88a230a13c1237f7e4b406ab06012652ee3f616dcdf28520be2&",
+          "name": "vice.png",
+          "width": 500,
+          "height": 156,
+          "contentType": "image/png"
+        }
+      ]
+    },
+    {
+      "id": "1497913169887232020",
+      "account": "B",
+      "ts": 1777200729582,
+      "author": {
+        "id": "1218778513910399007",
+        "username": "Triggers System",
+        "displayName": "Triggers System",
+        "avatar": "https://cdn.discordapp.com/avatars/1218778513910399007/abd3fa30b7d7e4bbb9a68dcf9e22f494.webp?size=64",
+        "bot": true
+      },
+      "guild": {
+        "id": "829437101119373342",
+        "name": "Triggers",
+        "icon": "https://cdn.discordapp.com/icons/829437101119373342/a_159286d50967b261f5a104bb406de027.webp?size=32"
+      },
+      "channel": {
+        "id": "829437101119373350",
+        "name": "✈〡𝖶𝖾𝗅𝖼𝗈𝗆𝖾"
+      },
+      "content": "",
+      "images": [
+        {
+          "url": "https://cdn.discordapp.com/attachments/829437101119373350/1497913169681715250/vice.png?ex=69ef3fd9&is=69edee59&hm=c539805a506cc88a230a13c1237f7e4b406ab06012652ee3f616dcdf28520be2&",
+          "name": "vice.png",
+          "width": 500,
+          "height": 156,
+          "contentType": "image/png"
+        }
+      ]
+    },
+    {
+      "id": "1497912285178494986",
+      "account": "acc_2",
+      "ts": 1777200518651,
+      "author": {
+        "id": "1242435214924451912",
+        "username": "5frd",
+        "displayName": "202",
+        "avatar": "https://cdn.discordapp.com/avatars/1242435214924451912/3007115f33b606b866452b0add7360ba.webp?size=64",
+        "bot": false
+      },
+      "guild": {
+        "id": "829437101119373342",
+        "name": "Triggers",
+        "icon": "https://cdn.discordapp.com/icons/829437101119373342/a_159286d50967b261f5a104bb406de027.webp?size=32"
+      },
+      "channel": {
+        "id": "1050398549768163418",
+        "name": "❓〡𝖰𝗎𝖾𝗋𝗂𝖾𝗌"
+      },
+      "content": "",
+      "images": [
+        {
+          "url": "https://cdn.discordapp.com/attachments/1050398549768163418/1497912284612268062/image.png?ex=69ef3f06&is=69eded86&hm=033d1f37e48143bb819518573d65195c064c3b901f422d1f0ebfe53dc5889657&",
+          "name": "image.png",
+          "width": 996,
+          "height": 412,
+          "contentType": "image/webp"
+        }
+      ]
+    },
+    {
+      "id": "1497912285178494986",
+      "account": "B",
+      "ts": 1777200518651,
+      "author": {
+        "id": "1242435214924451912",
+        "username": "5frd",
+        "displayName": "202",
+        "avatar": "https://cdn.discordapp.com/avatars/1242435214924451912/3007115f33b606b866452b0add7360ba.webp?size=64",
+        "bot": false
+      },
+      "guild": {
+        "id": "829437101119373342",
+        "name": "Triggers",
+        "icon": "https://cdn.discordapp.com/icons/829437101119373342/a_159286d50967b261f5a104bb406de027.webp?size=32"
+      },
+      "channel": {
+        "id": "1050398549768163418",
+        "name": "❓〡𝖰𝗎𝖾𝗋𝗂𝖾𝗌"
+      },
+      "content": "",
+      "images": [
+        {
+          "url": "https://cdn.discordapp.com/attachments/1050398549768163418/1497912284612268062/image.png?ex=69ef3f06&is=69eded86&hm=033d1f37e48143bb819518573d65195c064c3b901f422d1f0ebfe53dc5889657&",
+          "name": "image.png",
+          "width": 996,
+          "height": 412,
+          "contentType": "image/webp"
+        }
+      ]
+    },
+    {
+      "id": "1497912113602101248",
+      "account": "acc_2",
+      "ts": 1777200477744,
+      "author": {
+        "id": "1242435214924451912",
+        "username": "5frd",
+        "displayName": "202",
+        "avatar": "https://cdn.discordapp.com/avatars/1242435214924451912/3007115f33b606b866452b0add7360ba.webp?size=64",
+        "bot": false
+      },
+      "guild": {
+        "id": "829437101119373342",
+        "name": "Triggers",
+        "icon": "https://cdn.discordapp.com/icons/829437101119373342/a_159286d50967b261f5a104bb406de027.webp?size=32"
+      },
+      "channel": {
+        "id": "1050398549768163418",
+        "name": "❓〡𝖰𝗎𝖾𝗋𝗂𝖾𝗌"
+      },
+      "content": "",
+      "images": [
+        {
+          "url": "https://cdn.discordapp.com/attachments/1050398549768163418/1497912113350447307/image.png?ex=69ef3edd&is=69eded5d&hm=f8bd1a88ce8ed183aa10dd201f3341b61e98b81446553fd70bcd24a59cc728bc&",
+          "name": "image.png",
+          "width": 1407,
+          "height": 625,
+          "contentType": "image/png"
+        }
+      ]
+    },
+    {
+      "id": "1497912113602101248",
+      "account": "B",
+      "ts": 1777200477744,
+      "author": {
+        "id": "1242435214924451912",
+        "username": "5frd",
+        "displayName": "202",
+        "avatar": "https://cdn.discordapp.com/avatars/1242435214924451912/3007115f33b606b866452b0add7360ba.webp?size=64",
+        "bot": false
+      },
+      "guild": {
+        "id": "829437101119373342",
+        "name": "Triggers",
+        "icon": "https://cdn.discordapp.com/icons/829437101119373342/a_159286d50967b261f5a104bb406de027.webp?size=32"
+      },
+      "channel": {
+        "id": "1050398549768163418",
+        "name": "❓〡𝖰𝗎𝖾𝗋𝗂𝖾𝗌"
+      },
+      "content": "",
+      "images": [
+        {
+          "url": "https://cdn.discordapp.com/attachments/1050398549768163418/1497912113350447307/image.png?ex=69ef3edd&is=69eded5d&hm=f8bd1a88ce8ed183aa10dd201f3341b61e98b81446553fd70bcd24a59cc728bc&",
+          "name": "image.png",
+          "width": 1407,
+          "height": 625,
+          "contentType": "image/png"
+        }
+      ]
+    },
+    {
+      "id": "1497912113602101248",
+      "account": "B",
+      "ts": 1777200477744,
+      "author": {
+        "id": "1242435214924451912",
+        "username": "5frd",
+        "displayName": "202",
+        "avatar": "https://cdn.discordapp.com/avatars/1242435214924451912/3007115f33b606b866452b0add7360ba.webp?size=64",
+        "bot": false
+      },
+      "guild": {
+        "id": "829437101119373342",
+        "name": "Triggers",
+        "icon": "https://cdn.discordapp.com/icons/829437101119373342/a_159286d50967b261f5a104bb406de027.webp?size=32"
+      },
+      "channel": {
+        "id": "1050398549768163418",
+        "name": "❓〡𝖰𝗎𝖾𝗋𝗂𝖾𝗌"
+      },
+      "content": "",
+      "images": [
+        {
+          "url": "https://cdn.discordapp.com/attachments/1050398549768163418/1497912113350447307/image.png?ex=69ef3edd&is=69eded5d&hm=f8bd1a88ce8ed183aa10dd201f3341b61e98b81446553fd70bcd24a59cc728bc&",
+          "name": "image.png",
+          "width": 1407,
+          "height": 625,
+          "contentType": "image/png"
+        }
+      ]
+    },
+    {
+      "id": "1497910795827417270",
+      "account": "B",
+      "ts": 1777200163562,
+      "author": {
+        "id": "1218778513910399007",
+        "username": "Triggers System",
+        "displayName": "Triggers System",
+        "avatar": "https://cdn.discordapp.com/avatars/1218778513910399007/abd3fa30b7d7e4bbb9a68dcf9e22f494.webp?size=64",
+        "bot": true
+      },
+      "guild": {
+        "id": "829437101119373342",
+        "name": "Triggers",
+        "icon": "https://cdn.discordapp.com/icons/829437101119373342/a_159286d50967b261f5a104bb406de027.webp?size=32"
+      },
+      "channel": {
+        "id": "829437101119373350",
+        "name": "✈〡𝖶𝖾𝗅𝖼𝗈𝗆𝖾"
+      },
+      "content": "",
+      "images": [
+        {
+          "url": "https://cdn.discordapp.com/attachments/829437101119373350/1497910795390943293/vice.png?ex=69ef3da3&is=69edec23&hm=a46f0ebb62b03ec6b78908488ea2ffed376a7e7255e8398f05a2496f72c064b9&",
+          "name": "vice.png",
+          "width": 500,
+          "height": 156,
+          "contentType": "image/png"
+        }
+      ]
+    },
+    {
+      "id": "1497910795827417270",
+      "account": "acc_2",
+      "ts": 1777200163562,
+      "author": {
+        "id": "1218778513910399007",
+        "username": "Triggers System",
+        "displayName": "Triggers System",
+        "avatar": "https://cdn.discordapp.com/avatars/1218778513910399007/abd3fa30b7d7e4bbb9a68dcf9e22f494.webp?size=64",
+        "bot": true
+      },
+      "guild": {
+        "id": "829437101119373342",
+        "name": "Triggers",
+        "icon": "https://cdn.discordapp.com/icons/829437101119373342/a_159286d50967b261f5a104bb406de027.webp?size=32"
+      },
+      "channel": {
+        "id": "829437101119373350",
+        "name": "✈〡𝖶𝖾𝗅𝖼𝗈𝗆𝖾"
+      },
+      "content": "",
+      "images": [
+        {
+          "url": "https://cdn.discordapp.com/attachments/829437101119373350/1497910795390943293/vice.png?ex=69ef3da3&is=69edec23&hm=a46f0ebb62b03ec6b78908488ea2ffed376a7e7255e8398f05a2496f72c064b9&",
+          "name": "vice.png",
+          "width": 500,
+          "height": 156,
+          "contentType": "image/png"
+        }
+      ]
+    },
+    {
+      "id": "1497910795827417270",
+      "account": "B",
+      "ts": 1777200163562,
+      "author": {
+        "id": "1218778513910399007",
+        "username": "Triggers System",
+        "displayName": "Triggers System",
+        "avatar": "https://cdn.discordapp.com/avatars/1218778513910399007/abd3fa30b7d7e4bbb9a68dcf9e22f494.webp?size=64",
+        "bot": true
+      },
+      "guild": {
+        "id": "829437101119373342",
+        "name": "Triggers",
+        "icon": "https://cdn.discordapp.com/icons/829437101119373342/a_159286d50967b261f5a104bb406de027.webp?size=32"
+      },
+      "channel": {
+        "id": "829437101119373350",
+        "name": "✈〡𝖶𝖾𝗅𝖼𝗈𝗆𝖾"
+      },
+      "content": "",
+      "images": [
+        {
+          "url": "https://cdn.discordapp.com/attachments/829437101119373350/1497910795390943293/vice.png?ex=69ef3da3&is=69edec23&hm=a46f0ebb62b03ec6b78908488ea2ffed376a7e7255e8398f05a2496f72c064b9&",
+          "name": "vice.png",
+          "width": 500,
+          "height": 156,
+          "contentType": "image/png"
+        }
+      ]
+    },
+    {
+      "id": "1497910780757151874",
+      "account": "acc_2",
+      "ts": 1777200159969,
+      "author": {
+        "id": "1218778513910399007",
+        "username": "Triggers System",
+        "displayName": "Triggers System",
+        "avatar": "https://cdn.discordapp.com/avatars/1218778513910399007/abd3fa30b7d7e4bbb9a68dcf9e22f494.webp?size=64",
+        "bot": true
+      },
+      "guild": {
+        "id": "829437101119373342",
+        "name": "Triggers",
+        "icon": "https://cdn.discordapp.com/icons/829437101119373342/a_159286d50967b261f5a104bb406de027.webp?size=32"
+      },
+      "channel": {
+        "id": "829437101119373350",
+        "name": "✈〡𝖶𝖾𝗅𝖼𝗈𝗆𝖾"
+      },
+      "content": "",
+      "images": [
+        {
+          "url": "https://cdn.discordapp.com/attachments/829437101119373350/1497910780438515853/vice.png?ex=69ef3d9f&is=69edec1f&hm=4b1bc6286a0358dbdd2432ade6226ef6655f36fc9695ee721b60665f5115cc4a&",
+          "name": "vice.png",
+          "width": 500,
+          "height": 156,
+          "contentType": "image/png"
+        }
+      ]
+    },
+    {
+      "id": "1497910780757151874",
+      "account": "B",
+      "ts": 1777200159969,
+      "author": {
+        "id": "1218778513910399007",
+        "username": "Triggers System",
+        "displayName": "Triggers System",
+        "avatar": "https://cdn.discordapp.com/avatars/1218778513910399007/abd3fa30b7d7e4bbb9a68dcf9e22f494.webp?size=64",
+        "bot": true
+      },
+      "guild": {
+        "id": "829437101119373342",
+        "name": "Triggers",
+        "icon": "https://cdn.discordapp.com/icons/829437101119373342/a_159286d50967b261f5a104bb406de027.webp?size=32"
+      },
+      "channel": {
+        "id": "829437101119373350",
+        "name": "✈〡𝖶𝖾𝗅𝖼𝗈𝗆𝖾"
+      },
+      "content": "",
+      "images": [
+        {
+          "url": "https://cdn.discordapp.com/attachments/829437101119373350/1497910780438515853/vice.png?ex=69ef3d9f&is=69edec1f&hm=4b1bc6286a0358dbdd2432ade6226ef6655f36fc9695ee721b60665f5115cc4a&",
+          "name": "vice.png",
+          "width": 500,
+          "height": 156,
+          "contentType": "image/png"
+        }
+      ]
+    },
+    {
+      "id": "1497910780757151874",
+      "account": "B",
+      "ts": 1777200159969,
+      "author": {
+        "id": "1218778513910399007",
+        "username": "Triggers System",
+        "displayName": "Triggers System",
+        "avatar": "https://cdn.discordapp.com/avatars/1218778513910399007/abd3fa30b7d7e4bbb9a68dcf9e22f494.webp?size=64",
+        "bot": true
+      },
+      "guild": {
+        "id": "829437101119373342",
+        "name": "Triggers",
+        "icon": "https://cdn.discordapp.com/icons/829437101119373342/a_159286d50967b261f5a104bb406de027.webp?size=32"
+      },
+      "channel": {
+        "id": "829437101119373350",
+        "name": "✈〡𝖶𝖾𝗅𝖼𝗈𝗆𝖾"
+      },
+      "content": "",
+      "images": [
+        {
+          "url": "https://cdn.discordapp.com/attachments/829437101119373350/1497910780438515853/vice.png?ex=69ef3d9f&is=69edec1f&hm=4b1bc6286a0358dbdd2432ade6226ef6655f36fc9695ee721b60665f5115cc4a&",
+          "name": "vice.png",
+          "width": 500,
+          "height": 156,
+          "contentType": "image/png"
+        }
+      ]
+    },
+    {
+      "id": "1497910022766858314",
+      "account": "acc_2",
+      "ts": 1777199979250,
+      "author": {
+        "id": "1218778513910399007",
+        "username": "Triggers System",
+        "displayName": "Triggers System",
+        "avatar": "https://cdn.discordapp.com/avatars/1218778513910399007/abd3fa30b7d7e4bbb9a68dcf9e22f494.webp?size=64",
+        "bot": true
+      },
+      "guild": {
+        "id": "829437101119373342",
+        "name": "Triggers",
+        "icon": "https://cdn.discordapp.com/icons/829437101119373342/a_159286d50967b261f5a104bb406de027.webp?size=32"
+      },
+      "channel": {
+        "id": "829437101119373350",
+        "name": "✈〡𝖶𝖾𝗅𝖼𝗈𝗆𝖾"
+      },
+      "content": "",
+      "images": [
+        {
+          "url": "https://cdn.discordapp.com/attachments/829437101119373350/1497910022951145472/vice.png?ex=69ef3ceb&is=69edeb6b&hm=fc52eb9dd80e46c75b1421b527aa89d6574269a9a75ed6c274d6528e99aec733&",
+          "name": "vice.png",
+          "width": 500,
+          "height": 156,
+          "contentType": "image/png"
+        }
+      ]
+    },
+    {
+      "id": "1497910022766858314",
+      "account": "B",
+      "ts": 1777199979250,
+      "author": {
+        "id": "1218778513910399007",
+        "username": "Triggers System",
+        "displayName": "Triggers System",
+        "avatar": "https://cdn.discordapp.com/avatars/1218778513910399007/abd3fa30b7d7e4bbb9a68dcf9e22f494.webp?size=64",
+        "bot": true
+      },
+      "guild": {
+        "id": "829437101119373342",
+        "name": "Triggers",
+        "icon": "https://cdn.discordapp.com/icons/829437101119373342/a_159286d50967b261f5a104bb406de027.webp?size=32"
+      },
+      "channel": {
+        "id": "829437101119373350",
+        "name": "✈〡𝖶𝖾𝗅𝖼𝗈𝗆𝖾"
+      },
+      "content": "",
+      "images": [
+        {
+          "url": "https://cdn.discordapp.com/attachments/829437101119373350/1497910022951145472/vice.png?ex=69ef3ceb&is=69edeb6b&hm=fc52eb9dd80e46c75b1421b527aa89d6574269a9a75ed6c274d6528e99aec733&",
+          "name": "vice.png",
+          "width": 500,
+          "height": 156,
+          "contentType": "image/png"
+        }
+      ]
+    },
+    {
+      "id": "1497910022766858314",
+      "account": "B",
+      "ts": 1777199979250,
+      "author": {
+        "id": "1218778513910399007",
+        "username": "Triggers System",
+        "displayName": "Triggers System",
+        "avatar": "https://cdn.discordapp.com/avatars/1218778513910399007/abd3fa30b7d7e4bbb9a68dcf9e22f494.webp?size=64",
+        "bot": true
+      },
+      "guild": {
+        "id": "829437101119373342",
+        "name": "Triggers",
+        "icon": "https://cdn.discordapp.com/icons/829437101119373342/a_159286d50967b261f5a104bb406de027.webp?size=32"
+      },
+      "channel": {
+        "id": "829437101119373350",
+        "name": "✈〡𝖶𝖾𝗅𝖼𝗈𝗆𝖾"
+      },
+      "content": "",
+      "images": [
+        {
+          "url": "https://cdn.discordapp.com/attachments/829437101119373350/1497910022951145472/vice.png?ex=69ef3ceb&is=69edeb6b&hm=fc52eb9dd80e46c75b1421b527aa89d6574269a9a75ed6c274d6528e99aec733&",
+          "name": "vice.png",
+          "width": 500,
+          "height": 156,
+          "contentType": "image/png"
+        }
+      ]
+    }
+  ],
+  "antiPruneConfig": {
+    "enabled": false,
+    "accounts": [],
+    "scope": "all",
+    "servers": [],
+    "message": "You were removed from {server} by mistake — please rejoin: {invite}",
+    "distribute": true
+  },
+  "antiPruneLog": [],
+  "bots": [],
+  "botsLastNumber": 0,
+  "botsConfig": {
+    "captcha2captchaKey": ""
+  }
+}

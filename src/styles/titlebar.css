@@ -1,0 +1,163 @@
+.title-bar {
+  height: var(--title-bar-height);
+  background: linear-gradient(90deg, #0a0a0c 0%, #111118 50%, #0a0a0c 100%);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 clamp(12px, 1.5vw, 16px);
+  border-bottom: 1px solid rgba(88, 101, 242, 0.3);
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  box-shadow: 0 1px 12px rgba(88, 101, 242, 0.12);
+}
+
+.title-bar .title {
+  display: flex;
+  align-items: center;
+  gap: clamp(8px, 1vw, 10px);
+  font-weight: 600;
+  font-size: clamp(13px, 1vw, 15px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: 0.3px;
+  color: var(--text);
+}
+
+.title-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  background: var(--accent);
+  border-radius: 50%;
+  box-shadow: 0 0 8px var(--accent), 0 0 16px rgba(88,101,242,0.4);
+  flex-shrink: 0;
+  animation: pulse-dot 2.5s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { box-shadow: 0 0 8px var(--accent), 0 0 16px rgba(88,101,242,0.4); }
+  50% { box-shadow: 0 0 14px var(--accent), 0 0 28px rgba(88,101,242,0.7); }
+}
+
+.window-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.window-controls button {
+  width: clamp(32px, 4vw, 46px);
+  height: var(--title-bar-height);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  opacity: 0.8;
+  transition: all 0.2s;
+  padding: 0;
+}
+
+.window-controls button svg {
+  width: clamp(12px, 1.5vw, 16px);
+  height: clamp(12px, 1.5vw, 16px);
+}
+
+.title-handle {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.8px;
+  color: var(--accent);
+  background: rgba(88, 101, 242, 0.12);
+  border: 1px solid rgba(88, 101, 242, 0.25);
+  border-radius: 4px;
+  padding: 2px 6px;
+  opacity: 0.8;
+  flex-shrink: 0;
+  -webkit-text-fill-color: initial;
+}
+
+.info-button,
+.theme-toggle-btn {
+  border-radius: 6px !important;
+  opacity: 0.65 !important;
+  transition: all 0.2s ease !important;
+  width: 32px !important;
+  height: var(--title-bar-height) !important;
+  background: transparent !important;
+  border: none !important;
+  color: var(--text) !important;
+  font-size: 14px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  cursor: pointer !important;
+  padding: 0 !important;
+  box-shadow: none !important;
+}
+
+.info-button:hover,
+.theme-toggle-btn:hover {
+  opacity: 1 !important;
+  background: rgba(88, 101, 242, 0.15) !important;
+  color: var(--accent) !important;
+  transform: scale(1.12) !important;
+  box-shadow: none !important;
+}
+
+/* Watermark */
+.watermark {
+  position: fixed;
+  bottom: 12px;
+  right: 16px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: rgba(88, 101, 242, 0.28);
+  pointer-events: none;
+  user-select: none;
+  z-index: 9999;
+  transition: color 0.4s;
+}
+
+@media (max-width: 480px) {
+  .title-bar .title {
+    font-size: 13px;
+  }
+
+  .window-controls button {
+    width: 32px;
+  }
+
+  .window-controls button svg {
+    width: 12px;
+    height: 12px;
+  }
+}
+
+/* ── Header user chip (current logged-in user) ───────────────── */
+.header-user{
+  display:inline-flex;align-items:center;gap:8px;
+  padding:4px 10px 4px 4px;border-radius:999px;
+  background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);
+  margin-inline-end:8px;font-size:12.5px;color:var(--text-primary,#e7e9f4);
+  transition:background .18s,border-color .18s;
+  animation:headerUserIn .35s cubic-bezier(.2,.85,.35,1.05);
+}
+.header-user:hover{background:rgba(88,101,242,.15);border-color:rgba(88,101,242,.4)}
+.header-user-avatar{width:24px;height:24px;border-radius:50%;object-fit:cover;display:block}
+.header-user-name{font-weight:600;letter-spacing:.2px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@keyframes headerUserIn{from{opacity:0;transform:translateY(-4px) scale(.95)}to{opacity:1;transform:translateY(0) scale(1)}}
+@media (max-width: 640px){
+  .header-user-name{display:none}
+  .header-user{padding:4px}
+}
+
+/* ── Page transitions (every page entry animates) ────────────── */
+.page-container{opacity:0;pointer-events:none;transform:translateY(8px);transition:opacity .28s ease,transform .35s cubic-bezier(.2,.85,.35,1.05)}
+.page-container.active{opacity:1;pointer-events:auto;transform:translateY(0)}

@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>تسجيل الدخول — Discord Account Manager</title>
+  <link rel="icon" href="/discord.png">
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Cairo,Tahoma,sans-serif;color:#e7e9f4;overflow:hidden}
+    body{background:#070815;position:relative}
+
+    /* Animated gradient backdrop */
+    .bg-grad{position:fixed;inset:0;background:
+      radial-gradient(circle at 20% 30%,#2b3a78 0%,transparent 50%),
+      radial-gradient(circle at 80% 70%,#5b2b78 0%,transparent 50%),
+      radial-gradient(circle at 50% 50%,#1a1f3a 0%,#070815 80%);
+      animation:bgshift 18s ease-in-out infinite alternate}
+    @keyframes bgshift{
+      0%{transform:scale(1) rotate(0)}
+      100%{transform:scale(1.15) rotate(8deg)}
+    }
+    /* Floating orbs */
+    .orb{position:fixed;border-radius:50%;filter:blur(80px);opacity:.4;pointer-events:none;animation:float 14s ease-in-out infinite}
+    .orb1{width:360px;height:360px;background:#5865f2;top:-80px;right:-80px;animation-delay:0s}
+    .orb2{width:300px;height:300px;background:#7c3aed;bottom:-60px;left:-60px;animation-delay:-5s}
+    .orb3{width:240px;height:240px;background:#ec4899;top:50%;left:60%;animation-delay:-9s}
+    @keyframes float{
+      0%,100%{transform:translate(0,0) scale(1)}
+      50%{transform:translate(30px,-40px) scale(1.1)}
+    }
+
+    .wrap{position:relative;z-index:1;min-height:100%;display:flex;align-items:center;justify-content:center;padding:24px;overflow-y:auto}
+
+    .card{
+      width:100%;max-width:440px;
+      background:rgba(20,22,38,.7);
+      backdrop-filter:blur(24px) saturate(150%);
+      -webkit-backdrop-filter:blur(24px) saturate(150%);
+      border:1px solid rgba(255,255,255,.1);
+      border-radius:24px;padding:36px 34px;
+      box-shadow:0 30px 80px -20px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,255,255,.1);
+      animation:cardIn .55s cubic-bezier(.2,.85,.35,1.05)
+    }
+    @keyframes cardIn{
+      from{opacity:0;transform:translateY(20px) scale(.96)}
+      to{opacity:1;transform:translateY(0) scale(1)}
+    }
+
+    .logo{
+      width:62px;height:62px;border-radius:18px;
+      background:linear-gradient(135deg,#5865f2,#7c3aed);
+      display:flex;align-items:center;justify-content:center;margin-bottom:18px;
+      box-shadow:0 12px 30px -10px rgba(88,101,242,.6);
+      animation:logoIn .6s .1s both ease-out
+    }
+    @keyframes logoIn{from{opacity:0;transform:scale(.6) rotate(-15deg)}to{opacity:1;transform:scale(1) rotate(0)}}
+    .logo svg{width:34px;height:34px}
+
+    h1{margin:0 0 8px;font-size:24px;font-weight:700;letter-spacing:-.3px}
+    .sub{margin:0 0 20px;font-size:14px;color:#a4a9c3;line-height:1.55}
+
+    /* Tabs */
+    .tabs{display:flex;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.06);border-radius:12px;padding:4px;margin-bottom:22px;position:relative}
+    .tab{flex:1;padding:10px;border:0;background:transparent;color:#a4a9c3;font-size:13.5px;font-weight:600;cursor:pointer;border-radius:9px;transition:color .2s;font-family:inherit;z-index:1}
+    .tab.active{color:#fff}
+    .tab-indicator{position:absolute;top:4px;bottom:4px;width:calc(50% - 4px);background:linear-gradient(135deg,#5865f2,#4752c4);border-radius:9px;transition:transform .3s cubic-bezier(.4,0,.2,1);box-shadow:0 4px 14px -4px rgba(88,101,242,.6)}
+
+    label{display:block;margin:14px 0 6px;font-size:12.5px;color:#c2c6dd;letter-spacing:.3px;font-weight:500}
+    input[type=password],input[type=text]{
+      width:100%;padding:13px 14px;border-radius:11px;
+      border:1px solid rgba(255,255,255,.1);
+      background:rgba(255,255,255,.04);color:#fff;
+      font-size:14.5px;font-family:inherit;
+      transition:all .18s;direction:ltr;text-align:left
+    }
+    input:focus{outline:none;border-color:#5865f2;background:rgba(88,101,242,.08);box-shadow:0 0 0 3px rgba(88,101,242,.15)}
+    input::placeholder{color:#5a6080}
+
+    .row{display:flex;align-items:center;gap:8px;margin-top:14px;font-size:13px;color:#a4a9c3}
+    .row input[type=checkbox]{width:16px;height:16px;accent-color:#5865f2;cursor:pointer}
+    .row label{margin:0;cursor:pointer}
+
+    button[type=submit]{
+      width:100%;margin-top:20px;padding:14px;border-radius:11px;border:0;
+      background:linear-gradient(135deg,#5865f2,#4752c4);color:#fff;
+      font-size:15px;font-weight:600;cursor:pointer;font-family:inherit;
+      transition:transform .12s,box-shadow .2s;
+      box-shadow:0 8px 20px -6px rgba(88,101,242,.5)
+    }
+    button[type=submit]:hover{transform:translateY(-1px);box-shadow:0 12px 28px -8px rgba(88,101,242,.7)}
+    button[type=submit]:active{transform:translateY(0)}
+    button[type=submit]:disabled{opacity:.55;cursor:not-allowed;transform:none}
+
+    .divider{display:flex;align-items:center;gap:12px;margin:22px 0;color:#5a6080;font-size:11.5px;letter-spacing:1px}
+    .divider::before,.divider::after{content:"";flex:1;height:1px;background:rgba(255,255,255,.08)}
+
+    .discord-btn{
+      width:100%;padding:13px;border-radius:11px;border:1px solid rgba(88,101,242,.4);
+      background:rgba(88,101,242,.12);color:#fff;
+      font-size:14.5px;font-weight:600;cursor:pointer;font-family:inherit;
+      display:flex;align-items:center;justify-content:center;gap:10px;
+      transition:all .18s
+    }
+    .discord-btn:hover{background:rgba(88,101,242,.22);border-color:#5865f2;transform:translateY(-1px)}
+    .discord-btn svg{width:22px;height:22px}
+    .discord-btn[hidden]{display:none}
+
+    .pending-discord{
+      margin-top:14px;padding:12px;border-radius:11px;
+      background:rgba(88,101,242,.1);border:1px solid rgba(88,101,242,.3);
+      display:flex;align-items:center;gap:12px;font-size:13px
+    }
+    .pending-discord img{width:36px;height:36px;border-radius:50%}
+    .pending-discord .pd-label{color:#a4a9c3;font-size:11.5px}
+    .pending-discord .pd-name{color:#fff;font-weight:600}
+
+    .alert{margin-top:14px;padding:11px 13px;border-radius:10px;font-size:13px;display:none;animation:shake .3s}
+    .alert.show{display:block}
+    .alert.err{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.35);color:#fca5a5}
+    .alert.ok{background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.35);color:#86efac}
+    @keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-4px)}75%{transform:translateX(4px)}}
+
+    .footer{margin-top:22px;text-align:center;font-size:11.5px;color:#5a6080;line-height:1.5}
+
+    /* Tab panel transitions */
+    .panel{display:none;animation:panelIn .3s cubic-bezier(.4,0,.2,1)}
+    .panel.active{display:block}
+    @keyframes panelIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+
+    /* Spinner */
+    .spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-inline-end:6px}
+    @keyframes spin{to{transform:rotate(360deg)}}
+  </style>
+</head>
+<body>
+  <div class="bg-grad"></div>
+  <div class="orb orb1"></div>
+  <div class="orb orb2"></div>
+  <div class="orb orb3"></div>
+
+  <div class="wrap">
+    <div class="card">
+      <div class="logo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="11" width="18" height="11" rx="2"/>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+        </svg>
+      </div>
+      <h1 id="title">مرحباً بعودتك</h1>
+      <p class="sub" id="sub">سجّل دخولك للوصول إلى لوحة إدارة حسابات Discord.</p>
+
+      <div class="tabs" role="tablist">
+        <div class="tab-indicator" id="tabIndicator"></div>
+        <button type="button" class="tab active" data-mode="login" role="tab">دخول</button>
+        <button type="button" class="tab" data-mode="signup" role="tab">حساب جديد</button>
+      </div>
+
+      <!-- Pending Discord identity (after OAuth signup flow) -->
+      <div class="pending-discord" id="pendingDiscord" style="display:none">
+        <img id="pdAvatar" alt="">
+        <div>
+          <div class="pd-label">سيتم ربط هذا الحساب:</div>
+          <div class="pd-name" id="pdName">—</div>
+        </div>
+      </div>
+
+      <!-- LOGIN PANEL -->
+      <form class="panel active" id="loginPanel">
+        <label for="loginUser">اسم المستخدم</label>
+        <input id="loginUser" type="text" autocomplete="username" placeholder="username" required>
+        <label for="loginPw">كلمة المرور</label>
+        <input id="loginPw" type="password" autocomplete="current-password" placeholder="••••••••" required>
+        <div class="row" style="gap:6px;color:#8a8fa8;font-size:12px;justify-content:flex-start">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          <span>سيبقى هذا الجهاز مسجّلاً تلقائياً.</span>
+        </div>
+        <button type="submit" id="loginBtn">تسجيل الدخول</button>
+        <button type="button" id="loginCancelDiscord" style="display:none;width:100%;margin-top:10px;padding:10px;border-radius:11px;border:1px solid rgba(255,255,255,.1);background:transparent;color:#a4a9c3;font-size:13px;cursor:pointer;font-family:inherit">استخدام حساب آخر</button>
+      </form>
+
+      <!-- SIGNUP PANEL -->
+      <form class="panel" id="signupPanel">
+        <label for="signupUser">اسم المستخدم</label>
+        <input id="signupUser" type="text" autocomplete="username" placeholder="اختر اسم مستخدم" minlength="3" required>
+        <label for="signupPw">كلمة المرور</label>
+        <input id="signupPw" type="password" autocomplete="new-password" placeholder="٨ أحرف على الأقل" minlength="8" required>
+        <div class="row" style="gap:6px;color:#8a8fa8;font-size:12px;justify-content:flex-start">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          <span>سيبقى هذا الجهاز مسجّلاً تلقائياً.</span>
+        </div>
+        <button type="submit" id="signupBtn">إنشاء حساب</button>
+      </form>
+
+      <div class="alert" id="alert"></div>
+
+      <div class="divider" id="divider">أو</div>
+      <button type="button" class="discord-btn" id="discordBtn" hidden>
+        <svg viewBox="0 0 24 24" fill="#5865f2"><path d="M20.317 4.37a19.79 19.79 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.42 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.334-.956 2.42-2.157 2.42zm7.975 0c-1.183 0-2.157-1.085-2.157-2.42 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.334-.946 2.42-2.157 2.42z"/></svg>
+        <span id="discordBtnLabel">المتابعة باستخدام Discord</span>
+      </button>
+
+      <div class="footer">
+        محمي ببرنامج التشفير المحلي. لا تتم مشاركة كلمات المرور.
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const params = new URLSearchParams(location.search);
+    const tabs = document.querySelectorAll('.tab');
+    const indicator = $('tabIndicator');
+    const loginPanel = $('loginPanel');
+    const signupPanel = $('signupPanel');
+    const alert = $('alert');
+
+    function showAlert(msg, kind = 'err') {
+      alert.className = 'alert show ' + kind;
+      alert.textContent = msg;
+      if (kind === 'ok') setTimeout(() => alert.classList.remove('show'), 3000);
+    }
+    function hideAlert() { alert.classList.remove('show'); }
+
+    function setMode(mode) {
+      tabs.forEach(t => t.classList.toggle('active', t.dataset.mode === mode));
+      const isSignup = mode === 'signup';
+      indicator.style.transform = isSignup
+        ? (document.dir === 'rtl' ? 'translateX(-100%)' : 'translateX(100%)')
+        : 'translateX(0)';
+      loginPanel.classList.toggle('active', !isSignup);
+      signupPanel.classList.toggle('active', isSignup);
+      $('title').textContent = isSignup ? 'إنشاء حساب جديد' : 'مرحباً بعودتك';
+      $('sub').textContent = isSignup
+        ? 'أنشئ حسابك الخاص — ستحصل على لوحة معزولة بياناتها لك وحدك.'
+        : 'سجّل دخولك للوصول إلى لوحة إدارة حسابات Discord.';
+      $('discordBtnLabel').textContent = isSignup ? 'التسجيل عبر Discord' : 'المتابعة باستخدام Discord';
+      hideAlert();
+    }
+
+    tabs.forEach(t => t.addEventListener('click', () => setMode(t.dataset.mode)));
+    if (params.get('mode') === 'signup') setMode('signup');
+
+    if (params.get('error')) showAlert('فشل التسجيل: ' + params.get('error'), 'err');
+
+    // Cancel discord-verified mode (user wants to sign in as someone else)
+    $('loginCancelDiscord').addEventListener('click', () => {
+      $('pendingDiscord').style.display = 'none';
+      $('loginCancelDiscord').style.display = 'none';
+      $('loginUser').readOnly = false;
+      $('loginUser').value = '';
+      $('title').textContent = 'مرحباً بعودتك';
+      $('sub').textContent = 'سجّل دخولك للوصول إلى لوحة إدارة حسابات Discord.';
+      $('loginUser').focus();
+    });
+
+    // Wire Discord button visibility + handle post-OAuth states
+    fetch('/api/auth/status').then(r => r.json()).then(s => {
+      if (s.discordOAuth) {
+        $('discordBtn').hidden = false;
+        $('divider').style.display = 'flex';
+      } else {
+        $('discordBtn').hidden = true;
+        $('divider').style.display = 'none';
+      }
+
+      // Case 1: returning user came back from Discord OAuth and we found their account.
+      // Pre-fill the username, lock it, show their avatar, and ask for password only.
+      if (s.discordVerifiedFor && params.get('discord_verified') === '1') {
+        setMode('login');
+        const dv = s.discordVerifiedFor;
+        $('pdAvatar').src = dv.avatar || '';
+        $('pdName').textContent = dv.username + (dv.discordUsername ? ` · ${dv.discordUsername}` : '');
+        document.querySelector('#pendingDiscord .pd-label').textContent = 'تم التحقق من Discord — أدخل كلمة المرور:';
+        $('pendingDiscord').style.display = 'flex';
+        $('loginUser').value = dv.username;
+        $('loginUser').readOnly = true;
+        $('loginCancelDiscord').style.display = 'block';
+        $('title').textContent = `أهلاً ${dv.username}`;
+        $('sub').textContent = 'تأكيد كلمة المرور لإكمال تسجيل الدخول.';
+        setTimeout(() => $('loginPw').focus(), 100);
+      }
+
+      // Case 2: new Discord account — show signup with their avatar pre-filled.
+      else if (s.pendingDiscord && params.get('discord') === '1') {
+        setMode('signup');
+        $('pdAvatar').src = s.pendingDiscord.avatar || '';
+        $('pdName').textContent = s.pendingDiscord.username || '—';
+        document.querySelector('#pendingDiscord .pd-label').textContent = 'سيتم ربط هذا الحساب:';
+        $('pendingDiscord').style.display = 'flex';
+        showAlert('تم التحقق من Discord! اختر اسم مستخدم وكلمة مرور لإكمال التسجيل.', 'ok');
+      }
+    }).catch(() => {});
+
+    $('discordBtn').addEventListener('click', () => {
+      const mode = signupPanel.classList.contains('active') ? 'signup' : 'login';
+      location.href = `/api/auth/discord/start?intent=${mode}`;
+    });
+
+    function setLoading(btn, loading) {
+      btn.disabled = loading;
+      btn.dataset.label = btn.dataset.label || btn.textContent;
+      btn.innerHTML = loading ? '<span class="spinner"></span>جارٍ المعالجة...' : btn.dataset.label;
+    }
+
+    loginPanel.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      hideAlert();
+      const btn = $('loginBtn');
+      setLoading(btn, true);
+      try {
+        const r = await fetch('/api/auth/login', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: $('loginUser').value.trim(),
+            password: $('loginPw').value,
+          }),
+        });
+        const j = await r.json();
+        if (!j.success) throw new Error(j.error || 'login_failed');
+        location.href = '/';
+      } catch (err) {
+        showAlert(err.message === 'invalid_credentials' ? 'اسم المستخدم أو كلمة المرور غير صحيحة' : ('فشل: ' + err.message), 'err');
+        setLoading(btn, false);
+      }
+    });
+
+    signupPanel.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      hideAlert();
+      const btn = $('signupBtn');
+      setLoading(btn, true);
+      try {
+        const r = await fetch('/api/auth/signup', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: $('signupUser').value.trim(),
+            password: $('signupPw').value,
+          }),
+        });
+        const j = await r.json();
+        if (!j.success) throw new Error(j.error || 'signup_failed');
+        location.href = '/';
+      } catch (err) {
+        showAlert('فشل إنشاء الحساب: ' + err.message, 'err');
+        setLoading(btn, false);
+      }
+    });
+  </script>
+</body>
+</html>
