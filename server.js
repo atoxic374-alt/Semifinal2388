@@ -1384,6 +1384,12 @@ app.post('/api/presence/set', async (req, res) => {
                 try { if (btn.name && btn.url) rp.addButton(String(btn.name).slice(0, 32), btn.url); } catch (_) {}
               }
             }
+            if (activity.partySize && activity.partyMax) {
+              try {
+                const partyId = activity.partyId || `party_${Date.now()}`;
+                rp.setParty(partyId, parseInt(activity.partySize), parseInt(activity.partyMax));
+              } catch (_) {}
+            }
 
             // setPresence lets us set status + activity atomically
             const payload = { activities: [rp] };

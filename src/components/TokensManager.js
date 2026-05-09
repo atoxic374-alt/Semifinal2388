@@ -30,6 +30,13 @@ export class TokensManager {
     this.pBtn2Name   = '';
     this.pBtn2Url    = '';
     this.pUseTimestamp = false;
+    // Party / group presence
+    this.pPartySize = '';
+    this.pPartyMax  = '';
+    this.pPartyId   = '';
+    // Live preview timer
+    this._previewTimer = null;
+    this._previewTimerStart = null;
     this.bioText = '';
     this.currentBio = '';
     this.avatarDataUrl = '';
@@ -65,6 +72,7 @@ export class TokensManager {
   }
 
   render() {
+    if (this._previewTimer) { clearInterval(this._previewTimer); this._previewTimer = null; }
     this.contentArea.innerHTML = `
       <div class="mm-page">
         <div class="mm-header glass">
@@ -89,6 +97,7 @@ export class TokensManager {
         </div>
       </div>
     `;
+    if (this.activeTab === 'presence' && this.pUseTimestamp) this.startPreviewTimer();
   }
 
   tabBtn(id, ic, label) {
@@ -291,121 +300,154 @@ export class TokensManager {
     const isStreaming = this.pActivityType === 1;
     const hasActivity = this.pActivityType !== -1;
     return `
-      <div class="mm-card lift">
-        <div class="mm-card-head"><span class="mm-card-icon">${icon('target')}</span><div><div class="mm-card-title">${t('tk.apply_to')}</div><div class="mm-card-desc">${t('tk.apply_to_desc')}</div></div></div>
-        ${this.renderTokenChips()}
-      </div>
+      <div class="tk-presence-layout">
 
-      <div class="mm-card lift">
-        <div class="mm-card-head"><span class="mm-card-icon">${icon('status_dot')}</span><div><div class="mm-card-title">${t('tk.online_status')}</div><div class="mm-card-desc">${t('tk.online_desc')}</div></div></div>
-        <div class="mm-radio-group">
-          ${['online','idle','dnd','invisible'].map(s => `
-            <label class="mm-radio ${this.pStatus === s ? 'active' : ''}">
-              <input type="radio" name="tk-pstatus" value="${s}" ${this.pStatus === s ? 'checked' : ''} onchange="window.tokensManager.pStatus='${s}'; document.getElementById('tk-invisible-warn').style.display='${s==='invisible'?'flex':'none'}'">
-              <div><strong>${s.toUpperCase()}</strong><span>${this.statusDesc(s)}</span></div>
-            </label>`).join('')}
-        </div>
-        <div id="tk-invisible-warn" class="tk-warn-row" style="display:${this.pStatus==='invisible'?'flex':'none'}">
-          ${icon('shield')} <span>${t('tk.rp.invisible_warn')}</span>
-        </div>
-      </div>
+        <!-- ── Controls column ── -->
+        <div class="tk-presence-form">
 
-      <div class="mm-card mm-span-2 lift">
-        <div class="mm-card-head"><span class="mm-card-icon">${icon('message')}</span><div><div class="mm-card-title">${t('tk.custom_status')}</div><div class="mm-card-desc">${t('tk.custom_desc')}</div></div></div>
-        <div class="mm-row-fields">
-          <input placeholder="${t('tk.emoji')}" value="${this.escHtml(this.pEmoji)}" oninput="window.tokensManager.pEmoji=this.value">
-          <input placeholder="${t('tk.status_text')}" value="${this.escHtml(this.pCustom)}" oninput="window.tokensManager.pCustom=this.value">
-        </div>
-        <div class="mm-actions-row">
-          <button class="mm-btn primary glow" onclick="window.tokensManager.applyPresence()">${t('tk.apply')}</button>
-          <button class="mm-btn ghost"   onclick="window.tokensManager.clearCustom()">${t('tk.clear_custom')}</button>
-          <button class="mm-btn success"  onclick="window.tokensManager.applyPresence(true)">${t('tk.apply_all')}</button>
-        </div>
-      </div>
-
-      <div class="mm-card mm-span-2 lift">
-        <div class="mm-card-head"><span class="mm-card-icon">${icon('rocket')}</span><div><div class="mm-card-title">${t('tk.activity_type_title')}</div><div class="mm-card-desc">${t('tk.activity_type_desc')}</div></div></div>
-
-        <div class="mm-row-fields">
-          <select id="tk-act-type" onchange="window.tokensManager.onActivityTypeChange(this.value)">
-            <option value="-1" ${this.pActivityType === -1 ? 'selected' : ''}>${t('tk.act_none')}</option>
-            <option value="0"  ${this.pActivityType === 0  ? 'selected' : ''}>${t('tk.act_playing')}</option>
-            <option value="1"  ${this.pActivityType === 1  ? 'selected' : ''}>${t('tk.act_streaming')}</option>
-            <option value="2"  ${this.pActivityType === 2  ? 'selected' : ''}>${t('tk.act_listening')}</option>
-            <option value="3"  ${this.pActivityType === 3  ? 'selected' : ''}>${t('tk.act_watching')}</option>
-            <option value="5"  ${this.pActivityType === 5  ? 'selected' : ''}>${t('tk.act_competing')}</option>
-          </select>
-          <input id="tk-act-name" placeholder="${t('tk.act_name_ph')}" value="${this.escHtml(this.pActivityName)}" oninput="window.tokensManager.pActivityName=this.value">
-        </div>
-
-        ${isStreaming ? `
-        <div class="tk-rp-section">
-          <div class="tk-rp-label">${icon('link')} ${t('tk.rp.stream_url')}</div>
-          <div class="mm-row-fields">
-            <input placeholder="${t('tk.rp.stream_url_ph')}" value="${this.escHtml(this.pActivityUrl)}" oninput="window.tokensManager.pActivityUrl=this.value" style="flex:1">
+          <div class="mm-card lift">
+            <div class="mm-card-head"><span class="mm-card-icon">${icon('target')}</span><div><div class="mm-card-title">${t('tk.apply_to')}</div><div class="mm-card-desc">${t('tk.apply_to_desc')}</div></div></div>
+            ${this.renderTokenChips()}
           </div>
-          <div class="tk-rp-hint">${t('tk.rp.stream_warn')}</div>
-          <div class="tk-rp-quick-urls">
-            <button class="mm-btn ghost small" onclick="window.tokensManager.pActivityUrl='https://twitch.tv/discord';document.querySelector('#tk-act-type~.tk-rp-section input').value='https://twitch.tv/discord'">Twitch</button>
-            <button class="mm-btn ghost small" onclick="window.tokensManager.pActivityUrl='https://www.youtube.com/watch?v=dQw4w9WgXcQ';document.querySelector('#tk-act-type~.tk-rp-section input').value='https://www.youtube.com/watch?v=dQw4w9WgXcQ'">YouTube</button>
-          </div>
-        </div>` : ''}
 
-        ${hasActivity ? `
-        <div class="tk-rp-section">
-          <div class="tk-rp-label">${icon('file_text')} ${t('tk.rp.details_section')}</div>
-          <div class="mm-row-fields">
-            <input placeholder="${t('tk.rp.details_ph')}" value="${this.escHtml(this.pDetails)}" oninput="window.tokensManager.pDetails=this.value" maxlength="128">
-            <input placeholder="${t('tk.rp.state_ph')}"   value="${this.escHtml(this.pState)}"   oninput="window.tokensManager.pState=this.value"   maxlength="128">
+          <div class="mm-card lift">
+            <div class="mm-card-head"><span class="mm-card-icon">${icon('status_dot')}</span><div><div class="mm-card-title">${t('tk.online_status')}</div><div class="mm-card-desc">${t('tk.online_desc')}</div></div></div>
+            <div class="mm-radio-group">
+              ${['online','idle','dnd','invisible'].map(s => `
+                <label class="mm-radio ${this.pStatus === s ? 'active' : ''}">
+                  <input type="radio" name="tk-pstatus" value="${s}" ${this.pStatus === s ? 'checked' : ''} onchange="window.tokensManager.pStatus='${s}';document.getElementById('tk-invisible-warn').style.display='${s==='invisible'?'flex':'none'}';window.tokensManager.upp()">
+                  <div><strong>${s.toUpperCase()}</strong><span>${this.statusDesc(s)}</span></div>
+                </label>`).join('')}
+            </div>
+            <div id="tk-invisible-warn" class="tk-warn-row" style="display:${this.pStatus==='invisible'?'flex':'none'}">
+              ${icon('shield')} <span>${t('tk.rp.invisible_warn')}</span>
+            </div>
           </div>
-          <div class="tk-rp-hint">${t('tk.rp.details_hint')}</div>
+
+          <div class="mm-card lift">
+            <div class="mm-card-head"><span class="mm-card-icon">${icon('message')}</span><div><div class="mm-card-title">${t('tk.custom_status')}</div><div class="mm-card-desc">${t('tk.custom_desc')}</div></div></div>
+            <div class="mm-row-fields">
+              <input placeholder="${t('tk.emoji')}" value="${this.escHtml(this.pEmoji)}" oninput="window.tokensManager.pEmoji=this.value;window.tokensManager.upp()">
+              <input placeholder="${t('tk.status_text')}" value="${this.escHtml(this.pCustom)}" oninput="window.tokensManager.pCustom=this.value;window.tokensManager.upp()">
+            </div>
+            <div class="mm-actions-row">
+              <button class="mm-btn primary glow" onclick="window.tokensManager.applyPresence()">${t('tk.apply')}</button>
+              <button class="mm-btn ghost" onclick="window.tokensManager.clearCustom()">${t('tk.clear_custom')}</button>
+              <button class="mm-btn success" onclick="window.tokensManager.applyPresence(true)">${t('tk.apply_all')}</button>
+            </div>
+          </div>
+
+          <div class="mm-card lift">
+            <div class="mm-card-head"><span class="mm-card-icon">${icon('rocket')}</span><div><div class="mm-card-title">${t('tk.activity_type_title')}</div><div class="mm-card-desc">${t('tk.activity_type_desc')}</div></div></div>
+            <div class="mm-row-fields">
+              <select id="tk-act-type" onchange="window.tokensManager.onActivityTypeChange(this.value)">
+                <option value="-1" ${this.pActivityType === -1 ? 'selected' : ''}>${t('tk.act_none')}</option>
+                <option value="0"  ${this.pActivityType === 0  ? 'selected' : ''}>${t('tk.act_playing')}</option>
+                <option value="1"  ${this.pActivityType === 1  ? 'selected' : ''}>${t('tk.act_streaming')}</option>
+                <option value="2"  ${this.pActivityType === 2  ? 'selected' : ''}>${t('tk.act_listening')}</option>
+                <option value="3"  ${this.pActivityType === 3  ? 'selected' : ''}>${t('tk.act_watching')}</option>
+                <option value="5"  ${this.pActivityType === 5  ? 'selected' : ''}>${t('tk.act_competing')}</option>
+              </select>
+              <input id="tk-act-name" placeholder="${t('tk.act_name_ph')}" value="${this.escHtml(this.pActivityName)}" oninput="window.tokensManager.pActivityName=this.value;window.tokensManager.upp()">
+            </div>
+
+            ${isStreaming ? `
+            <div class="tk-rp-section">
+              <div class="tk-rp-label">${icon('video')} ${t('tk.rp.stream_url')}</div>
+              <input id="tk-stream-url" placeholder="${t('tk.rp.stream_url_ph')}" value="${this.escHtml(this.pActivityUrl)}" oninput="window.tokensManager.pActivityUrl=this.value;window.tokensManager.upp()">
+              <div class="tk-rp-hint">${t('tk.rp.stream_warn')}</div>
+              <div class="tk-rp-quick-urls">
+                <button class="mm-btn ghost small" onclick="window.tokensManager.pActivityUrl='https://twitch.tv/discord';document.getElementById('tk-stream-url').value='https://twitch.tv/discord';window.tokensManager.upp()">Twitch</button>
+                <button class="mm-btn ghost small" onclick="window.tokensManager.pActivityUrl='https://www.youtube.com/watch?v=dQw4w9WgXcQ';document.getElementById('tk-stream-url').value='https://www.youtube.com/watch?v=dQw4w9WgXcQ';window.tokensManager.upp()">YouTube</button>
+              </div>
+            </div>` : ''}
+
+            ${hasActivity ? `
+            <div class="tk-rp-section">
+              <div class="tk-rp-label">${icon('file_text')} ${t('tk.rp.details_section')}</div>
+              <div class="mm-row-fields">
+                <input placeholder="${t('tk.rp.details_ph')}" value="${this.escHtml(this.pDetails)}" oninput="window.tokensManager.pDetails=this.value;window.tokensManager.upp()" maxlength="128">
+                <input placeholder="${t('tk.rp.state_ph')}" value="${this.escHtml(this.pState)}" oninput="window.tokensManager.pState=this.value;window.tokensManager.upp()" maxlength="128">
+              </div>
+              <div class="tk-rp-hint">${t('tk.rp.details_hint')}</div>
+            </div>
+
+            <div class="tk-rp-section">
+              <div class="tk-rp-label">${icon('users')} ${t('tk.rp.party')}</div>
+              <div class="mm-row-fields">
+                <input type="number" min="1" max="99" placeholder="${t('tk.rp.party_current')}" value="${this.escHtml(this.pPartySize)}" oninput="window.tokensManager.pPartySize=this.value;window.tokensManager.upp()">
+                <input type="number" min="1" max="99" placeholder="${t('tk.rp.party_max')}" value="${this.escHtml(this.pPartyMax)}" oninput="window.tokensManager.pPartyMax=this.value;window.tokensManager.upp()">
+                <input placeholder="${t('tk.rp.party_id_ph')}" value="${this.escHtml(this.pPartyId)}" oninput="window.tokensManager.pPartyId=this.value">
+              </div>
+              <div class="tk-rp-hint">${t('tk.rp.party_hint')}</div>
+            </div>
+
+            <div class="tk-rp-section">
+              <div class="tk-rp-label">${icon('image')} ${t('tk.rp.images')}</div>
+              <div class="tk-rp-hint" style="margin-bottom:6px">${t('tk.rp.img_hint')}</div>
+              <div class="mm-row-fields">
+                <input id="tk-large-img" placeholder="${t('tk.rp.large_img_ph')}" value="${this.escHtml(this.pLargeImage)}" oninput="window.tokensManager.pLargeImage=this.value;window.tokensManager.upp()">
+                <input placeholder="${t('tk.rp.large_text_ph')}" value="${this.escHtml(this.pLargeText)}" oninput="window.tokensManager.pLargeText=this.value;window.tokensManager.upp()" maxlength="128">
+              </div>
+              <div class="mm-row-fields" style="margin-top:4px">
+                <input placeholder="${t('tk.rp.small_img_ph')}" value="${this.escHtml(this.pSmallImage)}" oninput="window.tokensManager.pSmallImage=this.value;window.tokensManager.upp()">
+                <input placeholder="${t('tk.rp.small_text_ph')}" value="${this.escHtml(this.pSmallText)}" oninput="window.tokensManager.pSmallText=this.value;window.tokensManager.upp()" maxlength="128">
+              </div>
+              ${isStreaming ? `
+              <div class="tk-rp-quick-urls" style="margin-top:6px">
+                <span class="tk-rp-hint" style="margin-bottom:0">${t('tk.rp.img_quick')}:</span>
+                <button class="mm-btn ghost small" onclick="const ch=(window.tokensManager.pActivityUrl.replace(/.*twitch\\.tv\\//, '')||'discord').split('?')[0].split('/')[0];window.tokensManager.pLargeImage='twitch:'+ch;document.getElementById('tk-large-img').value='twitch:'+ch;window.tokensManager.upp()">${t('tk.rp.img_from_twitch')}</button>
+                <button class="mm-btn ghost small" onclick="const id=(window.tokensManager.pActivityUrl.match(/[?&]v=([^&]+)/)||['',''])[1];window.tokensManager.pLargeImage='youtube:'+id;document.getElementById('tk-large-img').value='youtube:'+id;window.tokensManager.upp()">${t('tk.rp.img_from_youtube')}</button>
+              </div>` : ''}
+            </div>
+
+            <div class="tk-rp-section">
+              <div class="tk-rp-label">${icon('external')} ${t('tk.rp.buttons')} <span class="tk-rp-hint" style="font-weight:normal;margin:0;text-transform:none;letter-spacing:0">${t('tk.rp.buttons_hint')}</span></div>
+              <div class="mm-row-fields" style="margin-bottom:4px">
+                <input placeholder="${t('tk.rp.btn_name')}" value="${this.escHtml(this.pBtn1Name)}" oninput="window.tokensManager.pBtn1Name=this.value;window.tokensManager.upp()" maxlength="32">
+                <input placeholder="${t('tk.rp.btn_url')}" value="${this.escHtml(this.pBtn1Url)}" oninput="window.tokensManager.pBtn1Url=this.value">
+              </div>
+              <div class="mm-row-fields">
+                <input placeholder="${t('tk.rp.btn2_name')}" value="${this.escHtml(this.pBtn2Name)}" oninput="window.tokensManager.pBtn2Name=this.value;window.tokensManager.upp()" maxlength="32">
+                <input placeholder="${t('tk.rp.btn2_url')}" value="${this.escHtml(this.pBtn2Url)}" oninput="window.tokensManager.pBtn2Url=this.value">
+              </div>
+            </div>
+
+            <div class="tk-rp-section">
+              <label class="mm-toggle tk-rp-ts-toggle">
+                <input type="checkbox" ${this.pUseTimestamp ? 'checked' : ''} onchange="window.tokensManager.pUseTimestamp=this.checked;window.tokensManager.startPreviewTimer();window.tokensManager.upp()">
+                ${t('tk.rp.timestamp')}
+              </label>
+            </div>` : ''}
+
+            ${this.activityRiskHtml()}
+            <div class="mm-actions-row">
+              <button class="mm-btn primary glow" onclick="window.tokensManager.applyActivity()">${t('tk.apply_activity')}</button>
+              <button class="mm-btn ghost" onclick="window.tokensManager.clearActivity()">${t('tk.clear_activity')}</button>
+              <button class="mm-btn success" onclick="window.tokensManager.applyActivity(true)">${t('tk.apply_all')}</button>
+            </div>
+          </div>
+
+        </div><!-- /tk-presence-form -->
+
+        <!-- ── Live Preview column ── -->
+        <div class="tk-presence-preview-col">
+          <div class="tk-preview-label">
+            ${icon('monitor')} ${t('tk.rp.live_preview')}
+            <span class="tk-preview-badge">${t('tk.rp.updates_live')}</span>
+          </div>
+          <div id="tk-preview-wrap">${this.renderDiscordCard()}</div>
+          <div class="tk-preview-tips">
+            <div class="tk-tip-item">${icon('image')}<div><strong>Image formats:</strong> twitch:channel · youtube:videoId · https://... (direct URL)</div></div>
+            <div class="tk-tip-item">${icon('video')}<div><strong>Streaming badge:</strong> URL must be twitch.tv or youtube.com</div></div>
+            <div class="tk-tip-item">${icon('external')}<div><strong>Buttons:</strong> max 32-char label + any https:// URL</div></div>
+            <div class="tk-tip-item">${icon('users')}<div><strong>Party:</strong> "X of Y" appears after State text in Discord</div></div>
+            <div class="tk-tip-item">${icon('clock')}<div><strong>Timestamp:</strong> sent at apply time, shows elapsed in Discord</div></div>
+            <div class="tk-tip-item">${icon('shield')}<div><strong>Invisible:</strong> activity applied but hidden from others</div></div>
+          </div>
         </div>
 
-        <div class="tk-rp-section">
-          <div class="tk-rp-label">${icon('image')} ${t('tk.rp.images')}</div>
-          <div class="tk-rp-hint" style="margin-bottom:6px">${t('tk.rp.img_hint')}</div>
-          <div class="mm-row-fields">
-            <input placeholder="${t('tk.rp.large_img_ph')}" value="${this.escHtml(this.pLargeImage)}" oninput="window.tokensManager.pLargeImage=this.value">
-            <input placeholder="${t('tk.rp.large_text_ph')}" value="${this.escHtml(this.pLargeText)}" oninput="window.tokensManager.pLargeText=this.value" maxlength="128">
-          </div>
-          <div class="mm-row-fields" style="margin-top:4px">
-            <input placeholder="${t('tk.rp.small_img_ph')}" value="${this.escHtml(this.pSmallImage)}" oninput="window.tokensManager.pSmallImage=this.value">
-            <input placeholder="${t('tk.rp.small_text_ph')}" value="${this.escHtml(this.pSmallText)}" oninput="window.tokensManager.pSmallText=this.value" maxlength="128">
-          </div>
-          ${isStreaming ? `
-          <div class="tk-rp-quick-urls" style="margin-top:6px">
-            <span class="tk-rp-hint" style="margin-bottom:0">${t('tk.rp.img_quick')}:</span>
-            <button class="mm-btn ghost small" onclick="window.tokensManager.pLargeImage='twitch:'+window.tokensManager.pActivityUrl.replace(/.*twitch\\.tv\\//,'').split('/')[0];window.tokensManager.render()">${t('tk.rp.img_from_twitch')}</button>
-            <button class="mm-btn ghost small" onclick="window.tokensManager.pLargeImage='youtube:'+(window.tokensManager.pActivityUrl.match(/[?&]v=([^&]+)/)||['',''])[1];window.tokensManager.render()">${t('tk.rp.img_from_youtube')}</button>
-          </div>` : ''}
-        </div>
-
-        <div class="tk-rp-section">
-          <div class="tk-rp-label">${icon('link')} ${t('tk.rp.buttons')} <span class="tk-rp-hint" style="font-weight:normal;margin:0">${t('tk.rp.buttons_hint')}</span></div>
-          <div class="mm-row-fields" style="margin-bottom:4px">
-            <input placeholder="${t('tk.rp.btn_name')}" value="${this.escHtml(this.pBtn1Name)}" oninput="window.tokensManager.pBtn1Name=this.value" maxlength="32">
-            <input placeholder="${t('tk.rp.btn_url')}"  value="${this.escHtml(this.pBtn1Url)}"  oninput="window.tokensManager.pBtn1Url=this.value">
-          </div>
-          <div class="mm-row-fields">
-            <input placeholder="${t('tk.rp.btn2_name')}" value="${this.escHtml(this.pBtn2Name)}" oninput="window.tokensManager.pBtn2Name=this.value" maxlength="32">
-            <input placeholder="${t('tk.rp.btn2_url')}"  value="${this.escHtml(this.pBtn2Url)}"  oninput="window.tokensManager.pBtn2Url=this.value">
-          </div>
-        </div>
-
-        <div class="tk-rp-section">
-          <label class="mm-toggle tk-rp-ts-toggle">
-            <input type="checkbox" ${this.pUseTimestamp ? 'checked' : ''} onchange="window.tokensManager.pUseTimestamp=this.checked">
-            ${t('tk.rp.timestamp')}
-          </label>
-        </div>` : ''}
-
-        ${this.activityRiskHtml()}
-        <div class="mm-actions-row">
-          <button class="mm-btn primary glow" onclick="window.tokensManager.applyActivity()">${t('tk.apply_activity')}</button>
-          <button class="mm-btn ghost" onclick="window.tokensManager.clearActivity()">${t('tk.clear_activity')}</button>
-          <button class="mm-btn success" onclick="window.tokensManager.applyActivity(true)">${t('tk.apply_all')}</button>
-        </div>
-      </div>
+      </div><!-- /tk-presence-layout -->
     `;
   }
 
@@ -475,6 +517,13 @@ export class TokensManager {
       buttons.push({ name: this.pBtn2Name.trim(), url: this.pBtn2Url.trim() });
     if (buttons.length) activity.buttons = buttons;
 
+    // Party / group
+    if (this.pPartySize && this.pPartyMax) {
+      activity.partySize = parseInt(this.pPartySize);
+      activity.partyMax  = parseInt(this.pPartyMax);
+      if (this.pPartyId.trim()) activity.partyId = this.pPartyId.trim();
+    }
+
     try {
       const r = await window.electronAPI.setPresence({ tokens, status: this.pStatus, activity });
       const ok = (r.results || []).filter(x => x.ok).length;
@@ -498,6 +547,9 @@ export class TokensManager {
     this.pBtn2Name       = '';
     this.pBtn2Url        = '';
     this.pUseTimestamp   = false;
+    this.pPartySize      = '';
+    this.pPartyMax       = '';
+    this.pPartyId        = '';
     const tokens = this.selected.length ? this.selected : this._allConnectedNames();
     await window.electronAPI.setPresence({ tokens, status: this.pStatus, customStatus: this.pCustom || '', emoji: this.pEmoji || undefined });
     this.render();
@@ -505,6 +557,142 @@ export class TokensManager {
 
   statusDesc(s) {
     return t('tk.status.' + s) || '';
+  }
+
+  statusColor(s) {
+    return { online: '#23a55a', idle: '#f0b232', dnd: '#f23f43', invisible: '#80848e' }[s] || '#80848e';
+  }
+
+  getImagePreviewUrl(img) {
+    if (!img || typeof img !== 'string') return null;
+    const s = img.trim();
+    if (!s) return null;
+    if (s.startsWith('twitch:')) {
+      const ch = s.slice(7).split('?')[0].split('/')[0];
+      return `https://static-cdn.jtvnw.net/previews-ttv/live_user_${ch}-440x248.jpg`;
+    }
+    if (s.startsWith('youtube:')) {
+      const id = s.slice(8).split('?')[0];
+      return id ? `https://img.youtube.com/vi/${id}/mqdefault.jpg` : null;
+    }
+    if (s.startsWith('mp:external/')) {
+      const parts = s.replace('mp:external/', '').split('/');
+      if (parts.length >= 3) return `${parts[1]}://${parts.slice(2).join('/')}`;
+      return null;
+    }
+    if (s.startsWith('http://') || s.startsWith('https://')) return s;
+    return null;
+  }
+
+  activityTypeLabel() {
+    const isYt = this.pActivityUrl && this.pActivityUrl.includes('youtube');
+    const labels = {
+      '-1': '', '0': 'PLAYING A GAME',
+       '1': isYt ? 'LIVE ON YOUTUBE' : 'LIVE ON TWITCH',
+       '2': 'LISTENING TO', '3': 'WATCHING', '5': 'COMPETING IN'
+    };
+    return labels[String(this.pActivityType)] || 'PLAYING A GAME';
+  }
+
+  renderDiscordCard() {
+    const clientName = this.selected[0] || this.clients[0]?.name;
+    const client = this.clients.find(c => c.name === clientName) || this.clients[0];
+    const avatarUrl = client?.avatar || '/discord.png';
+    const displayName = client?.displayName || client?.username || clientName || 'Preview';
+    const username = client?.username || '';
+    const statusCol = this.statusColor(this.pStatus);
+    const isInvisible = this.pStatus === 'invisible';
+    const isStreaming = this.pActivityType === 1;
+    const isYt = isStreaming && this.pActivityUrl && this.pActivityUrl.includes('youtube');
+    const hasCustom = !!(this.pCustom.trim() || this.pEmoji.trim());
+    const hasActivity = this.pActivityType !== -1 && this.pActivityName.trim();
+    const largeImgUrl = this.getImagePreviewUrl(this.pLargeImage);
+    const smallImgUrl = this.getImagePreviewUrl(this.pSmallImage);
+    const btns = [];
+    if (this.pBtn1Name.trim()) btns.push(this.pBtn1Name.trim());
+    if (this.pBtn2Name.trim()) btns.push(this.pBtn2Name.trim());
+    const hasParty = this.pPartySize && this.pPartyMax;
+    const stateText = (this.pState.trim() + (hasParty ? ` (${this.pPartySize} of ${this.pPartyMax})` : '')).trim();
+    const bannerBg = isStreaming
+      ? (isYt ? 'linear-gradient(135deg,#c4302b,#861f1b)' : 'linear-gradient(135deg,#6441a5,#3d1f6e)')
+      : 'linear-gradient(135deg,#5865f2 0%,#3444b8 100%)';
+    return `
+      <div class="dk-card">
+        <div class="dk-banner" style="background:${bannerBg}">
+          ${isStreaming ? `<div class="dk-live-badge">${isYt ? '▶ LIVE' : '🔴 LIVE'}</div>` : ''}
+          ${isInvisible ? '<div class="dk-invis-badge">INVISIBLE</div>' : ''}
+        </div>
+        <div class="dk-avatar-area">
+          <div class="dk-av-wrap">
+            <img class="dk-av" src="${avatarUrl}" onerror="this.src='/discord.png'">
+            <span class="dk-status-ring" style="background:${isInvisible ? '#72767d' : statusCol}"></span>
+          </div>
+        </div>
+        <div class="dk-name-section">
+          <div class="dk-display-name">${this.escHtml(displayName)}</div>
+          ${username && username !== displayName ? `<div class="dk-username-sub">@${this.escHtml(username)}</div>` : ''}
+        </div>
+        ${hasCustom || hasActivity ? '<div class="dk-divider"></div>' : ''}
+        ${hasCustom ? `
+        <div class="dk-section">
+          <div class="dk-section-title">CUSTOM STATUS</div>
+          <div class="dk-custom-status">
+            ${this.pEmoji ? `<span class="dk-cs-emoji">${this.escHtml(this.pEmoji)}</span>` : ''}
+            ${this.pCustom.trim() ? `<span class="dk-cs-text">${this.escHtml(this.pCustom.trim())}</span>` : ''}
+          </div>
+        </div>` : ''}
+        ${hasActivity ? `
+        ${hasCustom ? '<div class="dk-divider"></div>' : ''}
+        <div class="dk-section">
+          <div class="dk-section-title ${isStreaming ? (isYt ? 'dk-yt' : 'dk-twitch') : ''}">${this.activityTypeLabel()}</div>
+          <div class="dk-activity-row">
+            ${largeImgUrl ? `
+            <div class="dk-act-imgs">
+              <div class="dk-act-large" style="background-image:url('${largeImgUrl}')" title="${this.escHtml(this.pLargeText || '')}">
+                ${smallImgUrl ? `<img class="dk-act-small" src="${smallImgUrl}" title="${this.escHtml(this.pSmallText || '')}" onerror="this.style.display='none'">` : ''}
+              </div>
+            </div>` : ''}
+            <div class="dk-act-info">
+              <div class="dk-act-name">${this.escHtml(this.pActivityName.trim())}</div>
+              ${this.pDetails.trim() ? `<div class="dk-act-detail">${this.escHtml(this.pDetails.trim())}</div>` : ''}
+              ${stateText ? `<div class="dk-act-detail">${this.escHtml(stateText)}</div>` : ''}
+              ${this.pUseTimestamp ? '<div class="dk-act-detail dk-elapsed" id="tk-preview-elapsed">00:00 elapsed</div>' : ''}
+            </div>
+          </div>
+          ${btns.length ? `
+          <div class="dk-btns">
+            ${btns.map(b => `<button class="dk-btn">${this.escHtml(b)}</button>`).join('')}
+          </div>` : ''}
+        </div>` : (!hasCustom ? `
+        <div class="dk-section dk-empty-state">
+          <div class="dk-empty-icon">👤</div>
+          <div class="dk-empty-text">No activity set</div>
+          <div class="dk-empty-sub">Pick a type above to preview</div>
+        </div>` : '')}
+      </div>
+    `;
+  }
+
+  upp() {
+    const el = document.getElementById('tk-preview-wrap');
+    if (el) el.innerHTML = this.renderDiscordCard();
+  }
+
+  startPreviewTimer() {
+    if (this._previewTimer) { clearInterval(this._previewTimer); this._previewTimer = null; }
+    if (!this.pUseTimestamp) return;
+    this._previewTimerStart = Date.now();
+    this._previewTimer = setInterval(() => {
+      const el = document.getElementById('tk-preview-elapsed');
+      if (!el) { clearInterval(this._previewTimer); this._previewTimer = null; return; }
+      const s = Math.floor((Date.now() - this._previewTimerStart) / 1000);
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      const sec = s % 60;
+      el.textContent = h
+        ? `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')} elapsed`
+        : `${m}:${String(sec).padStart(2,'0')} elapsed`;
+    }, 1000);
   }
 
   async applyPresence(all = false) {
