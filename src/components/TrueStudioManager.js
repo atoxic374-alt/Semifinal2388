@@ -35,6 +35,7 @@ export class TrueStudioManager {
         zonePassword: '',
         protocol:     'http', // 'http' (port 33335) | 'socks5h' (port 22228)
       },
+      batchSize: 1,
     };
     this.sse = null;
     this._countdownTimer = null;
@@ -634,6 +635,26 @@ export class TrueStudioManager {
         </div>
         ${bdForm}
       </div>
+
+      ${(bd.enabled || (this.form.proxyUrl || '').split(/\n/).filter(l => l.trim()).length > 1) ? `
+      <div class="ts-field" style="margin-top:8px;">
+        <div class="ts-field-label" style="display:flex;align-items:center;gap:6px;">
+          <span>حجم الدُّفعة المتوازية</span>
+          <span style="font-size:10px;color:#3ba55d;background:rgba(59,165,93,.12);padding:1px 6px;border-radius:4px;">IP Rotation نشط ✓</span>
+        </div>
+        <select class="ts-input" id="ts-batch-size">
+          <option value="1" ${(this.form.batchSize||1)===1?'selected':''}>1 — تسلسلي (الوضع الأصلي)</option>
+          <option value="2" ${(this.form.batchSize||1)===2?'selected':''}>2 بوت في نفس الوقت</option>
+          <option value="3" ${(this.form.batchSize||1)===3?'selected':''}>3 بوت في نفس الوقت</option>
+          <option value="4" ${(this.form.batchSize||1)===4?'selected':''}>4 بوت في نفس الوقت</option>
+          <option value="5" ${(this.form.batchSize||1)===5?'selected':''}>5 بوت في نفس الوقت — أقصى سرعة</option>
+        </select>
+        <div class="ts-field-hint">
+          في وضع الدُّفعات: تأخيرات البشر تُحذف تلقائياً (كل بوت من IP مختلف) ·
+          الكولداون بين الدُّفعات: 1s فقط · السرعة تتضاعف بعدد الدُّفعة
+        </div>
+      </div>
+      ` : ''}
     `;
   }
 
@@ -2104,6 +2125,11 @@ export class TrueStudioManager {
       this.form.brightData.protocol = e.target.value || 'http';
     });
 
+    // Batch size selector (shown when IP rotation is active)
+    $('#ts-batch-size')?.addEventListener('change', (e) => {
+      this.form.batchSize = Math.max(1, Math.min(5, parseInt(e.target.value) || 1));
+    });
+
     // Proxy test button — handles both manual proxy list and Bright Data mode
     $('#ts-proxy-test')?.addEventListener('click', async () => {
       const bd = this.form.brightData;
@@ -2301,6 +2327,7 @@ export class TrueStudioManager {
         speed: this.form.speed || 'medium',
         selectedTeamId: this.form.selectedTeamId || '',
         brightData: this.form.brightData || null,
+        batchSize: this.form.batchSize || 1,
       });
       showNotification(t('ts.session_started'), 'success');
       sfx.ding?.();

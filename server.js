@@ -4343,7 +4343,8 @@ const ts = require('./lib/trueStudio');
     const uid = currentUserId();
     ok(res, { snapshot: tsSnapshot() });
 
-    withUser(uid, () => runTsSession({ creds, rules: r, count: n, prefix: pfx, waitMinutes: wait, proxyList, speedFactor, selectedTeamId: selTeamId, brightData: bd })
+    const batchSize = Math.max(1, Math.min(5, parseInt(req.body?.batchSize) || 1));
+    withUser(uid, () => runTsSession({ creds, rules: r, count: n, prefix: pfx, waitMinutes: wait, proxyList, speedFactor, selectedTeamId: selTeamId, brightData: bd, batchSize })
       .catch(e => {
         const ses = tsSession();
         ses.state = 'error';
@@ -4374,7 +4375,7 @@ const ts = require('./lib/trueStudio');
     return `http://${user}:${pass}@${host}:33335`;
   }
 
-  async function runTsSession({ creds, rules, count, prefix, waitMinutes, proxyList = [], speedFactor = 1.0, selectedTeamId, brightData: bd = null }) {
+  async function runTsSession({ creds, rules, count, prefix, waitMinutes, proxyList = [], speedFactor = 1.0, selectedTeamId, brightData: bd = null, batchSize: requestedBatchSize = 1 }) {
     const s = tsSession();
     try {
       // Reuse the token + warmed client cached by Test/verify so cookies and
@@ -4502,11 +4503,84 @@ const ts = require('./lib/trueStudio');
         try { await ts.listApplications({ token, netOpts }); } catch (_) {}
         await ts.humanDelay(800, 1800, speedFactor);
 
-        let lastBotFailed = false;
-        for (let i = 0; i < count; i++) {
+        // ── Parallel batch mode ─────────────────────────────────────────────
+        // With IP rotation (Bright Data or proxy list > 1):
+        //   Each bot creation runs on a DIFFERENT IP, so concurrent creation
+        //   doesn't look like one human navigating — human delays are removed.
+        //
+        // Without IP rotation (or batchSize=1):
+        //   Old sequential behaviour — one bot at a time with natural delays.
+        //
+        // Discord rate limit: 50 req/sec per token.
+        // Worst case: 5 bots × 3 calls = 15 concurrent requests — well within limit.
+        const hasIpRotation = !!(bd || proxyList.length > 1);
+        const effectiveBatch = hasIpRotation ? Math.max(1, Math.min(5, requestedBatchSize)) : 1;
+        const useParallelMode = effectiveBatch > 1;
+
+        if (useParallelMode) {
+          tsLog('info', 'وضع الدُّفعات المتوازية: ' + effectiveBatch + ' بوت في نفس الوقت — التأخيرات البشرية محذوفة');
+        }
+
+        // Creates ONE bot application + bot user + token.
+        // Designed to be called concurrently; each invocation uses its own
+        // proxy-cloned client so requests exit from a unique IP.
+        const createOneBotAsync = async (botIndex, num, name, teamIdForBot) => {
+          let botClient = client;
+          let botNetOpts = netOpts;
+          if (bd) {
+            const sessionId = 'bot' + num + '_' + Math.random().toString(36).slice(2, 8);
+            const bdProxy = buildBrightDataUrl(bd, sessionId);
+            botClient = ts.cloneClientWithProxy(client, bdProxy);
+            botNetOpts = { ...netOpts, client: botClient };
+          } else if (proxyList.length > 1) {
+            const botProxy = proxyList[botIndex % proxyList.length];
+            botClient = ts.cloneClientWithProxy(client, botProxy);
+            botNetOpts = { ...netOpts, client: botClient };
+          }
+
+          // In parallel mode every bot exits from a different IP — no need to
+          // mimic a single human's pace between page navigations.
+          const pause = (min, max) => useParallelMode
+            ? Promise.resolve()
+            : ts.humanDelay(min, max, speedFactor);
+
+          const linkAtCreation = rules.linkBots && teamIdForBot;
+          const appPayload = await ts.createApplication({
+            token, name,
+            teamId: linkAtCreation ? teamIdForBot : null,
+            netOpts: botNetOpts,
+          });
+
+          // Update Referer chain on the bot's own client (no HTTP /track needed)
+          botClient.currentPage = `https://discord.com/developers/applications/${appPayload.id}/information`;
+          if (botClient === client) client.currentPage = botClient.currentPage;
+          await pause(800, 1800);
+
+          botClient.currentPage = `https://discord.com/developers/applications/${appPayload.id}/bot`;
+          if (botClient === client) client.currentPage = botClient.currentPage;
+          await pause(600, 1400);
+
+          await ts.ensureBot({ token, appId: appPayload.id, netOpts: botNetOpts });
+          await pause(800, 1800);
+
+          const botToken = await ts.resetBotToken({ token, appId: appPayload.id, mfa: mfaToken, netOpts: botNetOpts });
+
+          if (rules.linkBots && teamIdForBot && !linkAtCreation) {
+            await pause(1200, 2400);
+            try {
+              await ts.transferAppToTeam({ token, appId: appPayload.id, teamId: teamIdForBot, mfa: mfaToken, netOpts: botNetOpts });
+            } catch (e) { tsLog('warn', 'تعذر ربط ' + name + ' بالتيم: ' + e.message); }
+          }
+
+          return { appPayload, botToken };
+        };
+
+        // ── Main batch loop ──────────────────────────────────────────────────
+        let i = 0;
+        while (i < count) {
           if (s.cancelRequested) break;
 
-          // ── Team rotation: switch when current team hits 25 apps ──
+          // Team rotation — evaluated once per batch (sequential, before parallel work)
           if (rules.linkBots && teamId && (teamAppCounts[teamId] || 0) >= 25) {
             const nextTeam = availableTeams.find(t => t.id !== teamId && (teamAppCounts[t.id] || 0) < 25);
             if (nextTeam) {
@@ -4516,7 +4590,6 @@ const ts = require('./lib/trueStudio');
               s.teamName = nextTeam.name;
               pushTsEvent('ts_progress');
             } else {
-              // All teams full — create a new Studio team automatically
               tsLog('info', 'جميع التيمات ممتلئة — إنشاء تيم Studio جديد تلقائياً…');
               const studioName = ('Studio-' + String(Date.now()).slice(-6)).slice(0, 32);
               try {
@@ -4537,109 +4610,97 @@ const ts = require('./lib/trueStudio');
             }
           }
 
-          const num = (d.tsLastNumber || 0) + 1;
-          const name = (prefix + '-' + String(num).padStart(3, '0')).slice(0, 32);
-          s.current = name;
+          // Build batch slots — pre-allocate sequential numbers BEFORE any async work
+          // so that concurrent bots never generate duplicate names.
+          const batchEnd   = Math.min(i + effectiveBatch, count);
+          const baseNum    = (d.tsLastNumber || 0);
+          const batchSlots = [];
+          for (let j = i; j < batchEnd; j++) {
+            const num  = baseNum + (j - i) + 1;
+            const name = (prefix + '-' + String(num).padStart(3, '0')).slice(0, 32);
+            batchSlots.push({ botIndex: j, num, name });
+          }
+
+          // Commit the counter advance atomically (before launching parallel work)
+          d.tsLastNumber = baseNum + batchSlots.length;
+
+          const teamIdSnapshot = teamId; // freeze — rotation only happens between batches
+
+          if (useParallelMode) {
+            tsLog('info', 'دُفعة: ' + batchSlots.map(b => b.name).join(' · '));
+          } else {
+            tsLog('info', 'إنشاء البوت: ' + batchSlots[0].name);
+          }
+
+          s.current = batchSlots.length === 1
+            ? batchSlots[0].name
+            : batchSlots.map(b => b.name).join(' + ');
           pushTsEvent('ts_progress');
-          lastBotFailed = false;
 
-          // Per-bot proxy rotation — shares the session cookie jar + fingerprint so
-          // Discord sees one consistent session, but each bot exits from a different IP.
-          // Technique: clone the session client with a new proxy agent while keeping the
-          // shared CookieJar (Cloudflare cookies) and X-Fingerprint intact.
-          let botClient = client;
-          let botNetOpts = netOpts;
-          if (bd) {
-            // Bright Data — each bot gets a unique session ID so Bright Data
-            // pins it to ONE residential/datacenter IP that doesn't change
-            // mid-creation, while the NEXT bot automatically gets a fresh IP.
-            const sessionId = 'bot' + (i + 1) + '_' + Math.random().toString(36).slice(2, 8);
-            const bdProxy = buildBrightDataUrl(bd, sessionId);
-            botClient = ts.cloneClientWithProxy(client, bdProxy);
-            botNetOpts = { ...netOpts, client: botClient };
-            tsLog('info', 'بوت #' + (i + 1) + ' ← Bright Data session: ' + sessionId);
-          } else if (proxyList.length > 1) {
-            const botProxy = proxyList[i % proxyList.length];
-            botClient = ts.cloneClientWithProxy(client, botProxy);
-            botNetOpts = { ...netOpts, client: botClient };
-            const ipHint = botProxy.replace(/:[^:@]+@/, ':***@').split('@').slice(-1)[0] || botProxy;
-            tsLog('info', 'بوت #' + (i + 1) + ' → IP: ' + ipHint);
-          }
+          // Launch all bots in this batch concurrently
+          const results = await Promise.allSettled(
+            batchSlots.map(slot => createOneBotAsync(slot.botIndex, slot.num, slot.name, teamIdSnapshot))
+          );
 
-          try {
-            tsLog('info', 'إنشاء البوت: ' + name);
-            const linkAtCreation = rules.linkBots && teamId;
-            const appPayload = await ts.createApplication({
-              token,
-              name,
-              teamId: linkAtCreation ? teamId : null,
-              netOpts: botNetOpts,
-            });
+          // Process results sequentially — JS is single-threaded here so no races
+          let batchHad401 = false;
+          for (let k = 0; k < results.length; k++) {
+            const result = results[k];
+            const slot   = batchSlots[k];
 
-            // Update the Referer chain directly (avoids an extra /track HTTP call per page)
-            botClient.currentPage = `https://discord.com/developers/applications/${appPayload.id}/information`;
-            client.currentPage = botClient.currentPage;
-            await ts.humanDelay(800, 1800, speedFactor);
-            botClient.currentPage = `https://discord.com/developers/applications/${appPayload.id}/bot`;
-            client.currentPage = botClient.currentPage;
-            await ts.humanDelay(600, 1400, speedFactor);
-
-            await ts.ensureBot({ token, appId: appPayload.id, netOpts: botNetOpts });
-            await ts.humanDelay(800, 1800, speedFactor);
-            const botToken = await ts.resetBotToken({ token, appId: appPayload.id, mfa: mfaToken, netOpts: botNetOpts });
-
-            // Transfer to team if not created directly under it
-            if (rules.linkBots && teamId && !linkAtCreation) {
-              await ts.humanDelay(1200, 2400, speedFactor);
-              try { await ts.transferAppToTeam({ token, appId: appPayload.id, teamId, mfa: mfaToken, netOpts: botNetOpts }); }
-              catch (e) { tsLog('warn', 'تعذر ربط ' + name + ' بالتيم: ' + e.message); }
-            }
-
-            // Reset Referer to applications list without firing an HTTP /track request
-            if (i < count - 1 && !s.cancelRequested) {
-              client.currentPage = 'https://discord.com/developers/applications';
-              if (botClient !== client) botClient.currentPage = client.currentPage;
-            }
-
-            s.bots.push({ name, appId: appPayload.id, botUserId: appPayload.bot?.id || null, token: botToken });
-            s.done += 1;
-            d.tsLastNumber = num;
-            writeData(d);
-            // Increment team app count for rotation tracking
-            if (rules.linkBots && teamId) teamAppCounts[teamId] = (teamAppCounts[teamId] || 0) + 1;
-            tsLog('success', 'تم: ' + name + ' · token=' + botToken.slice(0, 12) + '…');
-            try {
-              const tkList = await botTokensStore.get() || [];
-              const tkFiltered = tkList.filter(t => t.appId !== appPayload.id);
-              tkFiltered.unshift({
-                appId: appPayload.id, name,
-                icon: appPayload.icon || null,
-                token: botToken,
-                email: creds.email || '',
-                resetAt: Date.now(),
-                createdAt: Date.now(),
-              });
-              await botTokensStore.set(tkFiltered);
-            } catch (_) {}
-            pushTsEvent('ts_bot_created', { bot: { name, appId: appPayload.id, hasToken: true } });
-          } catch (e) {
-            s.failed += 1;
-            lastBotFailed = true;
-            const msg = e.message || String(e);
-            tsLog('error', 'فشل ' + name + ': ' + msg);
-            if (e.status === 401 || /Unauthorized/i.test(msg)) {
-              tsClearToken(creds.email);
-              tsLog('error', 'تم إلغاء التوكن من Discord — توقف الجلسة. الحساب قد يكون مُعلَّقاً.');
+            if (result.status === 'fulfilled') {
+              const { appPayload, botToken } = result.value;
+              s.bots.push({ name: slot.name, appId: appPayload.id, botUserId: appPayload.bot?.id || null, token: botToken });
+              s.done += 1;
+              if (rules.linkBots && teamId) teamAppCounts[teamId] = (teamAppCounts[teamId] || 0) + 1;
+              tsLog('success', 'تم: ' + slot.name + ' · token=' + botToken.slice(0, 12) + '…');
+              try {
+                const tkList = await botTokensStore.get() || [];
+                const tkFiltered = tkList.filter(t => t.appId !== appPayload.id);
+                tkFiltered.unshift({
+                  appId: appPayload.id, name: slot.name,
+                  icon: appPayload.icon || null,
+                  token: botToken,
+                  email: creds.email || '',
+                  resetAt: Date.now(),
+                  createdAt: Date.now(),
+                });
+                await botTokensStore.set(tkFiltered);
+              } catch (_) {}
+              pushTsEvent('ts_bot_created', { bot: { name: slot.name, appId: appPayload.id, hasToken: true } });
+            } else {
+              const err = result.reason;
+              const msg = err?.message || String(err);
+              s.failed += 1;
+              tsLog('error', 'فشل ' + slot.name + ': ' + msg);
+              if (err?.status === 401 || /Unauthorized/i.test(msg)) {
+                tsClearToken(creds.email);
+                tsLog('error', 'تم إلغاء التوكن من Discord — توقف الجلسة. الحساب قد يكون مُعلَّقاً.');
+                batchHad401 = true;
+              }
+              if (err?.status === 429) {
+                const ra = err?.retryAfter || err?.retry_after || 5;
+                tsLog('warn', 'Rate limit (429) على ' + slot.name + ' — retry_after: ' + ra + 's');
+              }
               pushTsEvent('ts_progress');
-              break;
             }
-            pushTsEvent('ts_progress');
           }
-          // Cooldown between bots — respects speedFactor so Very Fast mode is actually fast.
-          // medium: min 2.5s · fast: min 1.0s · veryfast: min 375ms (or waitMinutes if set)
-          if (i < count - 1 && !s.cancelRequested && !lastBotFailed) {
-            const ms = Math.max(Math.round(2500 * speedFactor), waitMinutes * 60 * 1000);
-            if (ms >= 60000) tsLog('info', 'انتظار ' + waitMinutes + ' دقيقة قبل البوت التالي…');
+
+          writeData(d);
+          pushTsEvent('ts_progress');
+
+          if (batchHad401) break;
+          i = batchEnd;
+
+          // Inter-batch cooldown
+          // Parallel mode: shorter (API pacing only, no human-mimicking needed)
+          // Sequential mode: standard per-bot cooldown
+          if (i < count && !s.cancelRequested) {
+            const ms = useParallelMode
+              ? Math.max(Math.round(1000 * speedFactor), waitMinutes * 60 * 1000)
+              : Math.max(Math.round(2500 * speedFactor), waitMinutes * 60 * 1000);
+            if (ms >= 60000) tsLog('info', 'انتظار ' + waitMinutes + ' دقيقة قبل الدُّفعة التالية…');
+            else if (useParallelMode && ms > 300) tsLog('info', 'كولداون: ' + (ms / 1000).toFixed(1) + 's قبل الدُّفعة التالية…');
             await tsSleep(ms);
           }
         }
