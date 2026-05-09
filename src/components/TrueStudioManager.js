@@ -563,15 +563,21 @@ export class TrueStudioManager {
         <div class="ts-field-hint">Very Fast يرفع خطر الاكتشاف — استخدمه فقط مع Proxy موثوق</div>
       </div>
       <div class="ts-field" style="margin-top:8px;">
-        <div class="ts-field-label">Proxy للجلسة <span style="font-size:10px;color:var(--ts-muted,#7e8592);">(اختياري)</span></div>
-        <div class="ts-account-row">
-          <input type="text" id="ts-proxy-url" class="ts-input ltr"
-            value="${escapeAttr(this.form.proxyUrl || '')}"
-            placeholder="socks5://user:pass@host:port  أو  http://host:port" />
-          <button class="ts-btn" id="ts-proxy-test" style="white-space:nowrap;">اختبار</button>
+        <div class="ts-field-label" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          Proxy للجلسة
+          <span style="font-size:10px;color:var(--ts-muted,#7e8592);">(اختياري — بروكسي لكل سطر)</span>
+          ${(this.form.proxyUrl || '').split(/\n/).filter(l => l.trim()).length > 1
+            ? `<span style="font-size:10px;color:#3ba55d;">✓ ${(this.form.proxyUrl || '').split(/\n/).filter(l => l.trim()).length} بروكسي — IP rotation تلقائي</span>`
+            : ''}
+        </div>
+        <div class="ts-account-row" style="align-items:flex-start;">
+          <textarea id="ts-proxy-url" class="ts-input ltr" rows="3"
+            style="resize:vertical;font-size:11px;line-height:1.6;min-height:60px;font-family:monospace;"
+            placeholder="بروكسي واحد لكل سطر — يتغير IP تلقائياً مع كل بوت&#10;socks5://user:pass@host:port&#10;http://user:pass@host:port">${escapeHtml(this.form.proxyUrl || '')}</textarea>
+          <button class="ts-btn" id="ts-proxy-test" style="white-space:nowrap;align-self:flex-start;">اختبار</button>
         </div>
         ${proxyStatus ? `<div style="margin-top:4px;">${proxyStatus}</div>` : ''}
-        <div class="ts-field-hint">http · https · socks · socks5 — يحمي الجلسة ويخفي الـ IP الحقيقي</div>
+        <div class="ts-field-hint">http · https · socks · socks5 — كل بوت يستخدم IP مختلف عند وجود عدة بروكسيات</div>
       </div>
     `;
   }
@@ -2008,15 +2014,15 @@ export class TrueStudioManager {
       this.form.speed = e.target.value || 'medium';
     });
 
-    // Proxy URL input
+    // Proxy URL textarea (one proxy per line)
     $('#ts-proxy-url')?.addEventListener('input', (e) => {
-      this.form.proxyUrl = e.target.value.trim();
+      this.form.proxyUrl = e.target.value;
       this._proxyTestResult = null;
     });
 
-    // Proxy test button
+    // Proxy test button — tests the first proxy in the list
     $('#ts-proxy-test')?.addEventListener('click', async () => {
-      const url = this.form.proxyUrl.trim();
+      const url = (this.form.proxyUrl || '').split(/[\n,]+/).map(s => s.trim()).filter(Boolean)[0] || '';
       if (!url) { showNotification('أدخل رابط Proxy أولاً', 'error'); return; }
       const btn = $('#ts-proxy-test');
       if (btn) { btn.disabled = true; btn.textContent = '…'; }

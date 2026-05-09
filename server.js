@@ -4318,7 +4318,8 @@ const ts = require('./lib/trueStudio');
     const n = Math.max(1, Math.min(50, parseInt(count) || 1));
     const wait = Math.max(0, Math.min(60, parseInt(waitMinutes) || 0));
     const pfx = String(prefix || 'Bot').slice(0, 24).trim() || 'Bot';
-    const proxy = (typeof proxyUrl === 'string' && proxyUrl.trim()) ? proxyUrl.trim() : null;
+    const rawProxy = typeof proxyUrl === 'string' ? proxyUrl : '';
+    const proxyList = rawProxy.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
     const speedMap = { medium: 1.0, fast: 0.4, veryfast: 0.15 };
     const speedFactor = speedMap[speed] != null ? speedMap[speed] : 1.0;
     const selTeamId = (typeof selectedTeamId === 'string' && selectedTeamId.trim()) ? selectedTeamId.trim() : null;
@@ -4337,7 +4338,7 @@ const ts = require('./lib/trueStudio');
     const uid = currentUserId();
     ok(res, { snapshot: tsSnapshot() });
 
-    withUser(uid, () => runTsSession({ creds, rules: r, count: n, prefix: pfx, waitMinutes: wait, proxyUrl: proxy, speedFactor, selectedTeamId: selTeamId })
+    withUser(uid, () => runTsSession({ creds, rules: r, count: n, prefix: pfx, waitMinutes: wait, proxyList, speedFactor, selectedTeamId: selTeamId })
       .catch(e => {
         const ses = tsSession();
         ses.state = 'error';
@@ -4347,7 +4348,7 @@ const ts = require('./lib/trueStudio');
       }));
   });
 
-  async function runTsSession({ creds, rules, count, prefix, waitMinutes, proxyUrl, speedFactor = 1.0, selectedTeamId }) {
+  async function runTsSession({ creds, rules, count, prefix, waitMinutes, proxyList = [], speedFactor = 1.0, selectedTeamId }) {
     const s = tsSession();
     try {
       // Reuse the token + warmed client cached by Test/verify so cookies and
@@ -4361,8 +4362,9 @@ const ts = require('./lib/trueStudio');
         tsLog('info', 'استخدام جلسة دخول محفوظة لـ ' + creds.email + ' (الكوكيز محفوظة)');
       } else if (creds.directToken) {
         token = creds.directToken;
-        client = ts.createClient(proxyUrl);
-        if (proxyUrl) tsLog('info', 'الجلسة تمر عبر Proxy: ' + proxyUrl.replace(/:[^:@]+@/, ':***@'));
+        const loginProxy = proxyList[0] || null;
+        client = ts.createClient(loginProxy);
+        if (loginProxy) tsLog('info', 'الجلسة تمر عبر Proxy: ' + loginProxy.replace(/:[^:@]+@/, ':***@'));
         tsLog('info', 'استخدام التوكن المباشر — جاري تسخين الجلسة…');
         try { await ts.warmUpClient(client); } catch (e) {
           tsLog('warn', 'تعذر تسخين الجلسة: ' + (e.message || e));
@@ -4371,8 +4373,9 @@ const ts = require('./lib/trueStudio');
         tsLog('info', 'جاهز — التوكن المباشر مع جلسة دافئة ✓');
       } else {
         tsLog('info', 'جاري تسجيل الدخول إلى ' + creds.email + '…');
-        client = ts.createClient(proxyUrl);
-        if (proxyUrl) tsLog('info', 'الجلسة تمر عبر Proxy: ' + proxyUrl.replace(/:[^:@]+@/, ':***@'));
+        const loginProxy = proxyList[0] || null;
+        client = ts.createClient(loginProxy);
+        if (loginProxy) tsLog('info', 'الجلسة تمر عبر Proxy: ' + loginProxy.replace(/:[^:@]+@/, ':***@'));
         const loginNetOpts = { solveCaptcha: buildSolveCaptcha(), client, speedFactor };
         const r = await ts.login({ email: creds.email, password: creds.password, totpSecret: creds.totpSecret, netOpts: loginNetOpts });
         token = r.token;
@@ -4382,6 +4385,8 @@ const ts = require('./lib/trueStudio');
       }
       // Build netOpts ONCE per session, carrying the warmed client + speedFactor.
       const netOpts = { solveCaptcha: buildSolveCaptcha(), client, totpSecret: creds.totpSecret || undefined, password: creds.password || undefined, speedFactor };
+      if (proxyList.length > 1) tsLog('info', 'قائمة Proxy: ' + proxyList.length + ' عنوان — سيتغير IP تلقائياً مع كل بوت ✓');
+      else if (proxyList.length === 1) tsLog('info', 'Proxy ثابت: ' + proxyList[0].replace(/:[^:@]+@/, ':***@'));
 
       // Behavioural warm-up — once per cached client.
       if (!client.devPortalLoaded) {
@@ -4507,6 +4512,21 @@ const ts = require('./lib/trueStudio');
           s.current = name;
           pushTsEvent('ts_progress');
           lastBotFailed = false;
+
+          // Per-bot proxy rotation — shares the session cookie jar + fingerprint so
+          // Discord sees one consistent session, but each bot exits from a different IP.
+          // Technique: clone the session client with a new proxy agent while keeping the
+          // shared CookieJar (Cloudflare cookies) and X-Fingerprint intact.
+          let botClient = client;
+          let botNetOpts = netOpts;
+          if (proxyList.length > 1) {
+            const botProxy = proxyList[i % proxyList.length];
+            botClient = ts.cloneClientWithProxy(client, botProxy);
+            botNetOpts = { ...netOpts, client: botClient };
+            const ipHint = botProxy.replace(/:[^:@]+@/, ':***@').split('@').slice(-1)[0] || botProxy;
+            tsLog('info', 'بوت #' + (i + 1) + ' → IP: ' + ipHint);
+          }
+
           try {
             tsLog('info', 'إنشاء البوت: ' + name);
             const linkAtCreation = rules.linkBots && teamId;
@@ -4514,27 +4534,32 @@ const ts = require('./lib/trueStudio');
               token,
               name,
               teamId: linkAtCreation ? teamId : null,
-              netOpts,
+              netOpts: botNetOpts,
             });
-            await ts.navigateTo({ client, page: `https://discord.com/developers/applications/${appPayload.id}/information` });
-            await ts.humanDelay(1500, 3500, speedFactor);
-            await ts.navigateTo({ client, page: `https://discord.com/developers/applications/${appPayload.id}/bot` });
-            await ts.humanDelay(1200, 2800, speedFactor);
-            await ts.ensureBot({ token, appId: appPayload.id, netOpts });
-            await ts.humanDelay(1500, 3500, speedFactor);
-            const botToken = await ts.resetBotToken({ token, appId: appPayload.id, mfa: mfaToken, netOpts });
+
+            // Update the Referer chain directly (avoids an extra /track HTTP call per page)
+            botClient.currentPage = `https://discord.com/developers/applications/${appPayload.id}/information`;
+            client.currentPage = botClient.currentPage;
+            await ts.humanDelay(800, 1800, speedFactor);
+            botClient.currentPage = `https://discord.com/developers/applications/${appPayload.id}/bot`;
+            client.currentPage = botClient.currentPage;
+            await ts.humanDelay(600, 1400, speedFactor);
+
+            await ts.ensureBot({ token, appId: appPayload.id, netOpts: botNetOpts });
+            await ts.humanDelay(800, 1800, speedFactor);
+            const botToken = await ts.resetBotToken({ token, appId: appPayload.id, mfa: mfaToken, netOpts: botNetOpts });
 
             // Transfer to team if not created directly under it
             if (rules.linkBots && teamId && !linkAtCreation) {
-              await ts.humanDelay(2000, 4000, speedFactor);
-              try { await ts.transferAppToTeam({ token, appId: appPayload.id, teamId, mfa: mfaToken, netOpts }); }
+              await ts.humanDelay(1200, 2400, speedFactor);
+              try { await ts.transferAppToTeam({ token, appId: appPayload.id, teamId, mfa: mfaToken, netOpts: botNetOpts }); }
               catch (e) { tsLog('warn', 'تعذر ربط ' + name + ' بالتيم: ' + e.message); }
             }
 
+            // Reset Referer to applications list without firing an HTTP /track request
             if (i < count - 1 && !s.cancelRequested) {
-              await ts.humanDelay(1000, 2200, speedFactor);
-              await ts.navigateTo({ client, page: 'https://discord.com/developers/applications' });
-              await ts.humanDelay(500, 1200, speedFactor);
+              client.currentPage = 'https://discord.com/developers/applications';
+              if (botClient !== client) botClient.currentPage = client.currentPage;
             }
 
             s.bots.push({ name, appId: appPayload.id, botUserId: appPayload.bot?.id || null, token: botToken });
@@ -4571,9 +4596,10 @@ const ts = require('./lib/trueStudio');
             }
             pushTsEvent('ts_progress');
           }
-          // Cooldown between bots — skip on error, always pace at minimum 2.5s on success.
+          // Cooldown between bots — respects speedFactor so Very Fast mode is actually fast.
+          // medium: min 2.5s · fast: min 1.0s · veryfast: min 375ms (or waitMinutes if set)
           if (i < count - 1 && !s.cancelRequested && !lastBotFailed) {
-            const ms = Math.max(2500, waitMinutes * 60 * 1000);
+            const ms = Math.max(Math.round(2500 * speedFactor), waitMinutes * 60 * 1000);
             if (ms >= 60000) tsLog('info', 'انتظار ' + waitMinutes + ' دقيقة قبل البوت التالي…');
             await tsSleep(ms);
           }
