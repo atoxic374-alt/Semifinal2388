@@ -552,25 +552,139 @@ export class TrueStudioManager {
     `;
   }
 
+  // ── Bright Data preset definitions (from live Bright Data pricing, 2025) ──
+  static BD_PRESETS = [
+    {
+      id: 'residential',
+      name: 'Residential',
+      nameAr: 'منزلي متغير',
+      icon: '🏠',
+      trustLabel: 'عالي',
+      trustColor: '#3ba55d',
+      costPer1000: '~$0.21',
+      pricePerGB: '$4.20/GB',
+      desc: 'IPs منزلية حقيقية من شركات الإنترنت — الأصعب كشفاً لـ Discord',
+      recommended: true,
+      protocol: 'http',
+      batchSize: 3,
+      speed: 'veryfast',
+      zoneType: 'Residential',
+      zoneHint: 'أنشئ Zone من نوع Residential (Pay As You Go)',
+      bdUrl: 'https://brightdata.com/cp/zones',
+    },
+    {
+      id: 'isp',
+      name: 'ISP',
+      nameAr: 'مزود خدمة',
+      icon: '🏢',
+      trustLabel: 'عالي جداً',
+      trustColor: '#5865f2',
+      costPer1000: '~$0.75',
+      pricePerGB: '$15/GB',
+      desc: 'IPs حقيقية من ISPs — أسرع من Residential ومستوى ثقة أعلى',
+      recommended: false,
+      protocol: 'http',
+      batchSize: 4,
+      speed: 'veryfast',
+      zoneType: 'ISP',
+      zoneHint: 'أنشئ Zone من نوع ISP Proxies',
+      bdUrl: 'https://brightdata.com/cp/zones',
+    },
+    {
+      id: 'datacenter',
+      name: 'Datacenter',
+      nameAr: 'مركز بيانات',
+      icon: '⚡',
+      trustLabel: 'متوسط',
+      trustColor: '#faa61a',
+      costPer1000: '~$0.03',
+      pricePerGB: '$0.60/GB',
+      desc: 'الأرخص والأسرع — Discord يعرف بعض نطاقات الـ Datacenter',
+      recommended: false,
+      protocol: 'http',
+      batchSize: 5,
+      speed: 'veryfast',
+      zoneType: 'Datacenter',
+      zoneHint: 'أنشئ Zone من نوع Datacenter (Shared)',
+      bdUrl: 'https://brightdata.com/cp/zones',
+    },
+  ];
+
   // Speed + Proxy section — shown in automation rules card
   _renderAdvancedOptions() {
-    const pr  = this._proxyTestResult;
-    const bd  = this.form.brightData || {};
+    const pr     = this._proxyTestResult;
+    const bd     = this.form.brightData || {};
+    const qsOpen = !!this._quickSetupOpen;
+    const preset = TrueStudioManager.BD_PRESETS.find(p => p.id === this._bdPreset) || null;
+
     const proxyStatus = pr
       ? (pr.ok
           ? `<span style="color:#3ba55d;font-size:11px;">✓ يعمل — IP: ${escapeHtml(pr.ip || '?')}</span>`
           : `<span style="color:#ed4245;font-size:11px;">✕ ${escapeHtml(pr.error || 'فشل الاتصال')}</span>`)
       : '';
 
+    // ── Quick Setup panel (3 preset cards) ──────────────────────────────────
+    const quickSetupPanel = qsOpen ? `
+      <div style="margin-top:8px;padding:10px;background:rgba(0,0,0,.25);border-radius:8px;border:1px solid rgba(255,255,255,.07);">
+        <div style="font-size:11px;font-weight:600;margin-bottom:8px;color:var(--ts-muted,#7e8592);">
+          اختر نوع الـ Zone المناسب لحالتك — السعر محسوب لكل 1000 بوت (3 طلبات/بوت × ~50KB)
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;">
+          ${TrueStudioManager.BD_PRESETS.map(p => `
+            <div style="padding:9px 8px;background:rgba(255,255,255,.04);border-radius:7px;border:1px solid ${p.recommended ? 'rgba(59,165,93,.4)' : 'rgba(255,255,255,.06)'};display:flex;flex-direction:column;gap:4px;position:relative;">
+              ${p.recommended ? `<div style="position:absolute;top:-7px;left:50%;transform:translateX(-50%);background:#3ba55d;color:#fff;font-size:9px;padding:1px 7px;border-radius:10px;white-space:nowrap;">موصى به</div>` : ''}
+              <div style="font-size:13px;text-align:center;">${p.icon}</div>
+              <div style="font-weight:700;font-size:12px;text-align:center;">${p.name}</div>
+              <div style="font-size:10px;text-align:center;color:var(--ts-muted,#7e8592);">${p.nameAr}</div>
+              <div style="display:flex;align-items:center;justify-content:center;gap:4px;margin:2px 0;">
+                <span style="width:6px;height:6px;border-radius:50%;background:${p.trustColor};flex-shrink:0;"></span>
+                <span style="font-size:10px;color:${p.trustColor};">${p.trustLabel}</span>
+              </div>
+              <div style="font-size:11px;font-weight:700;text-align:center;color:#fff;">${p.costPer1000}</div>
+              <div style="font-size:9px;text-align:center;color:var(--ts-muted,#7e8592);">لكل 1000 بوت</div>
+              <div style="font-size:9px;text-align:center;color:var(--ts-muted,#7e8592);line-height:1.4;margin-top:2px;">${p.desc}</div>
+              <button class="ts-btn" data-qs-apply="${p.id}"
+                style="margin-top:6px;font-size:11px;padding:4px 8px;${p.recommended ? 'background:#3ba55d;' : ''}">
+                تطبيق
+              </button>
+            </div>
+          `).join('')}
+        </div>
+        <div style="margin-top:8px;font-size:10px;color:var(--ts-muted,#7e8592);text-align:center;">
+          الأسعار من Bright Data 2025 ·
+          <a href="https://brightdata.com/cp/zones" target="_blank" rel="noopener"
+            style="color:#5865f2;text-decoration:none;">افتح لوحة الـ Zones →</a>
+        </div>
+      </div>
+    ` : '';
+
+    // ── Applied preset strip ─────────────────────────────────────────────────
+    const presetStrip = (!qsOpen && preset) ? `
+      <div style="display:flex;align-items:center;gap:6px;padding:5px 8px;background:rgba(${preset.trustColor === '#3ba55d' ? '59,165,93' : preset.trustColor === '#5865f2' ? '88,101,242' : '250,166,26'},.12);border-radius:6px;border:1px solid ${preset.trustColor}33;margin-bottom:4px;">
+        <span style="font-size:13px;">${preset.icon}</span>
+        <span style="font-size:11px;font-weight:600;">${preset.name}</span>
+        <span style="font-size:10px;color:var(--ts-muted,#7e8592);flex:1;">${preset.zoneHint}</span>
+        <a href="${preset.bdUrl}" target="_blank" rel="noopener"
+          style="font-size:10px;color:#5865f2;text-decoration:none;white-space:nowrap;">إنشاء Zone →</a>
+      </div>
+    ` : '';
+
+    // ── Zone name placeholder (context-aware) ────────────────────────────────
+    const zonePlaceholder = preset
+      ? `اسم الـ Zone الذي أنشأته (نوع: ${preset.zoneType})`
+      : 'Zone Name  (مثلاً: residential_rotating1)';
+
     // ── Bright Data credential form (shown when toggle is ON) ───────────────
     const bdForm = bd.enabled ? `
       <div style="margin-top:8px;display:grid;gap:6px;">
+        ${presetStrip}
+        ${quickSetupPanel}
         <input type="text" id="ts-bd-customer" class="ts-input ltr"
           placeholder="Account ID  (لوحة Bright Data → Settings → Account)"
           value="${escapeAttr(bd.customerId || '')}" autocomplete="off" />
         <div class="ts-account-row">
           <input type="text" id="ts-bd-zone" class="ts-input ltr"
-            placeholder="Zone Name  (مثلاً: residential_rotating1)"
+            placeholder="${escapeAttr(zonePlaceholder)}"
             value="${escapeAttr(bd.zoneName || '')}" style="flex:1;" autocomplete="off" />
           <select id="ts-bd-proto" class="ts-input" style="flex:0 0 140px;">
             <option value="http"    ${bd.protocol !== 'socks5h' ? 'selected' : ''}>HTTP — 33335</option>
@@ -586,9 +700,7 @@ export class TrueStudioManager {
         ${proxyStatus ? `<div>${proxyStatus}</div>` : ''}
         <div class="ts-field-hint" style="line-height:1.6;">
           كل بوت يحصل على <b>session ID عشوائي</b> → IP مختلف من نفس الاشتراك ✓<br>
-          يدعم: Residential · Datacenter · ISP · Mobile<br>
-          <a href="https://brightdata.com" target="_blank" rel="noopener"
-            style="color:var(--ts-muted,#7e8592);font-size:10px;text-decoration:none;">brightdata.com →</a>
+          يدعم: Residential · Datacenter · ISP · Mobile
         </div>
       </div>
     ` : `
@@ -626,12 +738,20 @@ export class TrueStudioManager {
               ? `<span style="font-size:10px;color:var(--ts-muted,#7e8592);">(اختياري)</span>${proxyCountBadge}`
               : `<span style="font-size:10px;color:#3ba55d;">IP rotation تلقائي ✓</span>`}
           </div>
-          <label style="display:flex;align-items:center;gap:5px;cursor:pointer;flex-shrink:0;user-select:none;">
-            <span style="font-size:10px;color:var(--ts-muted,#7e8592);">Bright Data</span>
-            <div class="ts-toggle ${bd.enabled ? 'on' : ''}" id="ts-bd-toggle"
-              role="switch" aria-checked="${bd.enabled}"
-              title="استخدام Bright Data rotating proxy — IP جديد لكل بوت تلقائياً"></div>
-          </label>
+          <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+            ${bd.enabled ? `
+              <button id="ts-quick-setup" class="ts-btn"
+                style="font-size:10px;padding:3px 8px;${qsOpen ? 'background:#5865f2;' : ''}">
+                ⚡ Quick Setup${qsOpen ? ' ▲' : ' ▼'}
+              </button>
+            ` : ''}
+            <label style="display:flex;align-items:center;gap:5px;cursor:pointer;user-select:none;">
+              <span style="font-size:10px;color:var(--ts-muted,#7e8592);">Bright Data</span>
+              <div class="ts-toggle ${bd.enabled ? 'on' : ''}" id="ts-bd-toggle"
+                role="switch" aria-checked="${bd.enabled}"
+                title="استخدام Bright Data rotating proxy — IP جديد لكل بوت تلقائياً"></div>
+            </label>
+          </div>
         </div>
         ${bdForm}
       </div>
@@ -2128,6 +2248,30 @@ export class TrueStudioManager {
     // Batch size selector (shown when IP rotation is active)
     $('#ts-batch-size')?.addEventListener('change', (e) => {
       this.form.batchSize = Math.max(1, Math.min(5, parseInt(e.target.value) || 1));
+    });
+
+    // ── Quick Setup toggle button ────────────────────────────────────
+    $('#ts-quick-setup')?.addEventListener('click', () => {
+      this._quickSetupOpen = !this._quickSetupOpen;
+      this.render();
+    });
+
+    // ── Quick Setup preset apply buttons (delegated via data-qs-apply) ──
+    this.contentArea.querySelectorAll('[data-qs-apply]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const presetId = btn.dataset.qsApply;
+        const preset   = TrueStudioManager.BD_PRESETS.find(p => p.id === presetId);
+        if (!preset) return;
+        // Apply preset settings to the form
+        if (!this.form.brightData) this.form.brightData = { enabled: true, customerId: '', zoneName: '', zonePassword: '', protocol: 'http' };
+        this.form.brightData.protocol = preset.protocol;
+        this.form.batchSize = preset.batchSize;
+        this.form.speed     = preset.speed;
+        this._bdPreset      = preset.id;
+        this._quickSetupOpen = false;
+        this.render();
+        showNotification(`تم تطبيق إعدادات ${preset.name} — أدخل Zone Name وPassword`, 'success');
+      });
     });
 
     // Proxy test button — handles both manual proxy list and Bright Data mode
