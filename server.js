@@ -2933,9 +2933,11 @@ const ts = require('./lib/trueStudio');
   }
 
   const TS_LOG_MAX = 250;
-  function tsLog(level, msg) {
+  function tsLog(level, msg, meta = null) {
     const s = tsSession();
-    s.log.push({ ts: Date.now(), level, msg: String(msg).slice(0, 500) });
+    const entry = { ts: Date.now(), level, msg: String(msg).slice(0, 500) };
+    if (meta && typeof meta === 'object') Object.assign(entry, meta);
+    s.log.push(entry);
     if (s.log.length > TS_LOG_MAX) s.log.splice(0, s.log.length - TS_LOG_MAX);
     pushTsEvent('ts_log', { entry: s.log[s.log.length - 1] });
   }
@@ -4525,6 +4527,7 @@ const ts = require('./lib/trueStudio');
         // Designed to be called concurrently; each invocation uses its own
         // proxy-cloned client so requests exit from a unique IP.
         const createOneBotAsync = async (botIndex, num, name, teamIdForBot) => {
+          const _botStartedAt = Date.now();
           let botClient = client;
           let botNetOpts = netOpts;
           if (bd) {
@@ -4572,7 +4575,8 @@ const ts = require('./lib/trueStudio');
             } catch (e) { tsLog('warn', 'تعذر ربط ' + name + ' بالتيم: ' + e.message); }
           }
 
-          return { appPayload, botToken };
+          const durationMs = Date.now() - _botStartedAt;
+          return { appPayload, botToken, durationMs };
         };
 
         // ── Main batch loop ──────────────────────────────────────────────────
@@ -4649,11 +4653,13 @@ const ts = require('./lib/trueStudio');
             const slot   = batchSlots[k];
 
             if (result.status === 'fulfilled') {
-              const { appPayload, botToken } = result.value;
+              const { appPayload, botToken, durationMs } = result.value;
               s.bots.push({ name: slot.name, appId: appPayload.id, botUserId: appPayload.bot?.id || null, token: botToken });
               s.done += 1;
               if (rules.linkBots && teamId) teamAppCounts[teamId] = (teamAppCounts[teamId] || 0) + 1;
-              tsLog('success', 'تم: ' + slot.name + ' · token=' + botToken.slice(0, 12) + '…');
+              const durSec = durationMs ? (durationMs / 1000).toFixed(1) : null;
+              const durLabel = durSec ? ` ⚡ ${durSec}s` : '';
+              tsLog('success', 'تم: ' + slot.name + ' · token=' + botToken.slice(0, 12) + '…' + durLabel, { durationMs, appId: appPayload.id, botName: slot.name });
               try {
                 const tkList = await botTokensStore.get() || [];
                 const tkFiltered = tkList.filter(t => t.appId !== appPayload.id);
@@ -4667,7 +4673,7 @@ const ts = require('./lib/trueStudio');
                 });
                 await botTokensStore.set(tkFiltered);
               } catch (_) {}
-              pushTsEvent('ts_bot_created', { bot: { name: slot.name, appId: appPayload.id, hasToken: true } });
+              pushTsEvent('ts_bot_created', { bot: { name: slot.name, appId: appPayload.id, hasToken: true, durationMs } });
             } else {
               const err = result.reason;
               const msg = err?.message || String(err);

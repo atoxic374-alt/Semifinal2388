@@ -384,36 +384,240 @@
   margin-top: 4px;
 }
 
+/* ── Live log wrapper ── */
+.ts-log-wrap {
+  border: 1px solid var(--ts-stroke);
+  border-radius: var(--ts-radius);
+  overflow: hidden;
+  background: #0a0d14;
+}
+
+/* ── Log toolbar ── */
+.ts-log-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  background: #0d1017;
+  border-bottom: 1px solid #1a1f2e;
+  flex-wrap: wrap;
+}
+.ts-log-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+.ts-log-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.ts-log-toolbar-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #4a5568;
+  white-space: nowrap;
+}
+
+/* ── Speed benchmark chip ── */
+.ts-log-bench {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(0,255,180,0.06);
+  border: 1px solid rgba(0,255,180,0.15);
+  border-radius: 20px;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-family: 'JetBrains Mono', 'Cascadia Code', ui-monospace, monospace;
+  animation: ts-bench-pulse 0.4s ease;
+}
+@keyframes ts-bench-pulse {
+  from { opacity: 0; transform: scale(0.92); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.ts-log-bench-icon { font-size: 11px; }
+.ts-log-bench-avg  { color: var(--ts-mint); font-weight: 700; }
+.ts-log-bench-sep  { color: #2d3448; }
+.ts-log-bench-best  { color: #4ade80; }
+.ts-log-bench-worst { color: #f59e0b; }
+.ts-log-bench-count {
+  color: #4a5568;
+  margin-left: 2px;
+  font-size: 9px;
+}
+
+/* ── Filter buttons ── */
+.ts-log-filters {
+  display: flex;
+  gap: 2px;
+}
+.ts-log-filter-btn {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: #4a5568;
+  font-size: 9.5px;
+  padding: 2px 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.ts-log-filter-btn:hover {
+  background: #151b29;
+  color: #7e8a9e;
+}
+.ts-log-filter-btn.active {
+  background: #1a2035;
+  border-color: #2d3a58;
+  color: #c5cde0;
+}
+.ts-log-filter-cnt {
+  background: #1e2740;
+  border-radius: 8px;
+  padding: 0 4px;
+  font-size: 9px;
+  color: #6a7a99;
+  margin-left: 2px;
+}
+
+/* ── Ctrl icon buttons ── */
+.ts-log-ctrl-btn {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: #4a5568;
+  cursor: pointer;
+  padding: 3px 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+  line-height: 1;
+}
+.ts-log-ctrl-btn:hover { background: #151b29; color: #8893a6; border-color: #1e2740; }
+.ts-log-ctrl-btn.active { color: var(--ts-mint); }
+.ts-log-ctrl-btn.flash { color: var(--ts-mint); animation: ts-flash 0.4s ease; }
+.ts-log-ctrl-clear:hover { color: var(--ts-danger); }
+@keyframes ts-flash {
+  0%,100% { opacity: 1; } 50% { opacity: 0.4; }
+}
+
 /* ── Live log ── */
 .ts-log {
   background: #0a0d14;
-  border: 1px solid var(--ts-stroke);
-  border-radius: var(--ts-radius);
-  padding: 12px 14px;
+  padding: 10px 12px;
   min-height: 110px;
-  max-height: 220px;
+  max-height: 260px;
   overflow-y: auto;
   font-family: 'JetBrains Mono', 'Cascadia Code', ui-monospace, monospace;
-  font-size: 11px;
-  line-height: 1.7;
+  font-size: 10.5px;
+  line-height: 1.75;
   color: #b6bdcc;
   direction: ltr;
   text-align: left;
   scrollbar-width: thin;
 }
-.ts-log::-webkit-scrollbar { width: 6px; }
-.ts-log::-webkit-scrollbar-thumb { background: #232938; border-radius: 3px; }
-.ts-log-line { white-space: pre-wrap; word-break: break-all; }
-.ts-log-line .lv-info  { color: #6f7b91; }
-.ts-log-line .lv-success { color: var(--ts-mint); }
-.ts-log-line .lv-warn  { color: var(--ts-warn); }
-.ts-log-line .lv-error { color: var(--ts-danger); }
-.ts-log-line .ts-time { color: #4a5163; margin-right: 6px; }
-.ts-log-empty {
-  color: #4a5163;
-  text-align: center;
-  padding-top: 20px;
+.ts-log::-webkit-scrollbar { width: 5px; }
+.ts-log::-webkit-scrollbar-thumb { background: #1c2335; border-radius: 3px; }
+
+/* ── Log lines (new rich format) ── */
+.ts-log-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 1.5px 0;
+  border-radius: 3px;
+  transition: background 0.1s;
+  white-space: nowrap;
 }
+.ts-log-line:hover { background: rgba(255,255,255,0.025); }
+
+.ts-log-row-icon {
+  flex-shrink: 0;
+  width: 14px;
+  display: flex;
+  align-items: center;
+  opacity: 0.85;
+}
+.ts-log-icon { display: block; }
+.ts-log-icon-success { color: var(--ts-mint); }
+.ts-log-icon-info    { color: #5b6a88; }
+.ts-log-icon-warn    { color: var(--ts-warn); }
+.ts-log-icon-error   { color: var(--ts-danger); }
+
+.ts-log-time {
+  flex-shrink: 0;
+  color: #303850;
+  font-size: 10px;
+  min-width: 62px;
+}
+.ts-log-msg {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.ts-log-lv-success .ts-log-msg { color: #d0fce8; }
+.ts-log-lv-info    .ts-log-msg { color: #6f7b91; }
+.ts-log-lv-warn    .ts-log-msg { color: var(--ts-warn); }
+.ts-log-lv-error   .ts-log-msg { color: #ff7070; }
+
+.ts-log-badges {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* ── Bot name badge ── */
+.ts-log-bot-badge {
+  background: #141c2e;
+  border: 1px solid #1e2c47;
+  border-radius: 4px;
+  padding: 0 5px;
+  font-size: 9.5px;
+  color: #5d7aaa;
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Speed badge ── */
+.ts-log-speed-badge {
+  border-radius: 4px;
+  padding: 0 5px;
+  font-size: 9.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+.ts-log-speed-fast  { background: rgba(74,222,128,0.10); color: #4ade80; border: 1px solid rgba(74,222,128,0.2); }
+.ts-log-speed-mid   { background: rgba(0,255,180,0.07);  color: var(--ts-mint); border: 1px solid rgba(0,255,180,0.15); }
+.ts-log-speed-slow  { background: rgba(245,158,11,0.10); color: #f59e0b; border: 1px solid rgba(245,158,11,0.2); }
+
+/* ── Log empty state ── */
+.ts-log-empty {
+  color: #2d3448;
+  text-align: center;
+  padding: 24px 0;
+  font-size: 11px;
+}
+
+/* Legacy compat (used in plain inline log) */
+.ts-log-line .lv-info    { color: #6f7b91; }
+.ts-log-line .lv-success { color: var(--ts-mint); }
+.ts-log-line .lv-warn    { color: var(--ts-warn); }
+.ts-log-line .lv-error   { color: var(--ts-danger); }
+.ts-log-line .ts-time    { color: #4a5163; margin-right: 6px; }
 
 /* ── Countdown bar inside the status card ── */
 .ts-countdown-bar {

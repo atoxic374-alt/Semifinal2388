@@ -51,6 +51,8 @@ export class TrueStudioManager {
     this._captchaCurrentId = null; // id of the challenge the modal is solving
     this._hcaptchaLoaded = false;  // lazy-loaded the hCaptcha script yet?
     this._captchaVerifyResult = null; // { ok, balance, currency, provider, error } | null
+    this._logFilter = 'all';       // 'all' | 'success' | 'info' | 'warn' | 'error'
+    this._logAutoScroll = true;    // whether log auto-scrolls on new entries
     this.botTokens = [];              // persistent saved tokens [{appId,name,icon,token,resetAt,email}]
     this._resetAllInFlight = false;   // guard: only one reset-all at a time
     this.availableTeams = [];         // [{id, name, appCount}] for linkBots dropdown
@@ -469,7 +471,10 @@ export class TrueStudioManager {
         </div>
 
         <!-- Live log -->
-        <div class="ts-log" id="ts-log">${this._renderLog(s.log || [])}</div>
+        <div class="ts-log-wrap">
+          ${this._renderLogToolbar(s.log || [])}
+          <div class="ts-log" id="ts-log">${this._renderLog(s.log || [])}</div>
+        </div>
 
         <!-- Library trigger button — opens a full-screen overlay with four
              tabs: Teams / Personal apps / Created bots / Bot Tokens. -->
@@ -945,12 +950,112 @@ export class TrueStudioManager {
     `;
   }
 
+  _fmtDuration(ms) {
+    if (!ms || ms <= 0) return null;
+    if (ms < 1000) return ms + 'ms';
+    return (ms / 1000).toFixed(1) + 's';
+  }
+
+  _benchmarkStats(log) {
+    const durations = log.filter(e => e.level === 'success' && e.durationMs > 0).map(e => e.durationMs);
+    if (!durations.length) return null;
+    const avg  = durations.reduce((a, b) => a + b, 0) / durations.length;
+    const min  = Math.min(...durations);
+    const max  = Math.max(...durations);
+    return { avg, min, max, count: durations.length };
+  }
+
+  _renderLogToolbar(log) {
+    const filter = this._logFilter || 'all';
+    const autoScroll = this._logAutoScroll !== false;
+    const stats = this._benchmarkStats(log);
+    const counts = { all: log.length, success: 0, info: 0, warn: 0, error: 0 };
+    log.forEach(e => { if (counts[e.level] !== undefined) counts[e.level]++; });
+
+    const speedChip = stats ? `
+      <div class="ts-log-bench">
+        <span class="ts-log-bench-icon">⚡</span>
+        <span class="ts-log-bench-avg" title="متوسط وقت إنشاء البوت">${this._fmtDuration(stats.avg)}</span>
+        <span class="ts-log-bench-sep">·</span>
+        <span class="ts-log-bench-best" title="أسرع بوت">↓${this._fmtDuration(stats.min)}</span>
+        <span class="ts-log-bench-sep">·</span>
+        <span class="ts-log-bench-worst" title="أبطأ بوت">↑${this._fmtDuration(stats.max)}</span>
+        <span class="ts-log-bench-count">${stats.count} بوت</span>
+      </div>` : '';
+
+    const filterBtns = [
+      { key: 'all',     label: 'الكل',    cnt: counts.all     },
+      { key: 'success', label: '✓ نجح',   cnt: counts.success },
+      { key: 'info',    label: 'ℹ معلومة', cnt: counts.info    },
+      { key: 'warn',    label: '⚠ تحذير',  cnt: counts.warn    },
+      { key: 'error',   label: '✕ خطأ',   cnt: counts.error   },
+    ].map(f => `
+      <button class="ts-log-filter-btn ${filter === f.key ? 'active' : ''}" data-log-filter="${f.key}">
+        ${escapeHtml(f.label)}${f.cnt ? ` <span class="ts-log-filter-cnt">${f.cnt}</span>` : ''}
+      </button>`).join('');
+
+    return `
+      <div class="ts-log-toolbar">
+        <div class="ts-log-toolbar-left">
+          <span class="ts-log-toolbar-title">Live Log</span>
+          ${speedChip}
+        </div>
+        <div class="ts-log-toolbar-right">
+          <div class="ts-log-filters">${filterBtns}</div>
+          <button class="ts-log-ctrl-btn ${autoScroll ? 'active' : ''}" id="ts-log-autoscroll" title="تمرير تلقائي">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor"><path d="M8 1v10M4 8l4 4 4-4"/></svg>
+          </button>
+          <button class="ts-log-ctrl-btn" id="ts-log-copy" title="نسخ السجل">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="1" width="9" height="11" rx="1.5"/><path d="M2 4v10a1 1 0 0 0 1 1h9"/></svg>
+          </button>
+          <button class="ts-log-ctrl-btn ts-log-ctrl-clear" id="ts-log-clear" title="مسح السجل">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12M5 4V2h6v2M6 7v5M10 7v5M3 4l1 10h8l1-10"/></svg>
+          </button>
+        </div>
+      </div>`;
+  }
+
   _renderLog(log) {
-    if (!log.length) return `<div class="ts-log-empty">${t('ts.log_empty')}</div>`;
-    return log.map(e => {
-      const time = new Date(e.ts).toLocaleTimeString([], { hour12: false });
-      return `<div class="ts-log-line"><span class="ts-time">[${time}]</span><span class="lv-${e.level}">${escapeHtml(e.msg)}</span></div>`;
+    const filter = this._logFilter || 'all';
+    const filtered = filter === 'all' ? log : log.filter(e => e.level === filter);
+    if (!filtered.length) {
+      return `<div class="ts-log-empty">${filter === 'all' ? (t('ts.log_empty') || 'لا يوجد سجل بعد') : 'لا توجد إدخالات من هذا النوع'}</div>`;
+    }
+
+    const ICONS = {
+      success: `<svg class="ts-log-icon ts-log-icon-success" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2 7 5.5 10.5 12 3"/></svg>`,
+      info:    `<svg class="ts-log-icon ts-log-icon-info"    viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="7" cy="7" r="6"/><line x1="7" y1="5" x2="7" y2="9"/><circle cx="7" cy="3.5" r=".5" fill="currentColor"/></svg>`,
+      warn:    `<svg class="ts-log-icon ts-log-icon-warn"    viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 1 L13 12 H1 Z"/><line x1="7" y1="5.5" x2="7" y2="8"/><circle cx="7" cy="10" r=".5" fill="currentColor"/></svg>`,
+      error:   `<svg class="ts-log-icon ts-log-icon-error"   viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="7" cy="7" r="6"/><line x1="5" y1="5" x2="9" y2="9"/><line x1="9" y1="5" x2="5" y2="9"/></svg>`,
+    };
+
+    return filtered.map((e, idx) => {
+      const time = new Date(e.ts).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const icon = ICONS[e.level] || ICONS.info;
+      const durBadge = e.durationMs > 0
+        ? `<span class="ts-log-speed-badge ts-log-speed-${this._speedClass(e.durationMs)}" title="وقت الإنشاء">⚡ ${this._fmtDuration(e.durationMs)}</span>`
+        : '';
+      const botBadge = e.botName
+        ? `<span class="ts-log-bot-badge">${escapeHtml(e.botName)}</span>`
+        : '';
+      const msgText = e.durationMs
+        ? escapeHtml(e.msg.replace(/ ⚡ [\d.]+[ms]+$/, ''))
+        : escapeHtml(e.msg);
+
+      return `<div class="ts-log-line ts-log-lv-${e.level}" data-idx="${idx}">
+        <span class="ts-log-row-icon">${icon}</span>
+        <span class="ts-log-time">${time}</span>
+        <span class="ts-log-msg">${msgText}</span>
+        <span class="ts-log-badges">${botBadge}${durBadge}</span>
+      </div>`;
     }).join('');
+  }
+
+  _speedClass(ms) {
+    if (!ms) return 'mid';
+    if (ms < 3000)  return 'fast';
+    if (ms < 7000)  return 'mid';
+    return 'slow';
   }
 
   // ── Inline Bot Tokens section (main page, below library button) ──────────
@@ -2122,10 +2227,14 @@ export class TrueStudioManager {
       stat.innerHTML = this._renderStatus(s, meta);
     }
     const log = this.contentArea.querySelector('#ts-log');
+    const toolbar = this.contentArea.querySelector('.ts-log-toolbar');
+    const logData = s.log || [];
+    if (toolbar) toolbar.outerHTML = this._renderLogToolbar(logData);
     if (log) {
-      log.innerHTML = this._renderLog(s.log || []);
-      log.scrollTop = log.scrollHeight;
+      log.innerHTML = this._renderLog(logData);
+      if (this._logAutoScroll !== false) log.scrollTop = log.scrollHeight;
     }
+    this._bindLogToolbar();
     // Refresh the "open library" trigger button so its session-bots badge
     // updates as new bots are produced. (The old inline #ts-bots / #ts-library
     // sections were replaced by this single trigger.)
@@ -2158,9 +2267,85 @@ export class TrueStudioManager {
     }
   }
 
+  _bindLogToolbar() {
+    const area = this.contentArea;
+    area.querySelectorAll('[data-log-filter]').forEach(btn => {
+      if (btn._lfBound) return;
+      btn._lfBound = true;
+      btn.addEventListener('click', () => {
+        this._logFilter = btn.dataset.logFilter;
+        const log = area.querySelector('#ts-log');
+        const toolbar = area.querySelector('.ts-log-toolbar');
+        const logData = this.snapshot?.log || [];
+        if (toolbar) {
+          const newToolbar = document.createElement('div');
+          newToolbar.innerHTML = this._renderLogToolbar(logData);
+          toolbar.replaceWith(newToolbar.firstElementChild);
+        }
+        if (log) {
+          log.innerHTML = this._renderLog(logData);
+          if (this._logAutoScroll !== false) log.scrollTop = log.scrollHeight;
+        }
+        this._bindLogToolbar();
+      });
+    });
+
+    const autoScrollBtn = area.querySelector('#ts-log-autoscroll');
+    if (autoScrollBtn && !autoScrollBtn._asBound) {
+      autoScrollBtn._asBound = true;
+      autoScrollBtn.addEventListener('click', () => {
+        this._logAutoScroll = !this._logAutoScroll;
+        autoScrollBtn.classList.toggle('active', this._logAutoScroll);
+        if (this._logAutoScroll) {
+          const log = area.querySelector('#ts-log');
+          if (log) log.scrollTop = log.scrollHeight;
+        }
+      });
+    }
+
+    const copyBtn = area.querySelector('#ts-log-copy');
+    if (copyBtn && !copyBtn._cpBound) {
+      copyBtn._cpBound = true;
+      copyBtn.addEventListener('click', async () => {
+        const log = this.snapshot?.log || [];
+        const text = log.map(e => {
+          const time = new Date(e.ts).toLocaleTimeString([], { hour12: false });
+          const dur = e.durationMs ? ` [⚡${this._fmtDuration(e.durationMs)}]` : '';
+          return `[${time}] [${e.level.toUpperCase()}]${dur} ${e.msg}`;
+        }).join('\n');
+        try {
+          await navigator.clipboard.writeText(text);
+          copyBtn.classList.add('flash');
+          setTimeout(() => copyBtn.classList.remove('flash'), 600);
+        } catch {}
+      });
+    }
+
+    const clearBtn = area.querySelector('#ts-log-clear');
+    if (clearBtn && !clearBtn._clBound) {
+      clearBtn._clBound = true;
+      clearBtn.addEventListener('click', async () => {
+        try {
+          await window.electronAPI?.tsClearLog?.();
+        } catch {}
+        if (this.snapshot) this.snapshot.log = [];
+        const log = area.querySelector('#ts-log');
+        const toolbar = area.querySelector('.ts-log-toolbar');
+        if (toolbar) {
+          const newT = document.createElement('div');
+          newT.innerHTML = this._renderLogToolbar([]);
+          toolbar.replaceWith(newT.firstElementChild);
+        }
+        if (log) log.innerHTML = this._renderLog([]);
+        this._bindLogToolbar();
+      });
+    }
+  }
+
   // ── Bindings ──────────────────────────────────────────
   _bind() {
     const $ = (sel) => this.contentArea.querySelector(sel);
+    this._bindLogToolbar();
 
     $('#ts-acct-select')?.addEventListener('change', (e) => {
       this.selectedEmail = e.target.value || null;
