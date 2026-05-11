@@ -486,7 +486,24 @@ export class TrueStudioManager {
 
   _renderProgress(s) {
     if (!s.total) return `0/0`;
-    return `${s.done}/${s.total} <span class="ts-stat-extra">${s.failed ? '· ' + s.failed + ' ✕' : ''}</span>`;
+    const failPart = s.failed ? `· <span class="ts-fail-count">${s.failed} ✕</span>` : '';
+    const eta = this._calcETA(s);
+    const etaPart = eta ? ` <span class="ts-eta-badge" title="الوقت المتبقي المقدر">~${eta}</span>` : '';
+    return `${s.done}/${s.total} <span class="ts-stat-extra">${failPart}${etaPart}</span>`;
+  }
+
+  _calcETA(s) {
+    if (!s || s.state !== 'running') return null;
+    const remaining = (s.total || 0) - (s.done || 0) - (s.failed || 0);
+    if (remaining <= 0) return null;
+    const stats = this._benchmarkStats(s.log || []);
+    if (!stats || !stats.avg) return null;
+    const ms = remaining * stats.avg;
+    if (ms < 1000) return null;
+    if (ms < 60000) return Math.round(ms / 1000) + 'ث';
+    const m = Math.floor(ms / 60000);
+    const sec = Math.round((ms % 60000) / 1000);
+    return `${m}د${sec > 0 ? ' ' + sec + 'ث' : ''}`;
   }
 
   _renderStatus(s, meta) {
@@ -727,12 +744,20 @@ export class TrueStudioManager {
     return `
       <div class="ts-field" style="margin-top:12px;">
         <div class="ts-field-label">سرعة التنفيذ</div>
-        <select class="ts-input" id="ts-speed-select">
-          <option value="medium"   ${this.form.speed === 'medium'   ? 'selected' : ''}>Medium — موصى به (تأخيرات طبيعية ×1)</option>
-          <option value="fast"     ${this.form.speed === 'fast'     ? 'selected' : ''}>Fast — سريع (تأخيرات ×0.4)</option>
-          <option value="veryfast" ${this.form.speed === 'veryfast' ? 'selected' : ''}>Very Fast — أقصى سرعة (×0.15) ⚠️</option>
-        </select>
-        <div class="ts-field-hint">Very Fast يرفع خطر الاكتشاف — استخدمه فقط مع Proxy موثوق</div>
+        <div class="ts-speed-pills">
+          ${[
+            { v:'medium',   label:'Medium',    sub:'×1.0 — آمن',          cls:'' },
+            { v:'fast',     label:'Fast',      sub:'×0.4 — سريع',         cls:'' },
+            { v:'veryfast', label:'Very Fast', sub:'×0.15 — أسرع',        cls:'warn' },
+            { v:'ultra',    label:'Ultra',     sub:'×0.05 — أقصى ⚡',     cls:'danger' },
+          ].map(s => `
+            <label class="ts-speed-pill ${this.form.speed === s.v ? 'active' : ''} ${s.cls}">
+              <input type="radio" name="ts-speed" value="${s.v}" ${this.form.speed === s.v ? 'checked' : ''} style="display:none">
+              <span class="ts-speed-pill-label">${s.label}</span>
+              <span class="ts-speed-pill-sub">${s.sub}</span>
+            </label>`).join('')}
+        </div>
+        <div class="ts-field-hint">Ultra/Very Fast: تأخيرات صفرية — استخدم مع Proxy لتجنب الحظر</div>
       </div>
 
       <div class="ts-field" style="margin-top:8px;">
@@ -972,26 +997,41 @@ export class TrueStudioManager {
     const counts = { all: log.length, success: 0, info: 0, warn: 0, error: 0 };
     log.forEach(e => { if (counts[e.level] !== undefined) counts[e.level]++; });
 
+    const SVG_LIGHTNING = `<svg class="ts-bench-lightning" viewBox="0 0 12 18" fill="none" xmlns="http://www.w3.org/2000/svg" width="10" height="15">
+      <path class="ts-bench-bolt" d="M7 1L1 10h5l-1 7 6-9H6l1-7z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+    </svg>`;
+
+    const SVG_FILTER = {
+      all:     `<svg class="ts-filter-svg" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="1" y1="3" x2="11" y2="3"/><line x1="3" y1="6" x2="9" y2="6"/><line x1="5" y1="9" x2="7" y2="9"/></svg>`,
+      success: `<svg class="ts-filter-svg ts-filter-ok" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline class="ts-filter-check" points="1.5 6 4.5 9 10.5 2.5"/></svg>`,
+      info:    `<svg class="ts-filter-svg ts-filter-info" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle class="ts-filter-circle" cx="6" cy="6" r="5"/><line x1="6" y1="5" x2="6" y2="8.5"/><circle cx="6" cy="3.2" r=".6" fill="currentColor" stroke="none"/></svg>`,
+      warn:    `<svg class="ts-filter-svg ts-filter-warn" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path class="ts-filter-tri" d="M6 1L11.2 10H.8Z"/><line x1="6" y1="4.5" x2="6" y2="7"/><circle cx="6" cy="8.8" r=".5" fill="currentColor" stroke="none"/></svg>`,
+      error:   `<svg class="ts-filter-svg ts-filter-err" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle class="ts-filter-xcircle" cx="6" cy="6" r="5"/><line class="ts-filter-xline" x1="4" y1="4" x2="8" y2="8"/><line class="ts-filter-xline" x1="8" y1="4" x2="4" y2="8"/></svg>`,
+    };
+
+    const FILTER_LABELS = { all: 'الكل', success: 'نجح', info: 'معلومة', warn: 'تحذير', error: 'خطأ' };
+
     const speedChip = stats ? `
-      <div class="ts-log-bench">
-        <span class="ts-log-bench-icon">⚡</span>
+      <div class="ts-log-bench" key="${stats.count}">
+        <span class="ts-log-bench-icon">${SVG_LIGHTNING}</span>
         <span class="ts-log-bench-avg" title="متوسط وقت إنشاء البوت">${this._fmtDuration(stats.avg)}</span>
         <span class="ts-log-bench-sep">·</span>
-        <span class="ts-log-bench-best" title="أسرع بوت">↓${this._fmtDuration(stats.min)}</span>
+        <span class="ts-log-bench-best" title="أسرع بوت">
+          <svg viewBox="0 0 8 8" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 5 4 2 7 5"/></svg>
+          ${this._fmtDuration(stats.min)}
+        </span>
         <span class="ts-log-bench-sep">·</span>
-        <span class="ts-log-bench-worst" title="أبطأ بوت">↑${this._fmtDuration(stats.max)}</span>
+        <span class="ts-log-bench-worst" title="أبطأ بوت">
+          <svg viewBox="0 0 8 8" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 3 4 6 7 3"/></svg>
+          ${this._fmtDuration(stats.max)}
+        </span>
+        <span class="ts-log-bench-sep">·</span>
         <span class="ts-log-bench-count">${stats.count} بوت</span>
       </div>` : '';
 
-    const filterBtns = [
-      { key: 'all',     label: 'الكل',    cnt: counts.all     },
-      { key: 'success', label: '✓ نجح',   cnt: counts.success },
-      { key: 'info',    label: 'ℹ معلومة', cnt: counts.info    },
-      { key: 'warn',    label: '⚠ تحذير',  cnt: counts.warn    },
-      { key: 'error',   label: '✕ خطأ',   cnt: counts.error   },
-    ].map(f => `
-      <button class="ts-log-filter-btn ${filter === f.key ? 'active' : ''}" data-log-filter="${f.key}">
-        ${escapeHtml(f.label)}${f.cnt ? ` <span class="ts-log-filter-cnt">${f.cnt}</span>` : ''}
+    const filterBtns = ['all','success','info','warn','error'].map(key => `
+      <button class="ts-log-filter-btn ts-log-filter-${key} ${filter === key ? 'active' : ''}" data-log-filter="${key}" title="${FILTER_LABELS[key]}">
+        ${SVG_FILTER[key]}<span class="ts-filter-label">${escapeHtml(FILTER_LABELS[key])}</span>${counts[key] ? `<span class="ts-log-filter-cnt">${counts[key]}</span>` : ''}
       </button>`).join('');
 
     return `
@@ -1003,13 +1043,19 @@ export class TrueStudioManager {
         <div class="ts-log-toolbar-right">
           <div class="ts-log-filters">${filterBtns}</div>
           <button class="ts-log-ctrl-btn ${autoScroll ? 'active' : ''}" id="ts-log-autoscroll" title="تمرير تلقائي">
-            <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor"><path d="M8 1v10M4 8l4 4 4-4"/></svg>
+            <svg class="ts-ctrl-scroll-svg" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="7" y1="1" x2="7" y2="10"/><polyline points="3.5 7 7 10.5 10.5 7"/>
+            </svg>
           </button>
           <button class="ts-log-ctrl-btn" id="ts-log-copy" title="نسخ السجل">
-            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="1" width="9" height="11" rx="1.5"/><path d="M2 4v10a1 1 0 0 0 1 1h9"/></svg>
+            <svg viewBox="0 0 14 14" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="4" y="1" width="8" height="10" rx="1.5"/><path d="M1.5 4v8a1 1 0 0 0 1 1h8"/>
+            </svg>
           </button>
           <button class="ts-log-ctrl-btn ts-log-ctrl-clear" id="ts-log-clear" title="مسح السجل">
-            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12M5 4V2h6v2M6 7v5M10 7v5M3 4l1 10h8l1-10"/></svg>
+            <svg viewBox="0 0 14 14" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M1.5 3.5h11M4.5 3.5V2h5v1.5M5.5 6.5v4M8.5 6.5v4M2.5 3.5l.8 9h7.4l.8-9"/>
+            </svg>
           </button>
         </div>
       </div>`;
@@ -1023,17 +1069,35 @@ export class TrueStudioManager {
     }
 
     const ICONS = {
-      success: `<svg class="ts-log-icon ts-log-icon-success" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2 7 5.5 10.5 12 3"/></svg>`,
-      info:    `<svg class="ts-log-icon ts-log-icon-info"    viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="7" cy="7" r="6"/><line x1="7" y1="5" x2="7" y2="9"/><circle cx="7" cy="3.5" r=".5" fill="currentColor"/></svg>`,
-      warn:    `<svg class="ts-log-icon ts-log-icon-warn"    viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 1 L13 12 H1 Z"/><line x1="7" y1="5.5" x2="7" y2="8"/><circle cx="7" cy="10" r=".5" fill="currentColor"/></svg>`,
-      error:   `<svg class="ts-log-icon ts-log-icon-error"   viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="7" cy="7" r="6"/><line x1="5" y1="5" x2="9" y2="9"/><line x1="9" y1="5" x2="5" y2="9"/></svg>`,
+      success: `<svg class="ts-log-icon ts-log-icon-success" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline class="ts-icon-check-path" points="2 7 5.5 10.5 12 3"/>
+      </svg>`,
+      info: `<svg class="ts-log-icon ts-log-icon-info" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+        <circle class="ts-icon-info-ring" cx="7" cy="7" r="5.5"/>
+        <line x1="7" y1="5.5" x2="7" y2="9"/>
+        <circle cx="7" cy="3.8" r=".55" fill="currentColor" stroke="none"/>
+      </svg>`,
+      warn: `<svg class="ts-log-icon ts-log-icon-warn" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path class="ts-icon-warn-tri" d="M7 1.5L12.5 11.5H1.5Z"/>
+        <line x1="7" y1="5.5" x2="7" y2="8.2"/>
+        <circle cx="7" cy="10" r=".55" fill="currentColor" stroke="none"/>
+      </svg>`,
+      error: `<svg class="ts-log-icon ts-log-icon-error" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+        <circle class="ts-icon-err-ring" cx="7" cy="7" r="5.5"/>
+        <line class="ts-icon-err-x1" x1="4.5" y1="4.5" x2="9.5" y2="9.5"/>
+        <line class="ts-icon-err-x2" x1="9.5" y1="4.5" x2="4.5" y2="9.5"/>
+      </svg>`,
     };
+
+    const SVG_BOLT = `<svg class="ts-speed-bolt" viewBox="0 0 10 16" fill="none" width="7" height="11">
+      <path d="M6 1L1 9h4l-1 6 5-8H5l1-6z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+    </svg>`;
 
     return filtered.map((e, idx) => {
       const time = new Date(e.ts).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
       const icon = ICONS[e.level] || ICONS.info;
       const durBadge = e.durationMs > 0
-        ? `<span class="ts-log-speed-badge ts-log-speed-${this._speedClass(e.durationMs)}" title="وقت الإنشاء">⚡ ${this._fmtDuration(e.durationMs)}</span>`
+        ? `<span class="ts-log-speed-badge ts-log-speed-${this._speedClass(e.durationMs)}" title="وقت الإنشاء">${SVG_BOLT} ${this._fmtDuration(e.durationMs)}</span>`
         : '';
       const botBadge = e.botName
         ? `<span class="ts-log-bot-badge">${escapeHtml(e.botName)}</span>`
@@ -1042,7 +1106,7 @@ export class TrueStudioManager {
         ? escapeHtml(e.msg.replace(/ ⚡ [\d.]+[ms]+$/, ''))
         : escapeHtml(e.msg);
 
-      return `<div class="ts-log-line ts-log-lv-${e.level}" data-idx="${idx}">
+      return `<div class="ts-log-line ts-log-lv-${e.level} ts-log-entry-new" data-idx="${idx}">
         <span class="ts-log-row-icon">${icon}</span>
         <span class="ts-log-time">${time}</span>
         <span class="ts-log-msg">${msgText}</span>
@@ -2390,9 +2454,14 @@ export class TrueStudioManager {
       this.form.waitMinutes = Math.max(0, Math.min(60, parseInt(e.target.value) || 0));
     });
 
-    // Speed selector
-    $('#ts-speed-select')?.addEventListener('change', (e) => {
-      this.form.speed = e.target.value || 'medium';
+    // Speed pills (radio buttons)
+    this.contentArea.querySelectorAll('[name="ts-speed"]').forEach(radio => {
+      radio.addEventListener('change', () => {
+        this.form.speed = radio.value || 'medium';
+        this.contentArea.querySelectorAll('.ts-speed-pill').forEach(p => {
+          p.classList.toggle('active', p.querySelector('input')?.value === this.form.speed);
+        });
+      });
     });
 
     // Proxy URL textarea (one proxy per line)

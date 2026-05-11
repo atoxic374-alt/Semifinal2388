@@ -4322,7 +4322,7 @@ const ts = require('./lib/trueStudio');
     const pfx = String(prefix || 'Bot').slice(0, 24).trim() || 'Bot';
     const rawProxy = typeof proxyUrl === 'string' ? proxyUrl : '';
     const proxyList = rawProxy.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
-    const speedMap = { medium: 1.0, fast: 0.4, veryfast: 0.15 };
+    const speedMap = { medium: 1.0, fast: 0.4, veryfast: 0.15, ultra: 0.05 };
     const speedFactor = speedMap[speed] != null ? speedMap[speed] : 1.0;
     const selTeamId = (typeof selectedTeamId === 'string' && selectedTeamId.trim()) ? selectedTeamId.trim() : null;
 
@@ -4686,7 +4686,21 @@ const ts = require('./lib/trueStudio');
               }
               if (err?.status === 429) {
                 const ra = err?.retryAfter || err?.retry_after || 5;
-                tsLog('warn', 'Rate limit (429) على ' + slot.name + ' — retry_after: ' + ra + 's');
+                tsLog('warn', 'Rate limit (429) على ' + slot.name + ' — retry_after: ' + ra + 's — إعادة محاولة تلقائية…');
+                // Auto-retry once after the rate-limit window
+                await new Promise(r => setTimeout(r, Math.max(ra * 1000, 3000)));
+                try {
+                  const _retryStart = Date.now();
+                  const { appPayload: rApp, botToken: rTok } = await createOneBotAsync(slot.botIndex, slot.num, slot.name, teamIdSnapshot);
+                  const rDurMs = Date.now() - _retryStart;
+                  s.bots.push({ name: slot.name, appId: rApp.id, botUserId: rApp.bot?.id || null, token: rTok });
+                  s.done += 1; s.failed -= 1;
+                  if (rules.linkBots && teamId) teamAppCounts[teamId] = (teamAppCounts[teamId] || 0) + 1;
+                  tsLog('success', 'تم (retry): ' + slot.name, { durationMs: rDurMs, appId: rApp.id, botName: slot.name });
+                  pushTsEvent('ts_bot_created', { bot: { name: slot.name, appId: rApp.id, hasToken: true, durationMs: rDurMs, isRetry: true } });
+                } catch (re) {
+                  tsLog('error', 'فشل retry ' + slot.name + ': ' + (re?.message || re));
+                }
               }
               pushTsEvent('ts_progress');
             }
