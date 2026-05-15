@@ -1,5 +1,5 @@
 // Tokens Manager — multi-account control center
-import { showNotification } from '../utils/ui.js';
+import { showNotification, showConfirm, pulseButton } from '../utils/ui.js';
 import { t } from '../utils/i18n.js';
 import { icon } from '../utils/icons.js';
 
@@ -57,6 +57,7 @@ export class TokensManager {
     this.actMax = 600;
     this.actModes = { online: true, idle: true, invisible: true, dnd: false };
     this.actRunning = [];
+    this.showPreview = false;
   }
 
   async init() {
@@ -1058,7 +1059,7 @@ export class TokensManager {
                 <div class="tk-avatar-controls">
                   <input type="file" id="tk-bn-file" accept="image/png,image/jpeg,image/gif" hidden onchange="window.tokensManager.onPickBanner(event)">
                   <button class="mm-btn ghost" onclick="document.getElementById('tk-bn-file').click()">${icon('folder')} ${t('tk.choose_image')}</button>
-                  <span class="tk-av-name">${this.escHtml(this.bannerFileName || '—')}</span>
+                  <span class="tk-bn-name tk-av-name">${this.escHtml(this.bannerFileName || '—')}</span>
                 </div>
               </div>
               <div class="tk-warn-row" style="margin-top:8px">
@@ -1075,8 +1076,15 @@ export class TokensManager {
         </div><!-- /tk-profile-form -->
 
         <div class="tk-profile-sidebar">
-          <div class="tk-preview-label">${icon('user')} Profile Preview <span class="tk-preview-badge">live</span></div>
-          <div id="tk-profile-card-wrap">${this.renderProfileCard()}</div>
+          <div class="tk-preview-label">
+            ${icon('user')} Profile Preview
+            <button class="mm-btn ghost" style="margin-left:auto;font-size:12px;padding:4px 10px" onclick="window.tokensManager.togglePreview(this)">
+              ${this.showPreview ? icon('eye_off') + ' إخفاء' : icon('eye') + ' معاينة'}
+            </button>
+          </div>
+          <div id="tk-profile-card-wrap" style="${this.showPreview ? '' : 'display:none'}">
+            ${this.showPreview ? this.renderProfileCard() : ''}
+          </div>
           <div class="tk-preview-tips">
             <div class="tk-tip-item">${icon('file_text')}<div><strong>Bio:</strong> plain text, max 190 chars, no markdown</div></div>
             <div class="tk-tip-item">${icon('image')}<div><strong>Avatar:</strong> PNG/JPG/GIF/WebP, max 8 MB</div></div>
@@ -1087,8 +1095,20 @@ export class TokensManager {
       </div>`;
   }
 
+  // Toggle preview card visibility
+  togglePreview(btn) {
+    this.showPreview = !this.showPreview;
+    const wrap = document.getElementById('tk-profile-card-wrap');
+    if (wrap) {
+      wrap.style.display = this.showPreview ? '' : 'none';
+      if (this.showPreview) wrap.innerHTML = this.renderProfileCard();
+    }
+    if (btn) btn.innerHTML = this.showPreview ? icon('eye_off') + ' إخفاء' : icon('eye') + ' معاينة';
+  }
+
   // Live-update profile card preview without full re-render
   uppProfile() {
+    if (!this.showPreview) return;
     const el = document.getElementById('tk-profile-card-wrap');
     if (el) el.innerHTML = this.renderProfileCard();
   }
@@ -1212,17 +1232,19 @@ export class TokensManager {
   }
   onPickAvatar(ev) {
     const file = ev.target.files?.[0]; if (!file) return;
-    if (file.size > 8 * 1024 * 1024) return showNotification(t('tk.image_too_large'));
+    if (file.size > 8 * 1024 * 1024) return showNotification(t('tk.image_too_large'), 'error');
     const r = new FileReader();
     r.onload = () => {
       this.avatarDataUrl = r.result;
       this.avatarFileName = file.name;
       const img = document.getElementById('tk-av-img');
       if (img) img.src = r.result;
-      const spans = document.querySelectorAll('.tk-av-name');
-      spans.forEach(s => s.textContent = file.name);
+      // Update only avatar name spans (exclude banner name spans)
+      document.querySelectorAll('.tk-av-name:not(.tk-bn-name)').forEach(s => s.textContent = file.name);
       this.uppProfile();
+      showNotification('تم اختيار الصورة الشخصية ✓', 'success');
     };
+    r.onerror = () => showNotification('فشل قراءة الصورة', 'error');
     r.readAsDataURL(file);
   }
   onPickBanner(ev) {
@@ -1232,36 +1254,71 @@ export class TokensManager {
     r.onload = () => {
       this.bannerDataUrl = r.result;
       this.bannerFileName = file.name;
-      this.render();
+      // Update DOM directly without full re-render
+      const wrap = document.querySelector('.tk-banner-preview');
+      if (wrap) {
+        wrap.innerHTML = `<img id="tk-bn-img" src="${r.result}" style="width:100%;height:100%;object-fit:cover;border-radius:6px">`;
+      }
+      const spans = document.querySelectorAll('.tk-bn-name');
+      spans.forEach(s => s.textContent = file.name);
+      this.uppProfile();
+      showNotification('تم اختيار البانر ✓', 'success');
     };
+    r.onerror = () => showNotification('فشل قراءة الصورة', 'error');
     r.readAsDataURL(file);
   }
   async applyAvatar(all = false) {
-    if (!this.avatarDataUrl) return showNotification(t('tk.choose_first'));
+    if (!this.avatarDataUrl) return showNotification(t('tk.choose_first'), 'error');
     const tokens = this._resolveTargets(all); if (!tokens) return;
-    const r = await window.electronAPI.setAvatar({ tokens, avatar: this.avatarDataUrl });
-    const ok = (r.results || []).filter(x => x.ok).length;
-    const fail = (r.results || []).length - ok;
-    showNotification(`${t('tk.profile_avatar')} ${t('common.ok')} ${ok}  ${t('common.fail')} ${fail}`);
+    const confirmed = await showConfirm(
+      all ? `تطبيق الصورة الشخصية على ${tokens.length} حساب؟` : `تطبيق الصورة الشخصية على "${tokens[0]}"؟`,
+      { confirmText: t('tk.apply_avatar'), cancelText: t('common.cancel') }
+    );
+    if (!confirmed) return;
+    const btn = all
+      ? document.querySelector('.tk-section-actions .mm-btn.success')
+      : document.querySelector('.tk-section-actions .mm-btn.primary.glow');
+    await pulseButton(btn, async () => {
+      const r = await window.electronAPI.setAvatar({ tokens, avatar: this.avatarDataUrl });
+      const ok = (r.results || []).filter(x => x.ok).length;
+      const fail = (r.results || []).length - ok;
+      showNotification(`${t('tk.profile_avatar')} ${t('common.ok')} ${ok}  ${t('common.fail')} ${fail}`, fail ? 'error' : 'success');
+    });
   }
   async applyBanner(all = false) {
-    if (!this.bannerDataUrl) return showNotification(t('tk.choose_first'));
+    if (!this.bannerDataUrl) return showNotification(t('tk.choose_first'), 'error');
     const tokens = this._resolveTargets(all); if (!tokens) return;
-    const r = await window.electronAPI.setBanner({ tokens, banner: this.bannerDataUrl });
-    const ok = (r.results || []).filter(x => x.ok).length;
-    const failed = (r.results || []).filter(x => !x.ok);
-    if (failed.length) {
-      const sample = failed[0].error || '';
-      showNotification(`${t('tk.profile_banner')}: ${ok} ${t('common.ok')} · ${failed.length} ${t('common.fail')}${sample ? ' — ' + sample : ''}`);
-    } else {
-      showNotification(`${t('tk.profile_banner')} ${t('common.ok')} ${ok}`);
-    }
+    const confirmed = await showConfirm(
+      all ? `تطبيق البانر على ${tokens.length} حساب؟` : `تطبيق البانر على "${tokens[0]}"؟`,
+      { confirmText: t('tk.apply_banner'), cancelText: t('common.cancel') }
+    );
+    if (!confirmed) return;
+    await pulseButton(null, async () => {
+      const r = await window.electronAPI.setBanner({ tokens, banner: this.bannerDataUrl });
+      const ok = (r.results || []).filter(x => x.ok).length;
+      const failed = (r.results || []).filter(x => !x.ok);
+      if (failed.length) {
+        const sample = failed[0].error || '';
+        showNotification(`${t('tk.profile_banner')}: ${ok} ${t('common.ok')} · ${failed.length} ${t('common.fail')}${sample ? ' — ' + sample : ''}`, 'error');
+      } else {
+        showNotification(`${t('tk.profile_banner')} ${t('common.ok')} ${ok}`, 'success');
+      }
+    });
   }
   async removeBanner() {
+    if (!this.bannerDataUrl) {
+      const tokens = this.selected.length ? this.selected : this._allConnectedNames();
+      if (!tokens.length) return showNotification(t('tk.no_accounts'), 'error');
+    }
+    const confirmed = await showConfirm('حذف البانر من الحسابات المحددة؟', {
+      confirmText: t('tk.remove_banner'), cancelText: t('common.cancel')
+    });
+    if (!confirmed) return;
     const tokens = this.selected.length ? this.selected : this._allConnectedNames();
+    if (!tokens.length) return showNotification(t('tk.no_accounts'), 'error');
     const r = await window.electronAPI.setBanner({ tokens, banner: null });
     const ok = (r.results || []).filter(x => x.ok).length;
-    showNotification(`${t('tk.remove_banner')} ${t('common.ok')} ${ok}`);
+    showNotification(`${t('tk.remove_banner')} ${t('common.ok')} ${ok}`, 'success');
     this.bannerDataUrl = '';
     this.bannerFileName = '';
     this.render();

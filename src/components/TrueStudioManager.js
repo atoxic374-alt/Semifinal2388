@@ -576,6 +576,26 @@ export class TrueStudioManager {
   }
 
   async _savePfpFromInputs(clear = false) {
+    const saveBtn  = this.contentArea.querySelector('#ts-pfp-save');
+    const clearBtn = this.contentArea.querySelector('#ts-pfp-clear');
+    const activeBtn = clear ? clearBtn : saveBtn;
+
+    // Guard: for clear, ask confirmation
+    if (clear) {
+      if (!this.pfp?.avatar && !this.pfp?.banner) {
+        showNotification('لا يوجد Pfp محفوظ للمسح', 'error'); return;
+      }
+      const ok = await showConfirm('مسح الصورة والبنر المحفوظين نهائياً؟', { confirmText: 'مسح', cancelText: 'إلغاء' });
+      if (!ok) return;
+    } else {
+      const avFile = this.contentArea.querySelector('#ts-pfp-avatar')?.files?.[0] || null;
+      const bnFile = this.contentArea.querySelector('#ts-pfp-banner')?.files?.[0] || null;
+      if (!avFile && !bnFile && !this.pfp?.avatar && !this.pfp?.banner) {
+        showNotification('اختر صورة أو بانر أولاً', 'error'); return;
+      }
+    }
+
+    if (activeBtn) { activeBtn.disabled = true; }
     try {
       const avFile = this.contentArea.querySelector('#ts-pfp-avatar')?.files?.[0] || null;
       const bnFile = this.contentArea.querySelector('#ts-pfp-banner')?.files?.[0] || null;
@@ -586,21 +606,28 @@ export class TrueStudioManager {
       this.pfp = r?.pfp || { avatar, banner, updatedAt: Date.now() };
       showNotification(clear ? 'تم مسح Pfp المحفوظ' : 'تم حفظ Pfp — سيطبق على البوتات الجديدة', 'success');
       this.render();
-    } catch (e) { showNotification('فشل حفظ Pfp: ' + (e.message || e), 'error'); }
+    } catch (e) {
+      showNotification('فشل حفظ Pfp: ' + (e.message || e), 'error');
+    } finally {
+      if (activeBtn) { activeBtn.disabled = false; }
+    }
   }
 
   async _applyPfpAll() {
     if (!this.pfp?.avatar && !this.pfp?.banner) { showNotification('احفظ Avatar أو Banner أولاً', 'error'); return; }
-    const ok = await showConfirm('تطبيق الصورة والبنر المحفوظين على كل Bot Tokens المحفوظة؟', { confirmText: 'Pfp all' });
-    if (!ok) return;
+    const confirmed = await showConfirm('تطبيق الصورة والبنر المحفوظين على كل Bot Tokens المحفوظة؟', { confirmText: 'Pfp all', cancelText: 'إلغاء' });
+    if (!confirmed) return;
     const btn = this.contentArea.querySelector('#ts-pfp-all');
-    if (btn) { btn.disabled = true; btn.textContent = 'جاري التطبيق…'; }
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span style="opacity:.7">⏳ جاري التطبيق…</span>'; }
     try {
       const r = await window.electronAPI.tsApplyPfpAll();
       if (!r?.success && r?.error) throw new Error(r.error);
       showNotification(`Pfp all: نجاح ${r.okCount || 0} / فشل ${r.failCount || 0}`, (r.failCount || 0) ? 'info' : 'success');
-    } catch (e) { showNotification('فشل Pfp all: ' + (e.message || e), 'error'); }
-    finally { if (btn) { btn.disabled = false; btn.textContent = 'Pfp all'; } }
+    } catch (e) {
+      showNotification('فشل Pfp all: ' + (e.message || e), 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.innerHTML = '<span class="ts-drawn-icon image" aria-hidden="true"><i></i></span> Pfp all'; }
+    }
   }
 
   _renderStatus(s, meta) {
