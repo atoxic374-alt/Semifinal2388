@@ -54,7 +54,7 @@ app.use(helmet({
 }));
 
 app.use(cookieParser());
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '30mb' }));
 
 app.use(session({
   name: 'dam.sid',
@@ -3015,6 +3015,26 @@ const ts = require('./lib/trueStudio');
     };
   }
 
+
+
+  function tsPfpSettings() {
+    const d = ensureData();
+    if (!d.tsPfp || typeof d.tsPfp !== 'object') d.tsPfp = { avatar: null, banner: null, updatedAt: 0 };
+    return d.tsPfp;
+  }
+
+  function validateProfileImage(kind, value) {
+    if (value == null || value === '') return null;
+    if (typeof value !== 'string' || !/^data:image\/(png|jpe?g|gif|webp);base64,/i.test(value)) {
+      throw new Error(`${kind} must be a PNG/JPEG/GIF/WebP data URL`);
+    }
+    const mime = dataUrlMime(value);
+    const limit = kind === 'banner' ? MAX_BANNER_BYTES : MAX_AVATAR_BYTES;
+    if (!ALLOWED_AVATAR_MIMES.includes(mime)) throw new Error(`${kind} mime is not supported`);
+    if (dataUrlSizeBytes(value) > limit) throw new Error(`${kind} is too large (max ${Math.round(limit / 1024 / 1024)}MB)`);
+    return value;
+  }
+
   // ── Short-lived token cache (so repeated library refreshes don't hammer
   //    Discord with full email+TOTP logins). Key: lowercase email.
   const TS_TOKEN_TTL = 12 * 60 * 1000; // 12 minutes
@@ -3699,6 +3719,99 @@ const ts = require('./lib/trueStudio');
     ok(res, { snapshot: tsSnapshot(), accounts: tsAccountsPublic() });
   });
 
+
+  app.get('/api/ts/pfp', (req, res) => {
+    try {
+      const p = tsPfpSettings();
+      ok(res, { pfp: { avatar: p.avatar || null, banner: p.banner || null, updatedAt: p.updatedAt || 0 } });
+    } catch (e) { fail(res, e); }
+  });
+
+  app.post('/api/ts/pfp', (req, res) => {
+    try {
+      const avatar = validateProfileImage('avatar', req.body?.avatar || null);
+      const banner = validateProfileImage('banner', req.body?.banner || null);
+      const p = tsPfpSettings();
+      p.avatar = avatar;
+      p.banner = banner;
+      p.updatedAt = Date.now();
+      writeData(ensureData());
+      ok(res, { pfp: { avatar: p.avatar, banner: p.banner, updatedAt: p.updatedAt } });
+    } catch (e) { fail(res, e); }
+  });
+
+  app.post('/api/ts/pfp/apply-all', async (req, res) => {
+    try {
+      const p = tsPfpSettings();
+      if (!p.avatar && !p.banner) throw new Error('Save an avatar or banner first');
+      const list = await botTokensStore.get() || [];
+      const results = [];
+      for (const b of list) {
+        try {
+          await ts.updateBotProfile({ botToken: b.token, avatar: p.avatar || undefined, banner: p.banner || undefined });
+          results.push({ appId: b.appId, name: b.name, ok: true });
+          await ts.humanDelay(800, 1600);
+        } catch (e) {
+          results.push({ appId: b.appId, name: b.name, ok: false, error: e.message || String(e), status: e.status || 0, code: e.code || '' });
+          if (e.status === 429) await ts.humanDelay(3000, 5000);
+        }
+      }
+      ok(res, { results, okCount: results.filter(r => r.ok).length, failCount: results.filter(r => !r.ok).length });
+    } catch (e) { fail(res, e); }
+  });
+
+  app.get('/api/ts/applications/:appId/intents', async (req, res) => {
+    try {
+      const appId = String(req.params.appId || '').trim();
+      const email = String(req.query.email || '').toLowerCase();
+      if (!appId || !email) throw new Error('Application id and email are required');
+      const { token, client } = await tsGetToken(email);
+      const health = await ts.accountHealthProbe({ token, netOpts: { client } });
+      if (!health.ok) return ok(res, { appId, blocked: true, health });
+      const appObj = await ts.getApplication({ token, appId, netOpts: { client } });
+      ok(res, { appId, app: { id: appObj.id, name: appObj.name, flags: appObj.flags, flags_new: appObj.flags_new }, intents: ts.normalizeIntentState(appObj), health });
+    } catch (e) { fail(res, e); }
+  });
+
+  app.post('/api/ts/applications/:appId/intents', async (req, res) => {
+    try {
+      const appId = String(req.params.appId || '').trim();
+      const email = String(req.body?.email || '').toLowerCase();
+      const enabled = req.body?.enabled !== false;
+      if (!appId || !email) throw new Error('Application id and email are required');
+      const { token, client } = await tsGetToken(email);
+      const health = await ts.accountHealthProbe({ token, netOpts: { client } });
+      if (!health.ok) return fail(res, new Error('Account health check blocked intent update: ' + health.message));
+      const updated = await ts.setApplicationIntents({ token, appId, enabled, netOpts: { client } });
+      ok(res, { appId, intents: ts.normalizeIntentState(updated), app: { id: updated.id, name: updated.name, flags: updated.flags, flags_new: updated.flags_new }, health });
+    } catch (e) { fail(res, e); }
+  });
+
+  app.post('/api/ts/intents/apply-all', async (req, res) => {
+    try {
+      const email = String(req.body?.email || '').toLowerCase();
+      const enabled = req.body?.enabled !== false;
+      if (!email) throw new Error('Email is required');
+      const { token, client } = await tsGetToken(email);
+      const health = await ts.accountHealthProbe({ token, netOpts: { client } });
+      if (!health.ok) return fail(res, new Error('Account health check blocked bulk intent update: ' + health.message));
+      const libApps = await ts.listApplications({ token, netOpts: { client } });
+      const bots = libApps.filter(a => a && a.bot && a.id);
+      const results = [];
+      for (const appObj of bots) {
+        try {
+          const updated = await ts.setApplicationIntents({ token, appId: appObj.id, enabled, netOpts: { client } });
+          results.push({ appId: appObj.id, name: appObj.name, ok: true, intents: ts.normalizeIntentState(updated) });
+          await ts.humanDelay(700, 1400);
+        } catch (e) {
+          results.push({ appId: appObj.id, name: appObj.name, ok: false, error: e.message || String(e), status: e.status || 0, code: e.code || '' });
+          if (e.status === 429) await ts.humanDelay(3000, 5000);
+        }
+      }
+      ok(res, { results, okCount: results.filter(r => r.ok).length, failCount: results.filter(r => !r.ok).length, health });
+    } catch (e) { fail(res, e); }
+  });
+
   // Pre-flight: log in (and verify TOTP if a 2FA secret is saved) WITHOUT
   // creating any team or bot. Result is stored on the account so the UI can
   // show a green "verified" badge until next session.
@@ -3749,9 +3862,17 @@ const ts = require('./lib/trueStudio');
             mfa_enabled: !!meR.data?.mfa_enabled,
             verified: !!meR.data?.verified,
           };
-          verify.message = 'Account verified';
-          // Cache token + the warmed client so Start session reuses BOTH
-          tsStoreToken(creds.email, token, client);
+          const health = await ts.accountHealthProbe({ token, netOpts: { client } });
+          verify.health = health;
+          if (!health.ok) {
+            verify.ok = false;
+            verify.status = health.classification;
+            verify.message = health.message;
+          } else {
+            verify.message = 'Account verified — no active rate-limit/lock detected';
+            // Cache token + the warmed client so Start session reuses BOTH
+            tsStoreToken(creds.email, token, client);
+          }
         }
       } catch (e) {
         verify.status = e.code || 'login_failed';
@@ -4239,6 +4360,8 @@ const ts = require('./lib/trueStudio');
           totpSecret: creds.totpSecret || undefined,
           password: creds.password || undefined,
         };
+        const health = await ts.accountHealthProbe({ token, netOpts });
+        if (!health.ok) throw new Error('فحص الحساب أوقف Reset All: ' + health.message);
         // Warm-up the dev portal once per cached client
         if (!client.devPortalLoaded) {
           try {
@@ -4417,6 +4540,11 @@ const ts = require('./lib/trueStudio');
       }
       // Build netOpts ONCE per session, carrying the warmed client + speedFactor.
       const netOpts = { solveCaptcha: buildSolveCaptcha(), client, totpSecret: creds.totpSecret || undefined, password: creds.password || undefined, speedFactor };
+      const health = await ts.accountHealthProbe({ token, netOpts });
+      if (!health.ok) {
+        throw new Error('فحص الحساب أوقف التنفيذ: ' + health.message);
+      }
+      tsLog('success', 'فحص الحساب OK — لا يوجد rate-limit/حظر ظاهر قبل البدء');
       if (bd) tsLog('info', 'Bright Data IP rotation: كل بوت ← session ID عشوائي → IP مختلف تلقائياً ✓ (Zone: ' + bd.zoneName + ')');
       else if (proxyList.length > 1) tsLog('info', 'قائمة Proxy: ' + proxyList.length + ' عنوان — سيتغير IP تلقائياً مع كل بوت ✓');
       else if (proxyList.length === 1) tsLog('info', 'Proxy ثابت: ' + proxyList[0].replace(/:[^:@]+@/, ':***@'));
@@ -4567,6 +4695,16 @@ const ts = require('./lib/trueStudio');
           await pause(800, 1800);
 
           const botToken = await ts.resetBotToken({ token, appId: appPayload.id, mfa: mfaToken, netOpts: botNetOpts });
+
+          const savedPfp = tsPfpSettings();
+          if (savedPfp.avatar || savedPfp.banner) {
+            try {
+              await ts.updateBotProfile({ botToken, avatar: savedPfp.avatar || undefined, banner: savedPfp.banner || undefined });
+              tsLog('success', 'تم تطبيق Pfp المحفوظ على ' + name);
+            } catch (e) {
+              tsLog('warn', 'تعذر تطبيق Pfp على ' + name + ': ' + (e.message || e));
+            }
+          }
 
           if (rules.linkBots && teamIdForBot && !linkAtCreation) {
             await pause(1200, 2400);

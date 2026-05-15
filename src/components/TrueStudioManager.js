@@ -58,6 +58,7 @@ export class TrueStudioManager {
     this.availableTeams = [];         // [{id, name, appCount}] for linkBots dropdown
     this._teamsLoading = false;       // loading state for team dropdown
     this._proxyTestResult = null;     // { ok, ip } | { error } | null
+    this.pfp = { avatar: null, banner: null, updatedAt: 0 };
   }
 
   async init() {
@@ -65,12 +66,14 @@ export class TrueStudioManager {
       await this.refresh();
       await this._loadCaptchaSettings();
       await this._loadBotTokens();
+      await this._loadPfp();
       this.openSSE();
       this._startCountdownTicker();
       this._inited = true;
     } else {
       await this.refresh();
       await this._loadBotTokens();
+      await this._loadPfp();
     }
     this.render();
     // If a captcha is already pending when this view opens, surface the modal.
@@ -461,6 +464,9 @@ export class TrueStudioManager {
           ${this._renderAdvancedOptions()}
         </div>
 
+        <!-- Saved bot profile media -->
+        ${this._renderPfpSection()}
+
         <!-- Captcha solver settings -->
         ${this._renderCaptchaSettings()}
 
@@ -504,6 +510,97 @@ export class TrueStudioManager {
     const m = Math.floor(ms / 60000);
     const sec = Math.round((ms % 60000) / 1000);
     return `${m}د${sec > 0 ? ' ' + sec + 'ث' : ''}`;
+  }
+
+
+  _renderPfpSection() {
+    const hasAvatar = !!this.pfp?.avatar;
+    const hasBanner = !!this.pfp?.banner;
+    const stamp = this.pfp?.updatedAt
+      ? new Date(this.pfp.updatedAt).toLocaleString(getLang() === 'ar' ? 'ar-SA' : 'en-GB', { dateStyle: 'short', timeStyle: 'short' })
+      : 'غير محفوظ';
+    return `
+      <div class="ts-card ts-pfp-card">
+        <div class="ts-card-head ts-pfp-head">
+          <div>
+            <div class="ts-card-title ar"><span class="ts-drawn-icon brush" aria-hidden="true"><i></i></span> Pfp · صورة وبنر البوتات</div>
+            <div class="ts-pfp-subtitle">احفظ هوية موحدة — أي بوت جديد يأخذها تلقائياً، و Pfp all يطبّقها على الموجود.</div>
+          </div>
+          <button class="ts-btn mint ts-pfp-all-btn" id="ts-pfp-all" ${(hasAvatar || hasBanner) ? '' : 'disabled'}><span class="ts-drawn-icon image" aria-hidden="true"><i></i></span> Pfp all</button>
+        </div>
+        <div class="ts-pfp-preview">
+          <div class="ts-pfp-banner">${hasBanner ? `<img src="${this.pfp.banner}" alt="banner">` : '<span><b class="ts-drawn-icon galaxy" aria-hidden="true"><i></i></b> Banner Preview</span>'}</div>
+          <div class="ts-pfp-avatar">${hasAvatar ? `<img src="${this.pfp.avatar}" alt="avatar">` : '<span class="ts-drawn-bot" aria-hidden="true"><i></i></span>'}</div>
+          <div class="ts-pfp-orbit one" aria-hidden="true"><i></i></div>
+          <div class="ts-pfp-orbit two" aria-hidden="true"><i></i></div>
+          <div class="ts-pfp-chip"><span class="ts-drawn-icon shield" aria-hidden="true"><i></i></span> Saved identity</div>
+        </div>
+        <div class="ts-pfp-upload-grid">
+          <label class="ts-pfp-drop">
+            <span class="ts-pfp-drop-icon avatar" aria-hidden="true"><i></i></span>
+            <span class="ts-pfp-drop-title">Avatar طبيعي للبوت</span>
+            <span class="ts-pfp-drop-hint">PNG · JPG · GIF · WebP</span>
+            <input type="file" id="ts-pfp-avatar" accept="image/png,image/jpeg,image/gif,image/webp" />
+          </label>
+          <label class="ts-pfp-drop banner">
+            <span class="ts-pfp-drop-icon banner" aria-hidden="true"><i></i></span>
+            <span class="ts-pfp-drop-title">Banner طبيعي للبوت</span>
+            <span class="ts-pfp-drop-hint">يفضل مقاس واسع مثل دسكورد</span>
+            <input type="file" id="ts-pfp-banner" accept="image/png,image/jpeg,image/gif,image/webp" />
+          </label>
+        </div>
+        <div class="ts-pfp-actions">
+          <button class="ts-btn ts-pfp-clear" id="ts-pfp-clear"><span class="ts-drawn-icon broom" aria-hidden="true"><i></i></span> مسح المحفوظ</button>
+          <button class="ts-btn mint ts-pfp-save" id="ts-pfp-save"><span class="ts-drawn-icon save" aria-hidden="true"><i></i></span> حفظ Pfp</button>
+          <span class="ts-field-hint ts-pfp-save-hint"><span class="ts-drawn-icon clock" aria-hidden="true"><i></i></span> آخر حفظ: ${escapeHtml(stamp)}</span>
+        </div>
+      </div>
+    `;
+  }
+
+  async _fileToDataUrl(file) {
+    if (!file) return null;
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(reader.error || new Error('file read failed'));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async _loadPfp() {
+    try {
+      const r = await window.electronAPI.tsGetPfp();
+      this.pfp = r?.pfp || { avatar: null, banner: null, updatedAt: 0 };
+    } catch (_) { this.pfp = { avatar: null, banner: null, updatedAt: 0 }; }
+  }
+
+  async _savePfpFromInputs(clear = false) {
+    try {
+      const avFile = this.contentArea.querySelector('#ts-pfp-avatar')?.files?.[0] || null;
+      const bnFile = this.contentArea.querySelector('#ts-pfp-banner')?.files?.[0] || null;
+      const avatar = clear ? null : (avFile ? await this._fileToDataUrl(avFile) : (this.pfp?.avatar || null));
+      const banner = clear ? null : (bnFile ? await this._fileToDataUrl(bnFile) : (this.pfp?.banner || null));
+      const r = await window.electronAPI.tsSavePfp({ avatar, banner });
+      if (!r?.success && r?.error) throw new Error(r.error);
+      this.pfp = r?.pfp || { avatar, banner, updatedAt: Date.now() };
+      showNotification(clear ? 'تم مسح Pfp المحفوظ' : 'تم حفظ Pfp — سيطبق على البوتات الجديدة', 'success');
+      this.render();
+    } catch (e) { showNotification('فشل حفظ Pfp: ' + (e.message || e), 'error'); }
+  }
+
+  async _applyPfpAll() {
+    if (!this.pfp?.avatar && !this.pfp?.banner) { showNotification('احفظ Avatar أو Banner أولاً', 'error'); return; }
+    const ok = await showConfirm('تطبيق الصورة والبنر المحفوظين على كل Bot Tokens المحفوظة؟', { confirmText: 'Pfp all' });
+    if (!ok) return;
+    const btn = this.contentArea.querySelector('#ts-pfp-all');
+    if (btn) { btn.disabled = true; btn.textContent = 'جاري التطبيق…'; }
+    try {
+      const r = await window.electronAPI.tsApplyPfpAll();
+      if (!r?.success && r?.error) throw new Error(r.error);
+      showNotification(`Pfp all: نجاح ${r.okCount || 0} / فشل ${r.failCount || 0}`, (r.failCount || 0) ? 'info' : 'success');
+    } catch (e) { showNotification('فشل Pfp all: ' + (e.message || e), 'error'); }
+    finally { if (btn) { btn.disabled = false; btn.textContent = 'Pfp all'; } }
   }
 
   _renderStatus(s, meta) {
@@ -1283,6 +1380,16 @@ export class TrueStudioManager {
           <button class="ts-lib-back" id="ts-lib-close" aria-label="back">←</button>
           <div class="ts-lib-page-title">${t('ts.lib_btn_title') || 'فتح المكتبة'}</div>
           <div class="ts-lib-head-actions">
+            <button class="ts-btn ts-intents-all-btn" id="ts-lib-intents-all"
+              ${(!this.selectedEmail) ? 'disabled' : ''}
+              title="تفعيل الثلاث Privileged Intents لكل بوتات المكتبة">
+              <span class="ts-drawn-icon bolt" aria-hidden="true"><i></i></span> iNTeNT ALl
+            </button>
+            <button class="ts-btn" id="ts-lib-pfp-all"
+              ${(!this.pfp?.avatar && !this.pfp?.banner) ? 'disabled' : ''}
+              title="تطبيق Pfp المحفوظ على Bot Tokens الحالية">
+              <span class="ts-drawn-icon image" aria-hidden="true"><i></i></span> Pfp all
+            </button>
             <button class="ts-btn ts-reset-all-btn" id="ts-lib-reset-all"
               ${(!this.library || this._resetAllInFlight) ? 'disabled' : ''}
               title="${escapeAttr(t('ts.reset_all_title'))}"
@@ -1317,6 +1424,8 @@ export class TrueStudioManager {
     overlay.querySelector('#ts-lib-close').addEventListener('click', () => this._closeLibraryModal());
     overlay.querySelector('#ts-lib-refresh-modal').addEventListener('click', () => this.loadLibrary());
     overlay.querySelector('#ts-lib-reset-all').addEventListener('click', () => this._resetAllBots());
+    overlay.querySelector('#ts-lib-intents-all')?.addEventListener('click', () => this._applyIntentsAll(true));
+    overlay.querySelector('#ts-lib-pfp-all')?.addEventListener('click', () => this._applyPfpAll());
     overlay.querySelector('#ts-lib-stop-all').addEventListener('click', async () => {
       try {
         await window.electronAPI.tsResetAllStop();
@@ -1413,6 +1522,7 @@ export class TrueStudioManager {
         }).join('')}
       `;
       this._bindResetButtons(body);
+      this._bindIntentButtons(body);
       body.querySelector('#ts-lib-create-team')?.addEventListener('click', () => this._openCreateTeamModal());
       return;
     }
@@ -1425,9 +1535,110 @@ export class TrueStudioManager {
       }
       body.innerHTML = `<div class="ts-cards">${apps.map(a => this._renderAppCard(a, { showMoveToTeam: teams.length > 0 })).join('')}</div>`;
       this._bindResetButtons(body);
+      this._bindIntentButtons(body);
       this._bindMoveToTeamButtons(body);
       return;
     }
+  }
+
+
+  _bindIntentButtons(root) {
+    root.querySelectorAll('[data-intents-bot]').forEach(btn => {
+      if (btn._intentBound) return;
+      btn._intentBound = true;
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const appId = btn.getAttribute('data-intents-bot');
+        const name  = btn.getAttribute('data-bot-name') || appId;
+        this._openIntentsModal(appId, name);
+      });
+    });
+  }
+
+  _intentRowsHtml(intents) {
+    const st = intents?.state || {};
+    const rows = [
+      ['presence', 'Presence Intent'],
+      ['guildMembers', 'Server Members Intent'],
+      ['messageContent', 'Message Content Intent'],
+    ];
+    return rows.map(([key, label]) => {
+      const v = st[key] || {};
+      const on = !!v.enabled;
+      const sub = v.approved ? 'approved/verified flag' : (v.limited ? 'limited flag enabled' : 'off');
+      const icon = key === 'presence' ? 'presence' : (key === 'guildMembers' ? 'members' : 'message');
+      return `<div class="ts-intent-row ${on ? 'on' : ''}">
+        <span class="ts-intent-icon ${icon}" aria-hidden="true"><i></i></span>
+        <span class="ts-intent-name">${escapeHtml(label)}</span>
+        <b>${on ? 'ON' : 'OFF'}</b>
+        <small>${escapeHtml(sub)}</small>
+      </div>`;
+    }).join('');
+  }
+
+  async _openIntentsModal(appId, name) {
+    if (!this.selectedEmail) { showNotification(t('ts.pick_account_first'), 'error'); return; }
+    document.querySelector('.ts-intents-overlay')?.remove();
+    const overlay = document.createElement('div');
+    overlay.className = 'ts-intents-overlay';
+    overlay.innerHTML = `
+      <div class="ts-intents-modal">
+        <div class="ts-token-modal-head">
+          <div class="ts-token-modal-title"><span class="ts-drawn-icon bolt" aria-hidden="true"><i></i></span> iNTeNT · ${escapeHtml(name)}</div>
+          <button class="ts-token-modal-close" type="button" aria-label="close">×</button>
+        </div>
+        <div class="ts-token-modal-body">
+          <div class="ts-token-modal-hint ts-intents-hint"><span class="ts-drawn-icon compass" aria-hidden="true"><i></i></span> الحالة الحالية للـ Privileged Intents الثلاثة. التفعيل/الإيقاف يتم عبر flags المحدودة القابلة للتعديل من API.</div>
+          <div class="ts-intents-state" id="ts-intents-state">جاري القراءة…</div>
+          <div class="ts-token-modal-actions">
+            <button class="ts-btn mint" id="ts-intents-enable"><span class="ts-drawn-icon check" aria-hidden="true"><i></i></span> تفعيل الثلاثة</button>
+            <button class="ts-btn danger" id="ts-intents-disable"><span class="ts-drawn-icon stop" aria-hidden="true"><i></i></span> إيقاف الثلاثة</button>
+            <button class="ts-btn" id="ts-intents-refresh"><span class="ts-drawn-icon refresh" aria-hidden="true"><i></i></span> تحديث</button>
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.querySelector('.ts-token-modal-close')?.addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    const stateEl = overlay.querySelector('#ts-intents-state');
+    const load = async () => {
+      stateEl.textContent = 'جاري القراءة…';
+      try {
+        const r = await window.electronAPI.tsGetIntents(appId, this.selectedEmail);
+        if (!r?.success && r?.error) throw new Error(r.error);
+        if (r.blocked) throw new Error(r.health?.message || 'Account blocked by health check');
+        stateEl.innerHTML = this._intentRowsHtml(r.intents);
+      } catch (e) { stateEl.innerHTML = `<div class="ts-lib-empty error">${escapeHtml(e.message || String(e))}</div>`; }
+    };
+    const set = async (enabled) => {
+      stateEl.textContent = enabled ? 'جاري التفعيل…' : 'جاري الإيقاف…';
+      try {
+        const r = await window.electronAPI.tsSetIntents(appId, this.selectedEmail, enabled);
+        if (!r?.success && r?.error) throw new Error(r.error);
+        stateEl.innerHTML = this._intentRowsHtml(r.intents);
+        showNotification(enabled ? 'تم تفعيل Intents' : 'تم إيقاف Intents', 'success');
+      } catch (e) { stateEl.innerHTML = `<div class="ts-lib-empty error">${escapeHtml(e.message || String(e))}</div>`; }
+    };
+    overlay.querySelector('#ts-intents-refresh')?.addEventListener('click', load);
+    overlay.querySelector('#ts-intents-enable')?.addEventListener('click', () => set(true));
+    overlay.querySelector('#ts-intents-disable')?.addEventListener('click', () => set(false));
+    load();
+  }
+
+  async _applyIntentsAll(enabled = true) {
+    if (!this.selectedEmail) { showNotification(t('ts.pick_account_first'), 'error'); return; }
+    const ok = await showConfirm(`${enabled ? 'تفعيل' : 'إيقاف'} الثلاث Privileged Intents لكل بوتات المكتبة؟`, { confirmText: enabled ? 'iNTeNT ALl' : 'Disable all' });
+    if (!ok) return;
+    const btn = this._libModal?.querySelector('#ts-lib-intents-all');
+    if (btn) { btn.disabled = true; btn.textContent = 'جاري التنفيذ…'; }
+    try {
+      const r = await window.electronAPI.tsApplyIntentsAll(this.selectedEmail, enabled);
+      if (!r?.success && r?.error) throw new Error(r.error);
+      showNotification(`iNTeNT ALl: نجاح ${r.okCount || 0} / فشل ${r.failCount || 0}`, (r.failCount || 0) ? 'info' : 'success');
+      await this.loadLibrary();
+    } catch (e) { showNotification('فشل iNTeNT ALl: ' + (e.message || e), 'error'); }
+    finally { if (btn) { btn.disabled = false; btn.textContent = 'iNTeNT ALl'; } }
   }
 
   // Wire up the per-card "Reset Token" buttons inside the library overlay.
@@ -2074,6 +2285,13 @@ export class TrueStudioManager {
         <span class="ts-card-reset-icon" aria-hidden="true">⟳</span>
         <span class="ts-card-reset-label">${escapeHtml(t('ts.reset_token'))}</span>
       </button>` : '';
+    const intentBtn = a.isBot ? `
+      <button class="ts-card-intents" type="button"
+        data-intents-bot="${escapeAttr(a.id)}"
+        data-bot-name="${escapeAttr(a.name)}"
+        title="رؤية/تفعيل/إيقاف Privileged Intents الثلاثة">
+        <span class="ts-drawn-icon bolt" aria-hidden="true"><i></i></span> iNTeNT
+      </button>` : '';
     const moveBtn = opts.showMoveToTeam ? `
       <button class="ts-card-move-team" type="button"
         data-move-app="${escapeAttr(a.id)}"
@@ -2089,6 +2307,7 @@ export class TrueStudioManager {
         <div class="ts-app-name">${escapeHtml(a.name)}</div>
         ${tag}
         ${resetBtn}
+        ${intentBtn}
         ${moveBtn}
       </div>
     `;
@@ -2570,6 +2789,9 @@ export class TrueStudioManager {
 
     $('#ts-start')?.addEventListener('click', () => this.startSession());
     $('#ts-stop')?.addEventListener('click', () => this.stopSession());
+    $('#ts-pfp-save')?.addEventListener('click', () => this._savePfpFromInputs(false));
+    $('#ts-pfp-clear')?.addEventListener('click', () => this._savePfpFromInputs(true));
+    $('#ts-pfp-all')?.addEventListener('click', () => this._applyPfpAll());
 
     // Captcha settings
     $('#ts-captcha-save')?.addEventListener('click', () => this.saveCaptchaSettings());
