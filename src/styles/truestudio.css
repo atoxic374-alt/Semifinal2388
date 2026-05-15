@@ -2155,22 +2155,31 @@
 .ts-pfp-avatar img { width:100%; height:100%; object-fit:cover; display:block; }
 .ts-pfp-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:12px; }
 .ts-card-intents {
-  position:absolute;
-  left:10px;
-  bottom:10px;
-  border:1px solid rgba(88,101,242,.38);
-  background:rgba(88,101,242,.16);
-  color:#dfe4ff;
-  border-radius:999px;
-  padding:5px 10px;
-  font-size:10px;
-  font-weight:900;
-  letter-spacing:.04em;
-  cursor:pointer;
-  transition:transform .16s ease, border-color .16s ease, background .16s ease;
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  margin-top: 4px;
+  border: 1px solid rgba(88,101,242,.35);
+  background: rgba(88,101,242,.13);
+  color: #c5cbff;
+  border-radius: 8px;
+  padding: 5px 8px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .05em;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background .14s, border-color .14s, color .14s, transform .12s;
 }
-.ts-card-intents:hover { transform:translateY(-1px); border-color:rgba(124,224,196,.55); background:rgba(124,224,196,.16); color:var(--ts-mint,#7ce0c4); }
-.ts-app-card.has-reset .ts-card-intents { bottom:42px; }
+.ts-card-intents:hover {
+  background: rgba(88,101,242,.24);
+  border-color: rgba(124,224,196,.5);
+  color: var(--ts-mint, #7ce0c4);
+  transform: translateY(-1px);
+}
+.ts-card-intents-icon { font-size: 11px; line-height: 1; }
 .ts-intents-overlay { position:fixed; inset:0; z-index:10020; background:rgba(3,5,12,.72); backdrop-filter:blur(10px); display:flex; align-items:center; justify-content:center; padding:20px; }
 .ts-intents-modal { width:min(520px, 94vw); border:1px solid rgba(124,224,196,.2); border-radius:20px; background:linear-gradient(180deg, rgba(20,24,38,.98), rgba(11,14,24,.98)); box-shadow:0 24px 80px rgba(0,0,0,.5); overflow:hidden; }
 .ts-intents-state { display:grid; gap:10px; margin:14px 0; }
@@ -2347,15 +2356,7 @@
   border-color: rgba(235, 69, 158, .26) !important;
   color: #ffd7ec !important;
 }
-.ts-card-intents {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  min-height: 24px;
-  box-shadow: 0 8px 22px rgba(88,101,242,.14);
-}
-.ts-card-intents span { filter: drop-shadow(0 0 8px rgba(124,224,196,.42)); }
+.ts-card-intents { box-shadow: 0 4px 14px rgba(88,101,242,.12); }
 .ts-intents-modal {
   position: relative;
   overflow: hidden;
@@ -2507,4 +2508,132 @@
 .ts-pfp-orbit.two i { inset: 14%; border-radius: 4px; transform: rotate(45deg); background: #dfe4ff; }
 @media (prefers-reduced-motion: reduce) {
   .ts-drawn-icon.brush { animation: none !important; }
+}
+
+/* ── Pfp preview toggle ────────────────────────────────────────────────── */
+.ts-pfp-preview-wrap {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height .32s cubic-bezier(.4,0,.2,1), opacity .28s ease, margin .28s ease;
+  opacity: 0;
+  margin-bottom: 0;
+}
+.ts-pfp-preview-wrap.open {
+  max-height: 220px;
+  opacity: 1;
+  margin-bottom: 12px;
+}
+.ts-pfp-preview-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(124,224,196,.22);
+  background: rgba(124,224,196,.07);
+  color: var(--ts-mint, #7ce0c4);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+  transition: background .14s, border-color .14s, transform .12s;
+}
+.ts-pfp-preview-toggle:hover { background: rgba(124,224,196,.14); border-color: rgba(124,224,196,.4); transform: translateY(-1px); }
+.ts-pfp-preview-toggle.active { background: rgba(124,224,196,.18); border-color: rgba(124,224,196,.45); }
+
+/* ── Batch progress modal (iNTeNT ALl / Pfp all) ────────────────────── */
+.ts-batch-prog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10100;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  padding: 24px;
+  pointer-events: none;
+}
+.ts-batch-prog-overlay.open { pointer-events: all; }
+.ts-batch-prog-card {
+  width: min(420px, calc(100vw - 32px));
+  background: linear-gradient(160deg, rgba(18,22,36,.98), rgba(11,14,24,.98));
+  border: 1px solid rgba(124,224,196,.2);
+  border-radius: 20px;
+  box-shadow: 0 24px 64px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.05);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transform: translateY(120px) scale(.96);
+  opacity: 0;
+  transition: transform .3s cubic-bezier(.34,1.56,.64,1), opacity .24s ease;
+}
+.ts-batch-prog-overlay.open .ts-batch-prog-card {
+  transform: translateY(0) scale(1);
+  opacity: 1;
+}
+.ts-batch-prog-title {
+  font-size: 15px;
+  font-weight: 900;
+  color: #eef3ff;
+  letter-spacing: .01em;
+}
+.ts-batch-prog-sub {
+  font-size: 11.5px;
+  color: var(--ts-muted, #8a93a4);
+  margin-top: 2px;
+}
+.ts-batch-prog-bar-wrap {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.07);
+  overflow: hidden;
+}
+.ts-batch-prog-bar {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #7ce0c4, #5865f2);
+  transition: width .35s cubic-bezier(.4,0,.2,1);
+}
+.ts-batch-prog-bar.done { background: linear-gradient(90deg, #7ce0c4, #43d391); }
+.ts-batch-prog-counts {
+  font-size: 12px;
+  color: var(--ts-muted, #8a93a4);
+  font-weight: 700;
+}
+.ts-batch-prog-status {
+  font-size: 12px;
+  color: #c8d0de;
+  min-height: 18px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ts-bp-ok { color: var(--ts-mint, #7ce0c4); font-weight: 700; }
+.ts-bp-fail { color: #ff6b7b; font-weight: 700; }
+.ts-batch-prog-log {
+  max-height: 130px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(124,224,196,.2) transparent;
+}
+.ts-bp-log-line {
+  font-size: 11px;
+  color: var(--ts-muted, #8a93a4);
+  padding: 2px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ts-bp-log-line.ok { color: #7ce0c4; }
+.ts-bp-log-line.fail { color: #ff8a95; }
+.ts-batch-prog-close {
+  align-self: flex-end;
+  margin-top: 4px;
+  font-size: 12px;
+  padding: 6px 18px;
+  border-radius: 999px;
 }

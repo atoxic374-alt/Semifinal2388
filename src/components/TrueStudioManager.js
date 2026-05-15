@@ -58,6 +58,9 @@ export class TrueStudioManager {
     this.availableTeams = [];         // [{id, name, appCount}] for linkBots dropdown
     this._teamsLoading = false;       // loading state for team dropdown
     this._proxyTestResult = null;     // { ok, ip } | { error } | null
+    this._pfpPreviewVisible = false;  // toggle pfp preview section
+    this._intentsAllRunning = false;  // guard: only one intents-all at a time
+    this._pfpAllRunning = false;      // guard: only one pfp-all at a time
     this.pfp = { avatar: null, banner: null, updatedAt: 0 };
   }
 
@@ -516,24 +519,32 @@ export class TrueStudioManager {
   _renderPfpSection() {
     const hasAvatar = !!this.pfp?.avatar;
     const hasBanner = !!this.pfp?.banner;
+    const hasSaved = hasAvatar || hasBanner;
     const stamp = this.pfp?.updatedAt
       ? new Date(this.pfp.updatedAt).toLocaleString(getLang() === 'ar' ? 'ar-SA' : 'en-GB', { dateStyle: 'short', timeStyle: 'short' })
       : 'غير محفوظ';
+    const showPrev = this._pfpPreviewVisible;
     return `
       <div class="ts-card ts-pfp-card">
         <div class="ts-card-head ts-pfp-head">
           <div>
             <div class="ts-card-title ar"><span class="ts-drawn-icon brush" aria-hidden="true"><i></i></span> Pfp · صورة وبنر البوتات</div>
-            <div class="ts-pfp-subtitle">احفظ هوية موحدة — أي بوت جديد يأخذها تلقائياً، و Pfp all يطبّقها على الموجود.</div>
+            <div class="ts-pfp-subtitle">احفظ هوية موحدة — أي بوت جديد يأخذها تلقائياً. Pfp all موجود في المكتبة.</div>
           </div>
-          <button class="ts-btn mint ts-pfp-all-btn" id="ts-pfp-all" ${(hasAvatar || hasBanner) ? '' : 'disabled'}><span class="ts-drawn-icon image" aria-hidden="true"><i></i></span> Pfp all</button>
+          <button class="ts-btn ts-pfp-preview-toggle${showPrev ? ' active' : ''}" id="ts-pfp-preview-btn"
+            title="${showPrev ? 'إخفاء المعاينة' : 'إظهار المعاينة'}">
+            <span class="ts-drawn-icon ${showPrev ? 'eye_off' : 'eye'}" aria-hidden="true"><i></i></span>
+            ${showPrev ? 'إخفاء' : 'معاينة'}
+          </button>
         </div>
-        <div class="ts-pfp-preview">
-          <div class="ts-pfp-banner">${hasBanner ? `<img src="${this.pfp.banner}" alt="banner">` : '<span><b class="ts-drawn-icon galaxy" aria-hidden="true"><i></i></b> Banner Preview</span>'}</div>
-          <div class="ts-pfp-avatar">${hasAvatar ? `<img src="${this.pfp.avatar}" alt="avatar">` : '<span class="ts-drawn-bot" aria-hidden="true"><i></i></span>'}</div>
-          <div class="ts-pfp-orbit one" aria-hidden="true"><i></i></div>
-          <div class="ts-pfp-orbit two" aria-hidden="true"><i></i></div>
-          <div class="ts-pfp-chip"><span class="ts-drawn-icon shield" aria-hidden="true"><i></i></span> Saved identity</div>
+        <div class="ts-pfp-preview-wrap${showPrev ? ' open' : ''}">
+          <div class="ts-pfp-preview">
+            <div class="ts-pfp-banner">${hasBanner ? `<img src="${this.pfp.banner}" alt="banner">` : '<span><b class="ts-drawn-icon galaxy" aria-hidden="true"><i></i></b> Banner Preview</span>'}</div>
+            <div class="ts-pfp-avatar">${hasAvatar ? `<img src="${this.pfp.avatar}" alt="avatar">` : '<span class="ts-drawn-bot" aria-hidden="true"><i></i></span>'}</div>
+            <div class="ts-pfp-orbit one" aria-hidden="true"><i></i></div>
+            <div class="ts-pfp-orbit two" aria-hidden="true"><i></i></div>
+            <div class="ts-pfp-chip"><span class="ts-drawn-icon shield" aria-hidden="true"><i></i></span> Saved identity</div>
+          </div>
         </div>
         <div class="ts-pfp-upload-grid">
           <label class="ts-pfp-drop">
@@ -556,6 +567,18 @@ export class TrueStudioManager {
         </div>
       </div>
     `;
+  }
+
+  togglePfpPreview() {
+    this._pfpPreviewVisible = !this._pfpPreviewVisible;
+    const wrap = this.contentArea.querySelector('.ts-pfp-preview-wrap');
+    const btn  = this.contentArea.querySelector('#ts-pfp-preview-btn');
+    if (wrap) wrap.classList.toggle('open', this._pfpPreviewVisible);
+    if (btn) {
+      btn.classList.toggle('active', this._pfpPreviewVisible);
+      btn.title = this._pfpPreviewVisible ? 'إخفاء المعاينة' : 'إظهار المعاينة';
+      btn.innerHTML = `<span class="ts-drawn-icon ${this._pfpPreviewVisible ? 'eye_off' : 'eye'}" aria-hidden="true"><i></i></span> ${this._pfpPreviewVisible ? 'إخفاء' : 'معاينة'}`;
+    }
   }
 
   async _fileToDataUrl(file) {
@@ -615,19 +638,25 @@ export class TrueStudioManager {
 
   async _applyPfpAll() {
     if (!this.pfp?.avatar && !this.pfp?.banner) { showNotification('احفظ Avatar أو Banner أولاً', 'error'); return; }
+    if (this._pfpAllRunning) { showNotification('Pfp all جاري التنفيذ بالفعل…', 'info'); return; }
     const confirmed = await showConfirm('تطبيق الصورة والبنر المحفوظين على كل Bot Tokens المحفوظة؟', { confirmText: 'Pfp all', cancelText: 'إلغاء' });
     if (!confirmed) return;
-    const btn = this.contentArea.querySelector('#ts-pfp-all');
-    if (btn) { btn.disabled = true; btn.innerHTML = '<span style="opacity:.7">⏳ جاري التطبيق…</span>'; }
-    try {
-      const r = await window.electronAPI.tsApplyPfpAll();
+    this._pfpAllRunning = true;
+    // Disable all pfp-all buttons
+    this._libModal?.querySelectorAll('#ts-lib-pfp-all').forEach(b => { b.disabled = true; });
+    const prog = this._openBatchProgressModal('🖼 Pfp all', 'تطبيق الصورة والبانر على البوتات…');
+    // Non-blocking: fire and forget, update modal when done
+    window.electronAPI.tsApplyPfpAll().then(r => {
       if (!r?.success && r?.error) throw new Error(r.error);
-      showNotification(`Pfp all: نجاح ${r.okCount || 0} / فشل ${r.failCount || 0}`, (r.failCount || 0) ? 'info' : 'success');
-    } catch (e) {
-      showNotification('فشل Pfp all: ' + (e.message || e), 'error');
-    } finally {
-      if (btn) { btn.disabled = false; btn.innerHTML = '<span class="ts-drawn-icon image" aria-hidden="true"><i></i></span> Pfp all'; }
-    }
+      const ok = r.okCount || 0;
+      const fail = r.failCount || 0;
+      prog.done(ok, fail, (r.results || []).map(x => ({ name: x.name || x.appId, ok: x.ok, error: x.error })));
+    }).catch(e => {
+      prog.error(e.message || String(e));
+    }).finally(() => {
+      this._pfpAllRunning = false;
+      this._libModal?.querySelectorAll('#ts-lib-pfp-all').forEach(b => { b.disabled = false; });
+    });
   }
 
   _renderStatus(s, meta) {
@@ -1655,17 +1684,139 @@ export class TrueStudioManager {
 
   async _applyIntentsAll(enabled = true) {
     if (!this.selectedEmail) { showNotification(t('ts.pick_account_first'), 'error'); return; }
-    const ok = await showConfirm(`${enabled ? 'تفعيل' : 'إيقاف'} الثلاث Privileged Intents لكل بوتات المكتبة؟`, { confirmText: enabled ? 'iNTeNT ALl' : 'Disable all' });
-    if (!ok) return;
+    if (this._intentsAllRunning) { showNotification('iNTeNT ALl جاري التنفيذ بالفعل…', 'info'); return; }
+    const confirmed = await showConfirm(
+      `${enabled ? 'تفعيل' : 'إيقاف'} الثلاث Privileged Intents لكل بوتات المكتبة؟`,
+      { confirmText: enabled ? 'iNTeNT ALl' : 'Disable all', cancelText: 'إلغاء' }
+    );
+    if (!confirmed) return;
+
+    // Collect all bots from library
+    const allBots = [
+      ...(this.library?.personal || []).filter(a => a.isBot),
+      ...(this.library?.teams || []).flatMap(tm => (tm.apps || []).filter(a => a.isBot)),
+    ];
+    if (!allBots.length) { showNotification('لا توجد بوتات في المكتبة', 'error'); return; }
+
+    this._intentsAllRunning = true;
     const btn = this._libModal?.querySelector('#ts-lib-intents-all');
-    if (btn) { btn.disabled = true; btn.textContent = 'جاري التنفيذ…'; }
-    try {
-      const r = await window.electronAPI.tsApplyIntentsAll(this.selectedEmail, enabled);
-      if (!r?.success && r?.error) throw new Error(r.error);
-      showNotification(`iNTeNT ALl: نجاح ${r.okCount || 0} / فشل ${r.failCount || 0}`, (r.failCount || 0) ? 'info' : 'success');
-      await this.loadLibrary();
-    } catch (e) { showNotification('فشل iNTeNT ALl: ' + (e.message || e), 'error'); }
-    finally { if (btn) { btn.disabled = false; btn.textContent = 'iNTeNT ALl'; } }
+    if (btn) { btn.disabled = true; }
+    const prog = this._openBatchProgressModal(
+      `⚡ iNTeNT ALl`,
+      `${enabled ? 'تفعيل' : 'إيقاف'} Privileged Intents على ${allBots.length} بوت`
+    );
+    prog.setTotal(allBots.length);
+
+    let okCount = 0;
+    let failCount = 0;
+    const results = [];
+
+    // Process bots one-by-one — non-blocking between each bot
+    (async () => {
+      for (let i = 0; i < allBots.length; i++) {
+        const bot = allBots[i];
+        prog.setStatus(`⏳ ${bot.name || bot.id} (${i + 1}/${allBots.length})`);
+        try {
+          await window.electronAPI.tsSetIntents(bot.id, this.selectedEmail, enabled);
+          okCount++;
+          results.push({ name: bot.name || bot.id, ok: true });
+          prog.logLine('✓', bot.name || bot.id);
+        } catch (e) {
+          failCount++;
+          const msg = e?.message || String(e);
+          results.push({ name: bot.name || bot.id, ok: false, error: msg });
+          prog.logLine('✗', bot.name || bot.id, msg);
+        }
+        prog.setProgress(i + 1, allBots.length);
+        // Small yield to keep UI responsive between requests
+        await new Promise(r => setTimeout(r, 120));
+      }
+      prog.done(okCount, failCount, results);
+      this._intentsAllRunning = false;
+      if (btn) { btn.disabled = false; }
+      // Refresh library to reflect new intents state
+      if (okCount > 0) this.loadLibrary().catch(() => {});
+    })();
+  }
+
+  // ─── Generic batch progress modal (used by intents all + pfp all) ─────────
+  _openBatchProgressModal(title, subtitle = '') {
+    document.querySelector('.ts-batch-prog-overlay')?.remove();
+    const wrap = document.createElement('div');
+    wrap.className = 'ts-batch-prog-overlay';
+    wrap.innerHTML = `
+      <div class="ts-batch-prog-card">
+        <div class="ts-batch-prog-header">
+          <div class="ts-batch-prog-title">${title}</div>
+          ${subtitle ? `<div class="ts-batch-prog-sub">${subtitle}</div>` : ''}
+        </div>
+        <div class="ts-batch-prog-bar-wrap">
+          <div class="ts-batch-prog-bar" id="ts-bp-bar" style="width:0%"></div>
+        </div>
+        <div class="ts-batch-prog-counts" id="ts-bp-counts">جاري التحضير…</div>
+        <div class="ts-batch-prog-status" id="ts-bp-status"></div>
+        <div class="ts-batch-prog-log" id="ts-bp-log"></div>
+        <button class="ts-btn ts-batch-prog-close" id="ts-bp-close" style="display:none">✓ إغلاق</button>
+      </div>
+    `;
+    document.body.appendChild(wrap);
+    requestAnimationFrame(() => wrap.classList.add('open'));
+
+    let total = 0;
+    const log = wrap.querySelector('#ts-bp-log');
+    const addLogLine = (icon, name, note = '') => {
+      const line = document.createElement('div');
+      line.className = 'ts-bp-log-line' + (icon === '✓' ? ' ok' : icon === '✗' ? ' fail' : '');
+      line.textContent = `${icon} ${name}${note ? ' — ' + note.slice(0, 90) : ''}`;
+      log.prepend(line);
+      if (log.children.length > 60) log.lastChild?.remove();
+    };
+
+    wrap.querySelector('#ts-bp-close').addEventListener('click', () => {
+      wrap.classList.remove('open');
+      setTimeout(() => wrap.remove(), 280);
+    });
+
+    return {
+      setTotal(n) {
+        total = n;
+        wrap.querySelector('#ts-bp-counts').textContent = `0 / ${n}`;
+      },
+      setStatus(msg) {
+        const el = wrap.querySelector('#ts-bp-status');
+        if (el) el.textContent = msg;
+      },
+      setProgress(done, tot) {
+        total = tot || total;
+        const pct = total ? Math.round((done / total) * 100) : 0;
+        const bar = wrap.querySelector('#ts-bp-bar');
+        if (bar) bar.style.width = pct + '%';
+        wrap.querySelector('#ts-bp-counts').textContent = `${done} / ${total}`;
+      },
+      logLine(icon, name, note = '') { addLogLine(icon, name, note); },
+      done(ok, fail, items = []) {
+        const bar = wrap.querySelector('#ts-bp-bar');
+        if (bar) { bar.style.width = '100%'; bar.classList.add('done'); }
+        const status = wrap.querySelector('#ts-bp-status');
+        if (status) {
+          status.innerHTML = `<span class="ts-bp-ok">✓ ${ok} نجاح</span>  <span class="ts-bp-fail">✗ ${fail} فشل</span>`;
+        }
+        // Log all results if not already logged
+        if (!items.some(x => log.textContent.includes(x.name))) {
+          items.forEach(x => addLogLine(x.ok ? '✓' : '✗', x.name, x.error));
+        }
+        const closeBtn = wrap.querySelector('#ts-bp-close');
+        if (closeBtn) closeBtn.style.display = '';
+        // Auto-close after 6s if all succeeded
+        if (fail === 0) setTimeout(() => { wrap.classList.remove('open'); setTimeout(() => wrap.remove(), 280); }, 5000);
+      },
+      error(msg) {
+        const status = wrap.querySelector('#ts-bp-status');
+        if (status) status.innerHTML = `<span class="ts-bp-fail">✗ ${msg}</span>`;
+        const closeBtn = wrap.querySelector('#ts-bp-close');
+        if (closeBtn) closeBtn.style.display = '';
+      },
+    };
   }
 
   // Wire up the per-card "Reset Token" buttons inside the library overlay.
@@ -2317,7 +2468,7 @@ export class TrueStudioManager {
         data-intents-bot="${escapeAttr(a.id)}"
         data-bot-name="${escapeAttr(a.name)}"
         title="رؤية/تفعيل/إيقاف Privileged Intents الثلاثة">
-        <span class="ts-drawn-icon bolt" aria-hidden="true"><i></i></span> iNTeNT
+        <span class="ts-card-intents-icon">⚡</span> iNTeNT
       </button>` : '';
     const moveBtn = opts.showMoveToTeam ? `
       <button class="ts-card-move-team" type="button"
@@ -2818,7 +2969,7 @@ export class TrueStudioManager {
     $('#ts-stop')?.addEventListener('click', () => this.stopSession());
     $('#ts-pfp-save')?.addEventListener('click', () => this._savePfpFromInputs(false));
     $('#ts-pfp-clear')?.addEventListener('click', () => this._savePfpFromInputs(true));
-    $('#ts-pfp-all')?.addEventListener('click', () => this._applyPfpAll());
+    $('#ts-pfp-preview-btn')?.addEventListener('click', () => this.togglePfpPreview());
 
     // Captcha settings
     $('#ts-captcha-save')?.addEventListener('click', () => this.saveCaptchaSettings());
