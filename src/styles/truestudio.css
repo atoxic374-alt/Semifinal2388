@@ -2508,6 +2508,60 @@
 .ts-pfp-orbit.two i { inset: 14%; border-radius: 4px; transform: rotate(45deg); background: #dfe4ff; }
 @media (prefers-reduced-motion: reduce) {
   .ts-drawn-icon.brush { animation: none !important; }
+  .ts-batch-prog-bar.indeterminate { animation: none !important; }
+}
+
+/* ── Intent "already ON" state on bot cards ────────────────────────── */
+.ts-card-intents.intents-on {
+  border-color: rgba(124,224,196,.45);
+  background: rgba(124,224,196,.15);
+  color: var(--ts-mint, #7ce0c4);
+}
+.ts-card-intents.intents-on:hover {
+  background: rgba(124,224,196,.26);
+  border-color: rgba(124,224,196,.7);
+}
+.ts-intent-on-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ts-mint, #7ce0c4);
+  box-shadow: 0 0 6px rgba(124,224,196,.8);
+  vertical-align: middle;
+  margin-inline-start: 2px;
+  flex-shrink: 0;
+}
+
+/* ── Auto-intents toggle row (inside pfp card) ─────────────────────── */
+.ts-auto-intents-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 6px;
+  padding: 10px 12px;
+  border: 1px solid rgba(88,101,242,.2);
+  border-radius: 12px;
+  background: rgba(88,101,242,.06);
+}
+.ts-auto-intents-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: #c5cbff;
+  font-weight: 600;
+}
+.ts-auto-intents-icon { font-size: 14px; line-height: 1; }
+.ts-auto-intents-row .ts-btn {
+  min-width: 56px;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 5px 12px;
+  border-radius: 999px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 /* ── Pfp preview toggle ────────────────────────────────────────────────── */
@@ -2551,9 +2605,9 @@
   align-items: flex-end;
   justify-content: flex-end;
   padding: 24px;
-  pointer-events: none;
+  pointer-events: none; /* overlay itself never blocks; only the card below is interactive */
 }
-.ts-batch-prog-overlay.open { pointer-events: all; }
+.ts-batch-prog-overlay.open { pointer-events: none; } /* keep overlay transparent to clicks */
 .ts-batch-prog-card {
   width: min(420px, calc(100vw - 32px));
   background: linear-gradient(160deg, rgba(18,22,36,.98), rgba(11,14,24,.98));
@@ -2567,6 +2621,7 @@
   transform: translateY(120px) scale(.96);
   opacity: 0;
   transition: transform .3s cubic-bezier(.34,1.56,.64,1), opacity .24s ease;
+  pointer-events: all; /* card itself is always interactive even though overlay isn't */
 }
 .ts-batch-prog-overlay.open .ts-batch-prog-card {
   transform: translateY(0) scale(1);
@@ -2596,6 +2651,16 @@
   transition: width .35s cubic-bezier(.4,0,.2,1);
 }
 .ts-batch-prog-bar.done { background: linear-gradient(90deg, #7ce0c4, #43d391); }
+/* Indeterminate: animated shimmer while waiting for server */
+.ts-batch-prog-bar.indeterminate {
+  background: linear-gradient(90deg, transparent 0%, #7ce0c4 40%, #5865f2 60%, transparent 100%);
+  background-size: 200% 100%;
+  animation: ts-bp-shimmer 1.6s linear infinite;
+}
+@keyframes ts-bp-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
 .ts-batch-prog-counts {
   font-size: 12px;
   color: var(--ts-muted, #8a93a4);
@@ -2611,6 +2676,7 @@
 }
 .ts-bp-ok { color: var(--ts-mint, #7ce0c4); font-weight: 700; }
 .ts-bp-fail { color: #ff6b7b; font-weight: 700; }
+.ts-bp-skip { color: #8a93a4; font-weight: 700; }
 .ts-batch-prog-log {
   max-height: 130px;
   overflow-y: auto;

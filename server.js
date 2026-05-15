@@ -3744,16 +3744,41 @@ const ts = require('./lib/trueStudio');
     try {
       const p = tsPfpSettings();
       if (!p.avatar && !p.banner) throw new Error('Save an avatar or banner first');
-      const list = await botTokensStore.get() || [];
+      const email = String(req.body?.email || '').toLowerCase();
       const results = [];
-      for (const b of list) {
-        try {
-          await ts.updateBotProfile({ botToken: b.token, avatar: p.avatar || undefined, banner: p.banner || undefined });
-          results.push({ appId: b.appId, name: b.name, ok: true });
-          await ts.humanDelay(800, 1600);
-        } catch (e) {
-          results.push({ appId: b.appId, name: b.name, ok: false, error: e.message || String(e), status: e.status || 0, code: e.code || '' });
-          if (e.status === 429) await ts.humanDelay(3000, 5000);
+
+      if (email) {
+        // Primary path: use owner account token — updates ALL library bots without needing their tokens
+        const { token, client } = await tsGetToken(email);
+        const netOpts = { client };
+        const health = await ts.accountHealthProbe({ token, netOpts });
+        if (!health.ok) return fail(res, new Error('Account blocked: ' + health.message));
+        const libApps = await ts.listApplications({ token, netOpts });
+        const bots = libApps.filter(a => a && a.bot && a.id);
+        if (!bots.length) throw new Error('لا توجد بوتات في المكتبة');
+        for (const bot of bots) {
+          try {
+            await ts.updateBotProfileViaOwner({ token, appId: bot.id, avatar: p.avatar || undefined, banner: p.banner || undefined, netOpts });
+            results.push({ appId: bot.id, name: bot.name, ok: true });
+            await ts.humanDelay(600, 1200);
+          } catch (e) {
+            results.push({ appId: bot.id, name: bot.name, ok: false, error: e.message || String(e), status: e.status || 0 });
+            if (e.status === 429) await ts.humanDelay(3000, 5000);
+          }
+        }
+      } else {
+        // Legacy fallback: use saved bot tokens from botTokensStore
+        const list = await botTokensStore.get() || [];
+        if (!list.length) throw new Error('لا توجد توكنات محفوظة — اختر حساباً أو احفظ التوكنات عبر Reset Token');
+        for (const b of list) {
+          try {
+            await ts.updateBotProfile({ botToken: b.token, avatar: p.avatar || undefined, banner: p.banner || undefined });
+            results.push({ appId: b.appId, name: b.name, ok: true });
+            await ts.humanDelay(800, 1600);
+          } catch (e) {
+            results.push({ appId: b.appId, name: b.name, ok: false, error: e.message || String(e), status: e.status || 0, code: e.code || '' });
+            if (e.status === 429) await ts.humanDelay(3000, 5000);
+          }
         }
       }
       ok(res, { results, okCount: results.filter(r => r.ok).length, failCount: results.filter(r => !r.ok).length });
@@ -3799,16 +3824,47 @@ const ts = require('./lib/trueStudio');
       const bots = libApps.filter(a => a && a.bot && a.id);
       const results = [];
       for (const appObj of bots) {
+        // Skip bots already in the desired state
+        const currentState = ts.normalizeIntentState(appObj);
+        const allEnabled = Object.values(currentState.state || {}).every(s => s.enabled);
+        if (enabled && allEnabled) {
+          results.push({ appId: appObj.id, name: appObj.name, ok: true, skipped: true });
+          continue;
+        }
+        const allDisabled = Object.values(currentState.state || {}).every(s => !s.enabled);
+        if (!enabled && allDisabled) {
+          results.push({ appId: appObj.id, name: appObj.name, ok: true, skipped: true });
+          continue;
+        }
         try {
           const updated = await ts.setApplicationIntents({ token, appId: appObj.id, enabled, netOpts: { client } });
-          results.push({ appId: appObj.id, name: appObj.name, ok: true, intents: ts.normalizeIntentState(updated) });
+          results.push({ appId: appObj.id, name: appObj.name, ok: true, skipped: false, intents: ts.normalizeIntentState(updated) });
           await ts.humanDelay(700, 1400);
         } catch (e) {
-          results.push({ appId: appObj.id, name: appObj.name, ok: false, error: e.message || String(e), status: e.status || 0, code: e.code || '' });
+          results.push({ appId: appObj.id, name: appObj.name, ok: false, skipped: false, error: e.message || String(e), status: e.status || 0, code: e.code || '' });
           if (e.status === 429) await ts.humanDelay(3000, 5000);
         }
       }
-      ok(res, { results, okCount: results.filter(r => r.ok).length, failCount: results.filter(r => !r.ok).length, health });
+      const okCount = results.filter(r => r.ok).length;
+      const failCount = results.filter(r => !r.ok).length;
+      const skippedCount = results.filter(r => r.skipped).length;
+      ok(res, { results, okCount, failCount, skippedCount, health });
+    } catch (e) { fail(res, e); }
+  });
+
+  // Auto-intents setting: when ON, any new bot created via the session gets all 3 intents enabled automatically
+  app.get('/api/ts/auto-intents', (req, res) => {
+    try {
+      const d = ensureData();
+      ok(res, { autoIntents: !!d.tsAutoIntents });
+    } catch (e) { fail(res, e); }
+  });
+
+  app.post('/api/ts/auto-intents', (req, res) => {
+    try {
+      const d = ensureData();
+      d.tsAutoIntents = !!req.body?.enabled;
+      ok(res, { autoIntents: d.tsAutoIntents });
     } catch (e) { fail(res, e); }
   });
 
@@ -4703,6 +4759,16 @@ const ts = require('./lib/trueStudio');
               tsLog('success', 'تم تطبيق Pfp المحفوظ على ' + name);
             } catch (e) {
               tsLog('warn', 'تعذر تطبيق Pfp على ' + name + ': ' + (e.message || e));
+            }
+          }
+
+          // Auto-intents: if the setting is on, enable all 3 Privileged Intents right after creation
+          if (!!(ensureData().tsAutoIntents)) {
+            try {
+              await ts.setApplicationIntents({ token, appId: appPayload.id, enabled: true, netOpts: botNetOpts });
+              tsLog('success', 'تم تفعيل iNTeNTs تلقائياً على ' + name);
+            } catch (e) {
+              tsLog('warn', 'تعذر تفعيل iNTeNTs على ' + name + ': ' + (e.message || e));
             }
           }
 

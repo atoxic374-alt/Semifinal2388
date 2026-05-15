@@ -61,6 +61,7 @@ export class TrueStudioManager {
     this._pfpPreviewVisible = false;  // toggle pfp preview section
     this._intentsAllRunning = false;  // guard: only one intents-all at a time
     this._pfpAllRunning = false;      // guard: only one pfp-all at a time
+    this._autoIntents = false;        // auto-enable intents when creating new bots
     this.pfp = { avatar: null, banner: null, updatedAt: 0 };
   }
 
@@ -70,6 +71,7 @@ export class TrueStudioManager {
       await this._loadCaptchaSettings();
       await this._loadBotTokens();
       await this._loadPfp();
+      await this._loadAutoIntents();
       this.openSSE();
       this._startCountdownTicker();
       this._inited = true;
@@ -565,6 +567,16 @@ export class TrueStudioManager {
           <button class="ts-btn mint ts-pfp-save" id="ts-pfp-save"><span class="ts-drawn-icon save" aria-hidden="true"><i></i></span> حفظ Pfp</button>
           <span class="ts-field-hint ts-pfp-save-hint"><span class="ts-drawn-icon clock" aria-hidden="true"><i></i></span> آخر حفظ: ${escapeHtml(stamp)}</span>
         </div>
+        <div class="ts-auto-intents-row">
+          <span class="ts-auto-intents-label">
+            <span class="ts-auto-intents-icon">⚡</span>
+            تفعيل iNTeNT تلقائياً عند إنشاء أي بوت جديد
+          </span>
+          <button class="ts-btn${this._autoIntents ? ' mint' : ''}" id="ts-auto-intents-btn"
+            title="${this._autoIntents ? 'مفعّل — كل بوت جديد سيحصل على Intents تلقائياً' : 'معطّل'}">
+            ${this._autoIntents ? 'ON ✓' : 'OFF'}
+          </button>
+        </div>
       </div>
     `;
   }
@@ -596,6 +608,29 @@ export class TrueStudioManager {
       const r = await window.electronAPI.tsGetPfp();
       this.pfp = r?.pfp || { avatar: null, banner: null, updatedAt: 0 };
     } catch (_) { this.pfp = { avatar: null, banner: null, updatedAt: 0 }; }
+  }
+
+  async _loadAutoIntents() {
+    try {
+      const r = await window.electronAPI.tsGetAutoIntents();
+      this._autoIntents = !!r?.autoIntents;
+    } catch (_) { this._autoIntents = false; }
+  }
+
+  async _toggleAutoIntents() {
+    const next = !this._autoIntents;
+    try {
+      await window.electronAPI.tsSetAutoIntents(next);
+      this._autoIntents = next;
+      // Update button without re-rendering everything
+      const btn = this.contentArea.querySelector('#ts-auto-intents-btn');
+      if (btn) {
+        btn.classList.toggle('mint', next);
+        btn.textContent = next ? 'ON ✓' : 'OFF';
+        btn.title = next ? 'مفعّل — كل بوت جديد سيحصل على Intents تلقائياً' : 'معطّل';
+      }
+      showNotification(next ? '⚡ Auto-intents مفعّل' : 'Auto-intents معطّل', next ? 'success' : 'info');
+    } catch (e) { showNotification('فشل تغيير Auto-intents: ' + (e.message || e), 'error'); }
   }
 
   async _savePfpFromInputs(clear = false) {
@@ -639,19 +674,24 @@ export class TrueStudioManager {
   async _applyPfpAll() {
     if (!this.pfp?.avatar && !this.pfp?.banner) { showNotification('احفظ Avatar أو Banner أولاً', 'error'); return; }
     if (this._pfpAllRunning) { showNotification('Pfp all جاري التنفيذ بالفعل…', 'info'); return; }
-    const confirmed = await showConfirm('تطبيق الصورة والبنر المحفوظين على كل Bot Tokens المحفوظة؟', { confirmText: 'Pfp all', cancelText: 'إلغاء' });
+    if (!this.selectedEmail) { showNotification('اختر حساباً أولاً لتطبيق Pfp all', 'error'); return; }
+    const confirmed = await showConfirm('تطبيق الصورة والبنر المحفوظين على كل بوتات المكتبة؟', { confirmText: 'Pfp all', cancelText: 'إلغاء' });
     if (!confirmed) return;
     this._pfpAllRunning = true;
-    // Disable all pfp-all buttons
     this._libModal?.querySelectorAll('#ts-lib-pfp-all').forEach(b => { b.disabled = true; });
-    const prog = this._openBatchProgressModal('🖼 Pfp all', 'تطبيق الصورة والبانر على البوتات…');
-    // Non-blocking: fire and forget, update modal when done
-    window.electronAPI.tsApplyPfpAll().then(r => {
+    const prog = this._openBatchProgressModal('🖼 Pfp all', 'تطبيق الصورة والبانر على بوتات المكتبة…');
+    prog.setIndeterminate(true);
+    prog.setStatus('⏳ جاري تحميل المكتبة وتطبيق Pfp…');
+    // Non-blocking: server handles all bots using owner account token
+    window.electronAPI.tsApplyPfpAll(this.selectedEmail).then(r => {
       if (!r?.success && r?.error) throw new Error(r.error);
+      prog.setIndeterminate(false);
       const ok = r.okCount || 0;
       const fail = r.failCount || 0;
+      if (ok + fail === 0) throw new Error('لا توجد بوتات في المكتبة');
       prog.done(ok, fail, (r.results || []).map(x => ({ name: x.name || x.appId, ok: x.ok, error: x.error })));
     }).catch(e => {
+      prog.setIndeterminate(false);
       prog.error(e.message || String(e));
     }).finally(() => {
       this._pfpAllRunning = false;
@@ -1686,57 +1726,41 @@ export class TrueStudioManager {
     if (!this.selectedEmail) { showNotification(t('ts.pick_account_first'), 'error'); return; }
     if (this._intentsAllRunning) { showNotification('iNTeNT ALl جاري التنفيذ بالفعل…', 'info'); return; }
     const confirmed = await showConfirm(
-      `${enabled ? 'تفعيل' : 'إيقاف'} الثلاث Privileged Intents لكل بوتات المكتبة؟`,
+      `${enabled ? 'تفعيل' : 'إيقاف'} الثلاث Privileged Intents لكل بوتات المكتبة؟ (البوتات المفعّلة بالفعل ستُتخطى تلقائياً)`,
       { confirmText: enabled ? 'iNTeNT ALl' : 'Disable all', cancelText: 'إلغاء' }
     );
     if (!confirmed) return;
 
-    // Collect all bots from library
-    const allBots = [
-      ...(this.library?.personal || []).filter(a => a.isBot),
-      ...(this.library?.teams || []).flatMap(tm => (tm.apps || []).filter(a => a.isBot)),
-    ];
-    if (!allBots.length) { showNotification('لا توجد بوتات في المكتبة', 'error'); return; }
-
     this._intentsAllRunning = true;
     const btn = this._libModal?.querySelector('#ts-lib-intents-all');
     if (btn) { btn.disabled = true; }
+
     const prog = this._openBatchProgressModal(
       `⚡ iNTeNT ALl`,
-      `${enabled ? 'تفعيل' : 'إيقاف'} Privileged Intents على ${allBots.length} بوت`
+      `${enabled ? 'تفعيل' : 'إيقاف'} Privileged Intents — الخادم يعالج كل البوتات`
     );
-    prog.setTotal(allBots.length);
+    prog.setIndeterminate(true);
+    prog.setStatus('⏳ جاري الاتصال بالخادم وقراءة المكتبة…');
 
-    let okCount = 0;
-    let failCount = 0;
-    const results = [];
-
-    // Process bots one-by-one — non-blocking between each bot
-    (async () => {
-      for (let i = 0; i < allBots.length; i++) {
-        const bot = allBots[i];
-        prog.setStatus(`⏳ ${bot.name || bot.id} (${i + 1}/${allBots.length})`);
-        try {
-          await window.electronAPI.tsSetIntents(bot.id, this.selectedEmail, enabled);
-          okCount++;
-          results.push({ name: bot.name || bot.id, ok: true });
-          prog.logLine('✓', bot.name || bot.id);
-        } catch (e) {
-          failCount++;
-          const msg = e?.message || String(e);
-          results.push({ name: bot.name || bot.id, ok: false, error: msg });
-          prog.logLine('✗', bot.name || bot.id, msg);
-        }
-        prog.setProgress(i + 1, allBots.length);
-        // Small yield to keep UI responsive between requests
-        await new Promise(r => setTimeout(r, 120));
-      }
-      prog.done(okCount, failCount, results);
+    // Single server call: one health probe + process all bots with skip-already-enabled logic
+    window.electronAPI.tsApplyIntentsAll(this.selectedEmail, enabled).then(r => {
+      if (!r?.success && r?.error) throw new Error(r.error);
+      prog.setIndeterminate(false);
+      const ok       = r.okCount      || 0;
+      const fail     = r.failCount    || 0;
+      const skipped  = r.skippedCount || 0;
+      const items = (r.results || []).map(x => ({
+        name: x.name || x.appId, ok: x.ok, skipped: !!x.skipped, error: x.error,
+      }));
+      prog.done(ok, fail, items, skipped);
+      if ((ok - skipped) > 0) this.loadLibrary().catch(() => {});
+    }).catch(e => {
+      prog.setIndeterminate(false);
+      prog.error(e.message || String(e));
+    }).finally(() => {
       this._intentsAllRunning = false;
       if (btn) { btn.disabled = false; }
-      // Refresh library to reflect new intents state
-      if (okCount > 0) this.loadLibrary().catch(() => {});
-    })();
+    });
   }
 
   // ─── Generic batch progress modal (used by intents all + pfp all) ─────────
@@ -1786,6 +1810,17 @@ export class TrueStudioManager {
         const el = wrap.querySelector('#ts-bp-status');
         if (el) el.textContent = msg;
       },
+      setIndeterminate(on) {
+        const bar = wrap.querySelector('#ts-bp-bar');
+        if (!bar) return;
+        if (on) {
+          bar.classList.add('indeterminate');
+          bar.style.width = '100%';
+        } else {
+          bar.classList.remove('indeterminate');
+          bar.style.width = '0%';
+        }
+      },
       setProgress(done, tot) {
         total = tot || total;
         const pct = total ? Math.round((done / total) * 100) : 0;
@@ -1794,23 +1829,30 @@ export class TrueStudioManager {
         wrap.querySelector('#ts-bp-counts').textContent = `${done} / ${total}`;
       },
       logLine(icon, name, note = '') { addLogLine(icon, name, note); },
-      done(ok, fail, items = []) {
+      done(ok, fail, items = [], skipped = 0) {
         const bar = wrap.querySelector('#ts-bp-bar');
-        if (bar) { bar.style.width = '100%'; bar.classList.add('done'); }
+        if (bar) { bar.classList.remove('indeterminate'); bar.style.width = '100%'; bar.classList.add('done'); }
         const status = wrap.querySelector('#ts-bp-status');
         if (status) {
-          status.innerHTML = `<span class="ts-bp-ok">✓ ${ok} نجاح</span>  <span class="ts-bp-fail">✗ ${fail} فشل</span>`;
+          const skippedPart = skipped > 0 ? `  <span class="ts-bp-skip">↷ ${skipped} تم تخطيه</span>` : '';
+          status.innerHTML = `<span class="ts-bp-ok">✓ ${ok - skipped} نجاح</span>${skippedPart}  <span class="ts-bp-fail">✗ ${fail} فشل</span>`;
         }
-        // Log all results if not already logged
-        if (!items.some(x => log.textContent.includes(x.name))) {
-          items.forEach(x => addLogLine(x.ok ? '✓' : '✗', x.name, x.error));
+        // Log results (only if not already populated)
+        const logEl = wrap.querySelector('#ts-bp-log');
+        if (logEl && !logEl.children.length) {
+          [...items].reverse().forEach(x => {
+            if (x.skipped) addLogLine('↷', x.name, 'مفعّل بالفعل');
+            else addLogLine(x.ok ? '✓' : '✗', x.name, x.error);
+          });
         }
         const closeBtn = wrap.querySelector('#ts-bp-close');
         if (closeBtn) closeBtn.style.display = '';
-        // Auto-close after 6s if all succeeded
+        // Auto-close after 5s only if nothing failed
         if (fail === 0) setTimeout(() => { wrap.classList.remove('open'); setTimeout(() => wrap.remove(), 280); }, 5000);
       },
       error(msg) {
+        const bar = wrap.querySelector('#ts-bp-bar');
+        if (bar) bar.classList.remove('indeterminate');
         const status = wrap.querySelector('#ts-bp-status');
         if (status) status.innerHTML = `<span class="ts-bp-fail">✗ ${msg}</span>`;
         const closeBtn = wrap.querySelector('#ts-bp-close');
@@ -2463,12 +2505,20 @@ export class TrueStudioManager {
         <span class="ts-card-reset-icon" aria-hidden="true">⟳</span>
         <span class="ts-card-reset-label">${escapeHtml(t('ts.reset_token'))}</span>
       </button>` : '';
+    // Check if all 3 privileged intents are already enabled (limited or approved flags)
+    const _INTENT_LIMITED = (1 << 13) | (1 << 15) | (1 << 19); // 8192|32768|524288
+    const _INTENT_APPROVED = (1 << 12) | (1 << 14) | (1 << 18); // 4096|16384|262144
+    const _flags = Number(a.flags_new || a.flags || 0);
+    const _hasAllIntents = a.isBot && (
+      (_flags & _INTENT_LIMITED) === _INTENT_LIMITED ||
+      ((_flags & 4096) && (_flags & 16384) && (_flags & 262144))
+    );
     const intentBtn = a.isBot ? `
-      <button class="ts-card-intents" type="button"
+      <button class="ts-card-intents${_hasAllIntents ? ' intents-on' : ''}" type="button"
         data-intents-bot="${escapeAttr(a.id)}"
         data-bot-name="${escapeAttr(a.name)}"
-        title="رؤية/تفعيل/إيقاف Privileged Intents الثلاثة">
-        <span class="ts-card-intents-icon">⚡</span> iNTeNT
+        title="${_hasAllIntents ? 'Intents مفعّلة ✓ — اضغط للتفاصيل' : 'رؤية/تفعيل/إيقاف Privileged Intents الثلاثة'}">
+        <span class="ts-card-intents-icon">⚡</span> iNTeNT${_hasAllIntents ? ' <span class="ts-intent-on-dot"></span>' : ''}
       </button>` : '';
     const moveBtn = opts.showMoveToTeam ? `
       <button class="ts-card-move-team" type="button"
@@ -2970,6 +3020,7 @@ export class TrueStudioManager {
     $('#ts-pfp-save')?.addEventListener('click', () => this._savePfpFromInputs(false));
     $('#ts-pfp-clear')?.addEventListener('click', () => this._savePfpFromInputs(true));
     $('#ts-pfp-preview-btn')?.addEventListener('click', () => this.togglePfpPreview());
+    $('#ts-auto-intents-btn')?.addEventListener('click', () => this._toggleAutoIntents());
 
     // Captcha settings
     $('#ts-captcha-save')?.addEventListener('click', () => this.saveCaptchaSettings());
