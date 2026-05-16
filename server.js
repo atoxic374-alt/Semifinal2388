@@ -3958,16 +3958,103 @@ const ts = require('./lib/trueStudio');
 
     try {
       if (!email || !appId || !guildId) throw new Error('email و appId و guildId مطلوبون');
-      send({ type: 'step', msg: '🔍 جاري التحقق من الحساب…' });
+      send({ type: 'step', msg: 'جاري التحقق من الحساب…' });
       const { token, client } = await tsGetToken(email);
       const netOpts = { client };
       const health = await ts.accountHealthProbe({ token, netOpts });
       if (!health.ok) throw new Error('Account blocked: ' + health.message);
 
-      send({ type: 'step', msg: '🤖 جاري إضافة البوت إلى السيرفر…' });
+      send({ type: 'step', msg: 'جاري إضافة البوت إلى السيرفر…' });
       await ts.addBotToGuild({ token, clientId: appId, guildId, permissions: String(permissions), netOpts });
 
       send({ type: 'done', appId, guildId });
+    } catch (e) {
+      send({ type: 'error', error: e.message || String(e) });
+    } finally {
+      endSSE();
+    }
+  });
+
+  /* ── Bulk add: add multiple bots to one guild via SSE ─────────────── */
+  app.post('/api/ts/bot-bulk-add-to-guild', async (req, res) => {
+    const { email, appIds, guildId, permissions = '8' } = req.body || {};
+
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    const send   = obj => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(obj)}\n\n`); };
+    const endSSE = ()  => { if (!res.writableEnded) res.end(); };
+
+    try {
+      if (!email || !Array.isArray(appIds) || !appIds.length || !guildId)
+        throw new Error('email, appIds[], و guildId مطلوبون');
+
+      const { token, client } = await tsGetToken(email);
+      const netOpts = { client };
+
+      const health = await ts.accountHealthProbe({ token, netOpts });
+      if (!health.ok) throw new Error('Account blocked: ' + health.message);
+
+      send({ type: 'start', total: appIds.length });
+
+      let okCount = 0, failCount = 0, skipCount = 0;
+
+      for (let i = 0; i < appIds.length; i++) {
+        const appId = appIds[i];
+        let succeeded = false;
+        let lastErr   = null;
+        let skipped   = false;
+
+        /* --- retry loop: up to 3 attempts on 429 --- */
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            await ts.addBotToGuild({ token, clientId: appId, guildId, permissions: String(permissions), netOpts });
+            succeeded = true;
+            okCount++;
+            break;
+          } catch (e) {
+            if (e.status === 429 || e.code === 'RATE_LIMITED') {
+              const retryMs = Math.max(Number(e.retryAfter || e.data?.retry_after || 5) * 1000, 1500);
+              send({ type: 'retry', index: i + 1, total: appIds.length, appId, attempt: attempt + 1, retryMs });
+              await new Promise(r => setTimeout(r, retryMs + 600));
+            } else if (e.status === 403) {
+              /* 403 = already in server or missing guild perms — treat as skip */
+              succeeded = true; skipped = true; okCount++; skipCount++;
+              lastErr = e;
+              break;
+            } else if (e.code === 'CAPTCHA' || e.captchaSitekey) {
+              lastErr = new Error('Captcha required — cannot auto-add this bot');
+              break;
+            } else {
+              lastErr = e;
+              break;
+            }
+          }
+        }
+
+        if (!succeeded && !skipped) failCount++;
+
+        send({
+          type:    'progress',
+          index:   i + 1,
+          total:   appIds.length,
+          appId,
+          ok:      succeeded,
+          skipped,
+          error:   (!succeeded && lastErr) ? (lastErr.message || String(lastErr)) : undefined,
+        });
+
+        /* safety delay between bots to respect rate limits */
+        if (i < appIds.length - 1) {
+          const delay = 700 + Math.floor(Math.random() * 700); /* 700–1400ms */
+          await new Promise(r => setTimeout(r, delay));
+        }
+      }
+
+      send({ type: 'done', okCount, failCount, skipCount });
     } catch (e) {
       send({ type: 'error', error: e.message || String(e) });
     } finally {

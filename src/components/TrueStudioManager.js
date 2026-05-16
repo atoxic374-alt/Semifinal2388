@@ -1538,6 +1538,11 @@ export class TrueStudioManager {
               title="تطبيق Pfp المحفوظ على Bot Tokens الحالية">
               <span class="ts-drawn-icon image" aria-hidden="true"><i></i></span> Pfp all
             </button>
+            <button class="ts-btn" id="ts-lib-bulk-invite"
+              ${!this.library ? 'disabled' : ''}
+              title="توليد روابط دعوة لكل البوتات وإضافتهم تلقائياً للسيرفرات">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-1px"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg> Bulk Invite
+            </button>
             <button class="ts-btn ts-reset-all-btn" id="ts-lib-reset-all"
               ${(!this.library || this._resetAllInFlight) ? 'disabled' : ''}
               title="${escapeAttr(t('ts.reset_all_title'))}"
@@ -1574,6 +1579,7 @@ export class TrueStudioManager {
     overlay.querySelector('#ts-lib-reset-all').addEventListener('click', () => this._resetAllBots());
     overlay.querySelector('#ts-lib-intents-all')?.addEventListener('click', () => this._applyIntentsAll(true));
     overlay.querySelector('#ts-lib-pfp-all')?.addEventListener('click', () => this._applyPfpAll());
+    overlay.querySelector('#ts-lib-bulk-invite')?.addEventListener('click', () => this._openBulkInviteModal());
     overlay.querySelector('#ts-lib-stop-all').addEventListener('click', async () => {
       try {
         await window.electronAPI.tsResetAllStop();
@@ -1718,11 +1724,28 @@ export class TrueStudioManager {
     });
   }
 
+  /* SVG icon helpers — used by invite modals (no emojis) */
+  _invIcons() {
+    return {
+      link:   `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>`,
+      copy:   `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`,
+      open:   `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>`,
+      reload: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4"/></svg>`,
+      plus:   `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`,
+      search: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>`,
+      crown:  `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><path d="M3 19h18M4.5 9l3.5 4 4-7 4 7 3.5-4L21 19H3z"/></svg>`,
+      check:  `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>`,
+      x:      `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`,
+      spin:   `<svg class="ts-icon-spin" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>`,
+    };
+  }
+
   _openInviteModal(appId, name) {
     document.querySelector('.ts-invite-overlay')?.remove();
     const overlay = document.createElement('div');
     overlay.className = 'ts-invite-overlay';
 
+    const ic = this._invIcons();
     const _buildUrl = (perms) =>
       `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(appId)}&scope=bot+applications.commands&permissions=${encodeURIComponent(perms || '8')}`;
 
@@ -1730,48 +1753,41 @@ export class TrueStudioManager {
       <div class="ts-invite-modal">
         <div class="ts-token-modal-head">
           <div class="ts-token-modal-title">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-inline-end:6px" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            ${ic.link}
             دعوة البوت · <span class="ts-invite-bot-name">${escapeHtml(name)}</span>
           </div>
           <button class="ts-token-modal-close" type="button" aria-label="close">×</button>
         </div>
         <div class="ts-invite-body">
 
-          <!-- ── Section 1: Invite URL ── -->
           <div class="ts-invite-section">
-            <div class="ts-invite-section-title">🔗 رابط الدعوة</div>
+            <div class="ts-invite-section-label">${ic.link} رابط الدعوة</div>
             <div class="ts-invite-perms-row">
               <label class="ts-invite-perms-label" for="ts-invite-perms">Permissions</label>
               <input type="number" id="ts-invite-perms" class="ts-invite-perms-input" value="8" min="0" title="8 = Administrator | 0 = بدون صلاحيات">
-              <button class="ts-btn ts-btn-xs" id="ts-invite-regen" title="إعادة توليد الرابط">↺</button>
+              <button class="ts-btn ts-btn-xs" id="ts-invite-regen" title="تحديث الرابط">${ic.reload}</button>
             </div>
             <div class="ts-invite-url-row">
-              <input type="text" id="ts-invite-url" class="ts-invite-url-input" readonly
-                value="${escapeAttr(_buildUrl('8'))}">
-              <button class="ts-btn ts-btn-xs" id="ts-invite-copy" title="نسخ الرابط">📋</button>
-              <a class="ts-btn ts-btn-xs" id="ts-invite-open" href="${escapeAttr(_buildUrl('8'))}" target="_blank" rel="noopener" title="فتح في المتصفح">↗</a>
+              <input type="text" id="ts-invite-url" class="ts-invite-url-input" readonly value="${escapeAttr(_buildUrl('8'))}">
+              <button class="ts-btn ts-btn-xs" id="ts-invite-copy" title="نسخ">${ic.copy}</button>
+              <a class="ts-btn ts-btn-xs" id="ts-invite-open" href="${escapeAttr(_buildUrl('8'))}" target="_blank" rel="noopener" title="فتح">${ic.open}</a>
             </div>
           </div>
 
-          <!-- ── Divider ── -->
-          <div class="ts-invite-divider">
-            <span>إضافة تلقائية من الحساب</span>
-          </div>
+          <div class="ts-invite-divider"><span>إضافة تلقائية من الحساب</span></div>
 
-          <!-- ── Section 2: Auto-add ── -->
           <div class="ts-invite-section">
             ${this.selectedEmail ? `
-              <input type="text" id="ts-invite-guild-search" class="ts-invite-search" placeholder="🔍 ابحث عن سيرفر…">
+              <div class="ts-invite-search-wrap">${ic.search}<input type="text" id="ts-invite-guild-search" class="ts-invite-search" placeholder="ابحث عن سيرفر…"></div>
               <div class="ts-invite-guild-list" id="ts-invite-guild-list">
-                <div class="ts-invite-guild-loading">⏳ جاري تحميل السيرفرات…</div>
+                <div class="ts-invite-guild-loading">${ic.spin} جاري التحميل…</div>
               </div>
               <button class="ts-btn mint ts-invite-add-btn" id="ts-invite-add-btn" disabled>
-                ➕ إضافة للسيرفر المختار
+                ${ic.plus} إضافة للسيرفر المختار
               </button>
             ` : `<div class="ts-invite-no-account">اختر حساباً من القائمة الرئيسية لتفعيل الإضافة التلقائية</div>`}
           </div>
 
-          <!-- ── Live Log ── -->
           <div class="ts-invite-log" id="ts-invite-log" style="display:none"></div>
         </div>
       </div>
@@ -1816,16 +1832,16 @@ export class TrueStudioManager {
     const logEl   = overlay.querySelector('#ts-invite-log');
     const searchEl = overlay.querySelector('#ts-invite-guild-search');
 
-    const renderGuilds = (guilds) => {
+    const _renderGuilds = (guilds) => {
       if (!listEl) return;
       if (!guilds.length) { listEl.innerHTML = '<div class="ts-invite-guild-empty">لا توجد سيرفرات بصلاحيات الإدارة</div>'; return; }
       listEl.innerHTML = guilds.map(g => `
-        <div class="ts-invite-guild-item${g.id === selectedGuildId ? ' selected' : ''}" data-guild-id="${escapeAttr(g.id)}" data-guild-name="${escapeAttr(g.name)}">
+        <div class="ts-invite-guild-item${g.id === selectedGuildId ? ' selected' : ''}" data-guild-id="${escapeAttr(g.id)}">
           ${g.icon
-            ? `<img class="ts-invite-guild-icon" src="${escapeAttr(g.icon)}" alt="" onerror="this.style.display='none'">`
+            ? `<img class="ts-invite-guild-icon" src="${escapeAttr(g.icon)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><span class="ts-invite-guild-icon ts-invite-guild-initials" style="display:none">${escapeHtml((g.name||'?')[0].toUpperCase())}</span>`
             : `<span class="ts-invite-guild-icon ts-invite-guild-initials">${escapeHtml((g.name||'?')[0].toUpperCase())}</span>`}
           <span class="ts-invite-guild-name">${escapeHtml(g.name)}</span>
-          ${g.owner ? '<span class="ts-invite-guild-owner">👑</span>' : ''}
+          ${g.owner ? `<span class="ts-invite-guild-crown">${ic.crown}</span>` : ''}
         </div>
       `).join('');
       listEl.querySelectorAll('.ts-invite-guild-item').forEach(item => {
@@ -1841,63 +1857,342 @@ export class TrueStudioManager {
     window.electronAPI.tsBotInviteGuilds(this.selectedEmail).then(r => {
       if (!r?.success) throw new Error(r?.error || 'فشل تحميل السيرفرات');
       allGuilds = r.guilds || [];
-      renderGuilds(allGuilds);
+      _renderGuilds(allGuilds);
     }).catch(e => {
-      if (listEl) listEl.innerHTML = `<div class="ts-invite-guild-empty" style="color:#ff6b7b">✗ ${escapeHtml(e.message)}</div>`;
+      if (listEl) listEl.innerHTML = `<div class="ts-invite-guild-empty" style="color:#ff6b7b">${ic.x} ${escapeHtml(e.message)}</div>`;
     });
 
-    // Search filter
     searchEl?.addEventListener('input', () => {
       const q = (searchEl.value || '').toLowerCase().trim();
-      renderGuilds(q ? allGuilds.filter(g => g.name.toLowerCase().includes(q)) : allGuilds);
+      _renderGuilds(q ? allGuilds.filter(g => g.name.toLowerCase().includes(q)) : allGuilds);
     });
 
-    // Add bot to guild (SSE)
-    const addLog = (icon, msg) => {
+    /* addLog: type = 'ok' | 'fail' | 'info' */
+    const addLog = (type, msg) => {
       if (!logEl) return;
       logEl.style.display = '';
-      const line = document.createElement('div');
-      line.className = `ts-invite-log-line${icon === '✓' ? ' ok' : icon === '✗' ? ' fail' : ''}`;
-      line.textContent = `${icon} ${msg}`;
-      logEl.appendChild(line);
+      const d = document.createElement('div');
+      d.className = `ts-invite-log-line ${type}`;
+      const s = document.createElement('span');
+      s.className = 'ts-ilog-icon';
+      s.innerHTML = type === 'ok' ? ic.check : type === 'fail' ? ic.x : ic.spin;
+      const t2 = document.createElement('span');
+      t2.textContent = msg;
+      d.append(s, t2);
+      logEl.appendChild(d);
       logEl.scrollTop = logEl.scrollHeight;
     };
 
     addBtn?.addEventListener('click', async () => {
-      if (!selectedGuildId) return;
+      if (!selectedGuildId || addBtn.disabled) return;
       addBtn.disabled = true;
       const guildName = allGuilds.find(g => g.id === selectedGuildId)?.name || selectedGuildId;
-      addLog('⏳', `جاري إضافة البوت إلى "${guildName}"…`);
+      addLog('info', `جاري إضافة البوت إلى "${guildName}"…`);
       try {
         const resp = await fetch('/api/ts/bot-add-to-guild', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email:       this.selectedEmail,
-            appId,
-            guildId:     selectedGuildId,
-            permissions: permsInput?.value || '8',
-          }),
+          body: JSON.stringify({ email: this.selectedEmail, appId, guildId: selectedGuildId, permissions: permsInput?.value || '8' }),
         });
-        const reader  = resp.body.getReader();
-        const decoder = new TextDecoder();
-        let   buf     = '';
+        const reader = resp.body.getReader(); const decoder = new TextDecoder(); let buf = '';
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
           buf += decoder.decode(value, { stream: true });
           const parts = buf.split('\n'); buf = parts.pop();
-          for (const line of parts) {
-            const t2 = line.trim();
-            if (!t2.startsWith('data:')) continue;
-            let evt; try { evt = JSON.parse(t2.slice(5).trim()); } catch { continue; }
-            if (evt.type === 'step') addLog('→', evt.msg);
-            else if (evt.type === 'done') { addLog('✓', `تم إضافة البوت إلى "${guildName}" بنجاح ✓`); addBtn.disabled = false; }
-            else if (evt.type === 'error') { addLog('✗', evt.error); addBtn.disabled = false; }
+          for (const ln of parts) {
+            const raw = ln.trim();
+            if (!raw.startsWith('data:')) continue;
+            let evt; try { evt = JSON.parse(raw.slice(5)); } catch { continue; }
+            if (evt.type === 'step')  addLog('info', evt.msg);
+            else if (evt.type === 'done')  { addLog('ok',   `تم إضافة البوت إلى "${guildName}"`); addBtn.disabled = false; }
+            else if (evt.type === 'error') { addLog('fail', evt.error); addBtn.disabled = false; }
           }
         }
       } catch (e) {
-        addLog('✗', e.message || String(e));
+        addLog('fail', e.message || String(e));
+        addBtn.disabled = false;
+      }
+    });
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════
+     Bulk Invite — shows ALL bots in a table with links + bulk auto-add
+     ═══════════════════════════════════════════════════════════════════ */
+  _openBulkInviteModal() {
+    if (!this.library) { showNotification('افتح المكتبة أولاً', 'error'); return; }
+    document.querySelector('.ts-bulk-invite-overlay')?.remove();
+
+    const ic = this._invIcons();
+
+    /* collect all bots from library, dedupe by id */
+    const seen = new Set();
+    const allBots = [
+      ...(this.library.teams?.flatMap(t => t.apps || []) || []),
+      ...(this.library.personal || []),
+    ].filter(a => {
+      if (!a.isBot || !a.id || seen.has(a.id)) return false;
+      seen.add(a.id);
+      return true;
+    });
+
+    if (!allBots.length) { showNotification('لا توجد بوتات في المكتبة', 'error'); return; }
+
+    const buildUrl = (botId, perms) =>
+      `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(botId)}&scope=bot+applications.commands&permissions=${encodeURIComponent(perms || '8')}`;
+
+    const botRowHtml = (b, perms) => {
+      const iconUrl = b.icon ? `https://cdn.discordapp.com/app-icons/${b.id}/${b.icon}.png?size=32` : null;
+      const initials = (b.name || '?').slice(0, 2).toUpperCase();
+      const url = buildUrl(b.id, perms);
+      return `
+        <tr data-bot-id="${escapeAttr(b.id)}">
+          <td class="ts-bt-icon">
+            ${iconUrl
+              ? `<img class="ts-bt-icon-img" src="${escapeAttr(iconUrl)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><span class="ts-bt-icon-initials" style="display:none">${escapeHtml(initials)}</span>`
+              : `<span class="ts-bt-icon-initials">${escapeHtml(initials)}</span>`}
+          </td>
+          <td class="ts-bt-name" title="${escapeAttr(b.id)}">${escapeHtml(b.name)}</td>
+          <td class="ts-bt-url">
+            <input type="text" class="ts-bt-url-input" readonly value="${escapeAttr(url)}" data-bot-id="${escapeAttr(b.id)}">
+          </td>
+          <td class="ts-bt-act">
+            <button class="ts-btn ts-btn-xs ts-bt-copy-one" data-bot-id="${escapeAttr(b.id)}" title="نسخ">${ic.copy}</button>
+            <a class="ts-btn ts-btn-xs ts-bt-open-one" href="${escapeAttr(url)}" target="_blank" rel="noopener" title="فتح" data-bot-id="${escapeAttr(b.id)}">${ic.open}</a>
+            <span class="ts-bt-status" data-bot-id="${escapeAttr(b.id)}"></span>
+          </td>
+        </tr>`;
+    };
+
+    const overlay = document.createElement('div');
+    overlay.className = 'ts-bulk-invite-overlay';
+    overlay.innerHTML = `
+      <div class="ts-bulk-invite-modal">
+        <div class="ts-token-modal-head">
+          <div class="ts-token-modal-title">${ic.link} Bulk Invite <span class="ts-bulk-count">· ${allBots.length} بوت</span></div>
+          <button class="ts-token-modal-close" type="button" aria-label="close">×</button>
+        </div>
+        <div class="ts-bulk-invite-body">
+
+          <!-- top row: permissions + copy-all -->
+          <div class="ts-bulk-top-row">
+            <div class="ts-invite-perms-row">
+              <label class="ts-invite-perms-label" for="ts-bulk-perms">Permissions</label>
+              <input type="number" id="ts-bulk-perms" class="ts-invite-perms-input" value="8" min="0" title="8=Admin | 0=None">
+              <button class="ts-btn ts-btn-xs" id="ts-bulk-regen" title="تحديث كل الروابط">${ic.reload} تحديث</button>
+            </div>
+            <button class="ts-btn ts-btn-xs" id="ts-bulk-copy-all">${ic.copy} نسخ الكل</button>
+          </div>
+
+          <!-- bot table -->
+          <div class="ts-bulk-table-wrap">
+            <table class="ts-bulk-table">
+              <thead>
+                <tr>
+                  <th class="ts-bt-icon"></th>
+                  <th class="ts-bt-name">البوت</th>
+                  <th class="ts-bt-url">رابط الدعوة</th>
+                  <th class="ts-bt-act"></th>
+                </tr>
+              </thead>
+              <tbody id="ts-bulk-tbody">
+                ${allBots.map(b => botRowHtml(b, '8')).join('')}
+              </tbody>
+            </table>
+          </div>
+
+          ${this.selectedEmail ? `
+            <!-- auto-add section -->
+            <div class="ts-invite-divider"><span>إضافة تلقائية — كل البوتات للسيرفر المختار</span></div>
+            <div class="ts-invite-search-wrap">${ic.search}<input type="text" id="ts-bulk-guild-search" class="ts-invite-search" placeholder="ابحث عن سيرفر…"></div>
+            <div class="ts-invite-guild-list" id="ts-bulk-guild-list">
+              <div class="ts-invite-guild-loading">${ic.spin} جاري تحميل السيرفرات…</div>
+            </div>
+            <div class="ts-bulk-add-row">
+              <button class="ts-btn mint" id="ts-bulk-add-btn" disabled>${ic.plus} إضافة جميع البوتات</button>
+              <span class="ts-bulk-progress-text" id="ts-bulk-prog-text"></span>
+            </div>
+          ` : `<div class="ts-invite-no-account">اختر حساباً لتفعيل الإضافة التلقائية لكل البوتات</div>`}
+
+          <!-- live log -->
+          <div class="ts-invite-log" id="ts-bulk-log" style="display:none"></div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add('open'));
+
+    const closeModal = () => { overlay.classList.remove('open'); setTimeout(() => overlay.remove(), 280); };
+    overlay.querySelector('.ts-token-modal-close').addEventListener('click', closeModal);
+    overlay.addEventListener('click', e => { if (e.target === overlay) closeModal(); });
+
+    /* ── Permissions → regen all rows ── */
+    const permsInput = overlay.querySelector('#ts-bulk-perms');
+    const regenAll = () => {
+      const p = permsInput?.value || '8';
+      overlay.querySelectorAll('.ts-bt-url-input').forEach(inp => {
+        const bid = inp.getAttribute('data-bot-id');
+        if (bid) inp.value = buildUrl(bid, p);
+      });
+      overlay.querySelectorAll('.ts-bt-open-one').forEach(a => {
+        const bid = a.getAttribute('data-bot-id');
+        if (bid) a.href = buildUrl(bid, p);
+      });
+    };
+    overlay.querySelector('#ts-bulk-regen')?.addEventListener('click', regenAll);
+    permsInput?.addEventListener('input', regenAll);
+
+    /* ── Copy all links ── */
+    overlay.querySelector('#ts-bulk-copy-all')?.addEventListener('click', () => {
+      const urls = [...overlay.querySelectorAll('.ts-bt-url-input')].map(i => i.value).join('\n');
+      navigator.clipboard?.writeText(urls).then(
+        () => showNotification(`تم نسخ ${allBots.length} رابط`, 'success'),
+        () => showNotification('تعذّر النسخ', 'error')
+      );
+    });
+
+    /* ── Per-row copy ── */
+    overlay.addEventListener('click', e => {
+      const btn = e.target.closest('.ts-bt-copy-one');
+      if (!btn) return;
+      const bid = btn.getAttribute('data-bot-id');
+      const inp = overlay.querySelector(`.ts-bt-url-input[data-bot-id="${bid}"]`);
+      if (inp) navigator.clipboard?.writeText(inp.value)
+        .then(() => showNotification('تم النسخ', 'success'), () => {});
+    });
+
+    if (!this.selectedEmail) return;
+
+    /* ── Guild loader ── */
+    let allGuilds = [], selectedGuildId = null;
+    const gListEl  = overlay.querySelector('#ts-bulk-guild-list');
+    const addBtn   = overlay.querySelector('#ts-bulk-add-btn');
+    const logEl    = overlay.querySelector('#ts-bulk-log');
+    const progText = overlay.querySelector('#ts-bulk-prog-text');
+    const gSearch  = overlay.querySelector('#ts-bulk-guild-search');
+
+    const addLog = (type, msg) => {
+      if (!logEl) return;
+      logEl.style.display = '';
+      const d = document.createElement('div');
+      d.className = `ts-invite-log-line ${type}`;
+      const s = document.createElement('span');
+      s.className = 'ts-ilog-icon';
+      s.innerHTML = type === 'ok' ? ic.check : type === 'fail' ? ic.x : ic.spin;
+      const t2 = document.createElement('span');
+      t2.textContent = msg;
+      d.append(s, t2);
+      logEl.appendChild(d);
+      logEl.scrollTop = logEl.scrollHeight;
+    };
+
+    const renderGuilds = (guilds) => {
+      if (!gListEl) return;
+      if (!guilds.length) { gListEl.innerHTML = '<div class="ts-invite-guild-empty">لا توجد سيرفرات بصلاحيات الإدارة</div>'; return; }
+      gListEl.innerHTML = guilds.map(g => `
+        <div class="ts-invite-guild-item${g.id === selectedGuildId ? ' selected' : ''}" data-guild-id="${escapeAttr(g.id)}">
+          ${g.icon
+            ? `<img class="ts-invite-guild-icon" src="${escapeAttr(g.icon)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><span class="ts-invite-guild-icon ts-invite-guild-initials" style="display:none">${escapeHtml((g.name||'?')[0].toUpperCase())}</span>`
+            : `<span class="ts-invite-guild-icon ts-invite-guild-initials">${escapeHtml((g.name||'?')[0].toUpperCase())}</span>`}
+          <span class="ts-invite-guild-name">${escapeHtml(g.name)}</span>
+          ${g.owner ? `<span class="ts-invite-guild-crown">${ic.crown}</span>` : ''}
+        </div>
+      `).join('');
+      gListEl.querySelectorAll('.ts-invite-guild-item').forEach(item => {
+        item.addEventListener('click', () => {
+          selectedGuildId = item.getAttribute('data-guild-id');
+          gListEl.querySelectorAll('.ts-invite-guild-item').forEach(i => i.classList.remove('selected'));
+          item.classList.add('selected');
+          if (addBtn) addBtn.disabled = false;
+        });
+      });
+    };
+
+    window.electronAPI.tsBotInviteGuilds(this.selectedEmail).then(r => {
+      if (!r?.success) throw new Error(r?.error || 'فشل تحميل السيرفرات');
+      allGuilds = r.guilds || [];
+      renderGuilds(allGuilds);
+    }).catch(e => {
+      if (gListEl) gListEl.innerHTML = `<div class="ts-invite-guild-empty" style="color:#ff6b7b">${ic.x} ${escapeHtml(e.message)}</div>`;
+    });
+
+    gSearch?.addEventListener('input', () => {
+      const q = (gSearch.value || '').toLowerCase().trim();
+      renderGuilds(q ? allGuilds.filter(g => g.name.toLowerCase().includes(q)) : allGuilds);
+    });
+
+    /* ── Bulk add all bots via SSE ── */
+    const setRowStatus = (botId, type) => {
+      const el = overlay.querySelector(`.ts-bt-status[data-bot-id="${botId}"]`);
+      if (!el) return;
+      el.className = 'ts-bt-status ' + type;
+      el.innerHTML = type === 'ok' ? ic.check : type === 'fail' ? ic.x : ic.spin;
+    };
+
+    addBtn?.addEventListener('click', async () => {
+      if (!selectedGuildId || addBtn.disabled) return;
+      addBtn.disabled = true;
+      if (progText) progText.textContent = '';
+      const guildName = allGuilds.find(g => g.id === selectedGuildId)?.name || selectedGuildId;
+      const appIds = allBots.map(b => b.id);
+
+      /* reset all status cells */
+      overlay.querySelectorAll('.ts-bt-status').forEach(s => { s.innerHTML = ''; s.className = 'ts-bt-status'; });
+      appIds.forEach(id => setRowStatus(id, 'pending'));
+
+      addLog('info', `بدء إضافة ${appIds.length} بوت إلى "${guildName}"…`);
+
+      try {
+        const resp = await fetch('/api/ts/bot-bulk-add-to-guild', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: this.selectedEmail, appIds, guildId: selectedGuildId, permissions: permsInput?.value || '8' }),
+        });
+
+        if (!resp.ok) {
+          const body = await resp.json().catch(() => ({}));
+          throw new Error(body.error || `HTTP ${resp.status}`);
+        }
+
+        const reader = resp.body.getReader(); const decoder = new TextDecoder(); let buf = '';
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const parts = buf.split('\n'); buf = parts.pop();
+          for (const ln of parts) {
+            const raw = ln.trim();
+            if (!raw.startsWith('data:')) continue;
+            let evt; try { evt = JSON.parse(raw.slice(5)); } catch { continue; }
+
+            if (evt.type === 'start') {
+              if (progText) progText.textContent = `0 / ${evt.total}`;
+
+            } else if (evt.type === 'progress') {
+              const botName = allBots.find(b => b.id === evt.appId)?.name || evt.appId;
+              if (progText) progText.textContent = `${evt.index} / ${evt.total}`;
+              setRowStatus(evt.appId, evt.ok ? 'ok' : 'fail');
+              if (evt.ok && !evt.skipped) addLog('ok',   `${botName} — تمت الإضافة`);
+              else if (evt.skipped)        addLog('info', `${botName} — موجود بالفعل`);
+              else                          addLog('fail', `${botName} — ${evt.error || 'فشل'}`);
+
+            } else if (evt.type === 'retry') {
+              const botName = allBots.find(b => b.id === evt.appId)?.name || evt.appId;
+              addLog('info', `${botName} — rate limit، إعادة المحاولة بعد ${Math.round(evt.retryMs / 1000)}ث…`);
+
+            } else if (evt.type === 'done') {
+              addLog('ok', `اكتمل: ${evt.okCount} نجاح · ${evt.failCount} فشل · ${evt.skipCount} موجود`);
+              if (progText) progText.textContent = `${evt.okCount} / ${allBots.length}`;
+              addBtn.disabled = false;
+
+            } else if (evt.type === 'error') {
+              addLog('fail', evt.error);
+              addBtn.disabled = false;
+            }
+          }
+        }
+      } catch (e) {
+        addLog('fail', e.message || String(e));
         addBtn.disabled = false;
       }
     });

@@ -2781,9 +2781,201 @@
   font-size: 11px;
   font-family: 'JetBrains Mono', monospace;
 }
-.ts-invite-log-line { color: #8a93a4; }
+.ts-invite-log-line { display: flex; align-items: center; gap: 6px; color: #8a93a4; }
 .ts-invite-log-line.ok   { color: #7ce0c4; }
 .ts-invite-log-line.fail { color: #ff6b7b; }
+.ts-invite-log-line.info { color: #a0a8b8; }
+.ts-ilog-icon { display: inline-flex; align-items: center; flex-shrink: 0; }
+.ts-ilog-icon.ok   svg { stroke: #7ce0c4; }
+.ts-ilog-icon.fail svg { stroke: #ff6b7b; }
+
+/* ── Spin animation ────────────────────────────────────────────── */
+@keyframes ts-icon-spin { to { transform: rotate(360deg); } }
+.ts-icon-spin { animation: ts-icon-spin .85s linear infinite; transform-origin: center; }
+
+/* ── Search-wrap with inline icon ──────────────────────────────── */
+.ts-invite-search-wrap {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: rgba(255,255,255,.04);
+  border: 1px solid rgba(255,255,255,.10);
+  border-radius: 10px;
+  padding: 0 10px;
+  transition: border-color .15s;
+}
+.ts-invite-search-wrap:focus-within { border-color: rgba(88,101,242,.45); }
+.ts-invite-search-wrap svg { flex-shrink: 0; opacity: .5; }
+.ts-invite-search-wrap .ts-invite-search {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 8px 0;
+  flex: 1;
+}
+.ts-invite-search-wrap .ts-invite-search:focus { outline: none; }
+
+/* ── Section label (replaces section-title) ────────────────────── */
+.ts-invite-section-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #8a93a4;
+  letter-spacing: .5px;
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* ── Crown icon in guild items ─────────────────────────────────── */
+.ts-invite-guild-crown { display: inline-flex; align-items: center; color: #f0c04b; flex-shrink: 0; }
+
+/* ── Bulk Invite overlay & modal ───────────────────────────────── */
+.ts-bulk-invite-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10060;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,.55);
+  backdrop-filter: blur(7px);
+  opacity: 0;
+  transition: opacity .22s ease;
+}
+.ts-bulk-invite-overlay.open { opacity: 1; }
+.ts-bulk-invite-modal {
+  width: min(720px, calc(100vw - 24px));
+  max-height: 90vh;
+  background: linear-gradient(160deg, rgba(16,20,34,.99), rgba(9,12,22,.99));
+  border: 1px solid rgba(88,101,242,.3);
+  border-radius: 20px;
+  box-shadow: 0 40px 100px rgba(0,0,0,.65), 0 0 0 1px rgba(255,255,255,.05);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transform: translateY(24px) scale(.96);
+  opacity: 0;
+  transition: transform .3s cubic-bezier(.34,1.56,.64,1), opacity .22s ease;
+}
+.ts-bulk-invite-overlay.open .ts-bulk-invite-modal {
+  transform: translateY(0) scale(1);
+  opacity: 1;
+}
+.ts-bulk-invite-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ── Top actions row ───────────────────────────────────────────── */
+.ts-bulk-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.ts-bulk-count { color: var(--ts-mint,#7ce0c4); font-weight: 600; }
+
+/* ── Bot table ─────────────────────────────────────────────────── */
+.ts-bulk-table-wrap {
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid rgba(255,255,255,.07);
+  border-radius: 12px;
+  background: rgba(0,0,0,.2);
+}
+.ts-bulk-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.ts-bulk-table thead tr {
+  background: rgba(255,255,255,.04);
+  border-bottom: 1px solid rgba(255,255,255,.07);
+  position: sticky;
+  top: 0;
+}
+.ts-bulk-table thead th {
+  padding: 7px 10px;
+  text-align: start;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .5px;
+  color: #6a7384;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.ts-bulk-table tbody tr {
+  border-bottom: 1px solid rgba(255,255,255,.04);
+  transition: background .1s;
+}
+.ts-bulk-table tbody tr:last-child { border-bottom: none; }
+.ts-bulk-table tbody tr:hover { background: rgba(255,255,255,.03); }
+.ts-bulk-table td { padding: 6px 10px; vertical-align: middle; }
+
+/* Column: icon */
+.ts-bt-icon { width: 36px; padding-inline-start: 10px !important; }
+.ts-bt-icon-img {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+}
+.ts-bt-icon-initials {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  background: rgba(88,101,242,.25);
+  color: #c5cbff;
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* Column: name */
+.ts-bt-name { min-width: 100px; max-width: 160px; color: #d4d9e3; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Column: url */
+.ts-bt-url { min-width: 0; width: 100%; }
+.ts-bt-url-input {
+  width: 100%;
+  background: rgba(255,255,255,.04);
+  border: 1px solid rgba(255,255,255,.07);
+  border-radius: 6px;
+  padding: 4px 7px;
+  color: #8892c4;
+  font-size: 10px;
+  font-family: 'JetBrains Mono', monospace;
+  box-sizing: border-box;
+  cursor: text;
+}
+/* Column: actions */
+.ts-bt-act { white-space: nowrap; width: 90px; }
+.ts-bt-act .ts-btn-xs { padding: 4px 7px; margin-inline-end: 3px; }
+/* Per-row status indicator */
+.ts-bt-status { display: inline-flex; align-items: center; margin-inline-start: 2px; }
+.ts-bt-status.ok   svg { stroke: #7ce0c4; }
+.ts-bt-status.fail svg { stroke: #ff6b7b; }
+.ts-bt-status.pending svg { stroke: #8a93a4; }
+
+/* ── Bulk add row ──────────────────────────────────────────────── */
+.ts-bulk-add-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.ts-bulk-add-row .ts-btn { flex-shrink: 0; }
+.ts-bulk-progress-text {
+  font-size: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  color: #7ce0c4;
+  font-weight: 700;
+  min-width: 60px;
+}
 
 /* ── Intent "already ON" state on bot cards ────────────────────────── */
 .ts-card-intents.intents-on {
