@@ -3740,49 +3740,98 @@ const ts = require('./lib/trueStudio');
     } catch (e) { fail(res, e); }
   });
 
+  // SSE streaming version — streams per-bot progress in real-time.
+  // Events: {type:'start',total}, {type:'progress',index,total,appId,name,ok,error,appOk,appError},
+  //         {type:'done',okCount,failCount}, {type:'error',error}
   app.post('/api/ts/pfp/apply-all', async (req, res) => {
-    try {
-      const p = tsPfpSettings();
-      if (!p.avatar && !p.banner) throw new Error('Save an avatar or banner first');
-      const email = String(req.body?.email || '').toLowerCase();
-      const results = [];
+    const p = tsPfpSettings();
+    if (!p.avatar && !p.banner) {
+      res.status(400).json({ success: false, error: 'Save an avatar or banner first' });
+      return;
+    }
+    const email = String(req.body?.email || '').toLowerCase();
 
-      if (email) {
-        // Primary path: use owner account token — updates ALL library bots without needing their tokens
-        const { token, client } = await tsGetToken(email);
-        const netOpts = { client };
-        const health = await ts.accountHealthProbe({ token, netOpts });
-        if (!health.ok) return fail(res, new Error('Account blocked: ' + health.message));
-        const libApps = await ts.listApplications({ token, netOpts });
-        const bots = libApps.filter(a => a && a.bot && a.id);
-        if (!bots.length) throw new Error('لا توجد بوتات في المكتبة');
-        for (const bot of bots) {
-          try {
-            await ts.updateBotProfileViaOwner({ token, appId: bot.id, avatar: p.avatar || undefined, banner: p.banner || undefined, netOpts });
-            results.push({ appId: bot.id, name: bot.name, ok: true });
-            await ts.humanDelay(600, 1200);
-          } catch (e) {
-            results.push({ appId: bot.id, name: bot.name, ok: false, error: e.message || String(e), status: e.status || 0 });
-            if (e.status === 429) await ts.humanDelay(3000, 5000);
-          }
+    // Set SSE headers
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    const send = (obj) => {
+      if (!res.writableEnded) res.write(`data: ${JSON.stringify(obj)}\n\n`);
+    };
+    const endStream = () => { if (!res.writableEnded) res.end(); };
+
+    try {
+      if (!email) throw new Error('اختر حساباً أولاً');
+
+      const { token, client } = await tsGetToken(email);
+      const netOpts = { client };
+      const health = await ts.accountHealthProbe({ token, netOpts });
+      if (!health.ok) throw new Error('Account blocked: ' + health.message);
+
+      const libApps = await ts.listApplications({ token, netOpts });
+      const bots = libApps.filter(a => a && a.bot && a.id);
+      if (!bots.length) throw new Error('لا توجد بوتات في المكتبة');
+
+      send({ type: 'start', total: bots.length });
+
+      let okCount = 0, failCount = 0;
+
+      for (let i = 0; i < bots.length; i++) {
+        const bot = bots[i];
+        let botOk = false, botErr = null, appOk = false, appErr = null;
+
+        // 1. Update bot avatar / banner
+        try {
+          await ts.updateBotProfileViaOwner({
+            token, appId: bot.id,
+            avatar: p.avatar || undefined,
+            banner: p.banner || undefined,
+            netOpts,
+          });
+          botOk = true;
+        } catch (e) {
+          botErr = e.message || String(e);
+          if (e.status === 429) await ts.humanDelay(3000, 5000);
         }
-      } else {
-        // Legacy fallback: use saved bot tokens from botTokensStore
-        const list = await botTokensStore.get() || [];
-        if (!list.length) throw new Error('لا توجد توكنات محفوظة — اختر حساباً أو احفظ التوكنات عبر Reset Token');
-        for (const b of list) {
-          try {
-            await ts.updateBotProfile({ botToken: b.token, avatar: p.avatar || undefined, banner: p.banner || undefined });
-            results.push({ appId: b.appId, name: b.name, ok: true });
-            await ts.humanDelay(800, 1600);
-          } catch (e) {
-            results.push({ appId: b.appId, name: b.name, ok: false, error: e.message || String(e), status: e.status || 0, code: e.code || '' });
-            if (e.status === 429) await ts.humanDelay(3000, 5000);
-          }
+
+        // 2. Update app icon / cover_image (same data — keeps library listing in sync)
+        try {
+          await ts.updateAppVisuals({
+            token, appId: bot.id,
+            icon:       p.avatar || undefined,
+            coverImage: p.banner || undefined,
+            netOpts,
+          });
+          appOk = true;
+        } catch (e) {
+          appErr = e.message || String(e);
+          if (e.status === 429) await ts.humanDelay(3000, 5000);
         }
+
+        const overallOk = botOk;   // bot update is the primary; app update is a bonus
+        if (overallOk) okCount++; else failCount++;
+
+        send({
+          type: 'progress',
+          index: i + 1, total: bots.length,
+          appId: bot.id, name: bot.name || bot.id,
+          ok: overallOk, error: botErr || undefined,
+          appOk, appError: appErr || undefined,
+        });
+
+        // Short humanized delay between bots — much faster than before
+        if (i < bots.length - 1) await ts.humanDelay(150, 350);
       }
-      ok(res, { results, okCount: results.filter(r => r.ok).length, failCount: results.filter(r => !r.ok).length });
-    } catch (e) { fail(res, e); }
+
+      send({ type: 'done', okCount, failCount });
+    } catch (e) {
+      send({ type: 'error', error: e.message || String(e) });
+    } finally {
+      endStream();
+    }
   });
 
   app.get('/api/ts/applications/:appId/intents', async (req, res) => {

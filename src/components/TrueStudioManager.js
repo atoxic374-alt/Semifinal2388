@@ -675,28 +675,80 @@ export class TrueStudioManager {
     if (!this.pfp?.avatar && !this.pfp?.banner) { showNotification('احفظ Avatar أو Banner أولاً', 'error'); return; }
     if (this._pfpAllRunning) { showNotification('Pfp all جاري التنفيذ بالفعل…', 'info'); return; }
     if (!this.selectedEmail) { showNotification('اختر حساباً أولاً لتطبيق Pfp all', 'error'); return; }
-    const confirmed = await showConfirm('تطبيق الصورة والبنر المحفوظين على كل بوتات المكتبة؟', { confirmText: 'Pfp all', cancelText: 'إلغاء' });
+    const confirmed = await showConfirm('تطبيق الصورة والبنر المحفوظين على كل بوتات المكتبة؟\n(يُحدَّث البوت + أيقونة/بنر التطبيق في المكتبة)', { confirmText: 'Pfp all', cancelText: 'إلغاء' });
     if (!confirmed) return;
+
     this._pfpAllRunning = true;
     this._libModal?.querySelectorAll('#ts-lib-pfp-all').forEach(b => { b.disabled = true; });
-    const prog = this._openBatchProgressModal('🖼 Pfp all', 'تطبيق الصورة والبانر على بوتات المكتبة…');
+
+    const prog = this._openBatchProgressModal('🖼 Pfp all', 'تطبيق الصورة والبنر على بوتات المكتبة…');
     prog.setIndeterminate(true);
-    prog.setStatus('⏳ جاري تحميل المكتبة وتطبيق Pfp…');
-    // Non-blocking: server handles all bots using owner account token
-    window.electronAPI.tsApplyPfpAll(this.selectedEmail).then(r => {
-      if (!r?.success && r?.error) throw new Error(r.error);
-      prog.setIndeterminate(false);
-      const ok = r.okCount || 0;
-      const fail = r.failCount || 0;
-      if (ok + fail === 0) throw new Error('لا توجد بوتات في المكتبة');
-      prog.done(ok, fail, (r.results || []).map(x => ({ name: x.name || x.appId, ok: x.ok, error: x.error })));
-    }).catch(e => {
+    prog.setStatus('⏳ جاري تحميل قائمة البوتات…');
+
+    let okCount = 0, failCount = 0;
+
+    try {
+      const resp = await fetch('/api/ts/pfp/apply-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: this.selectedEmail }),
+      });
+
+      // If server responded with a plain JSON error (e.g. no avatar saved)
+      if (!resp.ok || !resp.headers.get('content-type')?.includes('text/event-stream')) {
+        const body = await resp.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${resp.status}`);
+      }
+
+      const reader  = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let   buf     = '';
+
+      const parseLine = (line) => {
+        if (!line.startsWith('data:')) return;
+        let evt;
+        try { evt = JSON.parse(line.slice(5).trim()); } catch { return; }
+
+        if (evt.type === 'start') {
+          prog.setIndeterminate(false);
+          prog.setTotal(evt.total);
+          prog.setStatus(`⏳ جاري التطبيق على ${evt.total} بوت…`);
+
+        } else if (evt.type === 'progress') {
+          okCount   = (evt.ok ? okCount + 1 : okCount);
+          failCount = (evt.ok ? failCount   : failCount + 1);
+          prog.setProgress(evt.index, evt.total);
+          // Show per-bot line: bot result + app icon result
+          const appNote = evt.appOk ? '(أيقونة ✓)' : evt.appError ? `(أيقونة ✗: ${evt.appError.slice(0,40)})` : '';
+          prog.logLine(evt.ok ? '✓' : '✗', evt.name, (evt.error ? evt.error.slice(0,60) : '') + (appNote ? ' ' + appNote : ''));
+
+        } else if (evt.type === 'done') {
+          prog.done(evt.okCount, evt.failCount);
+
+        } else if (evt.type === 'error') {
+          throw new Error(evt.error);
+        }
+      };
+
+      // Stream read loop
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const parts = buf.split('\n');
+        buf = parts.pop();          // keep incomplete last chunk
+        for (const line of parts) {
+          const t = line.trim();
+          if (t) try { parseLine(t); } catch (e) { prog.error(e.message || String(e)); break; }
+        }
+      }
+    } catch (e) {
       prog.setIndeterminate(false);
       prog.error(e.message || String(e));
-    }).finally(() => {
+    } finally {
       this._pfpAllRunning = false;
       this._libModal?.querySelectorAll('#ts-lib-pfp-all').forEach(b => { b.disabled = false; });
-    });
+    }
   }
 
   _renderStatus(s, meta) {
