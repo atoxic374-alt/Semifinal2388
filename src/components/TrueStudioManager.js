@@ -1671,6 +1671,7 @@ export class TrueStudioManager {
       `;
       this._bindResetButtons(body);
       this._bindIntentButtons(body);
+      this._bindInviteButtons(body);
       body.querySelector('#ts-lib-create-team')?.addEventListener('click', () => this._openCreateTeamModal());
       return;
     }
@@ -1684,6 +1685,7 @@ export class TrueStudioManager {
       body.innerHTML = `<div class="ts-cards">${apps.map(a => this._renderAppCard(a, { showMoveToTeam: teams.length > 0 })).join('')}</div>`;
       this._bindResetButtons(body);
       this._bindIntentButtons(body);
+      this._bindInviteButtons(body);
       this._bindMoveToTeamButtons(body);
       return;
     }
@@ -1700,6 +1702,204 @@ export class TrueStudioManager {
         const name  = btn.getAttribute('data-bot-name') || appId;
         this._openIntentsModal(appId, name);
       });
+    });
+  }
+
+  _bindInviteButtons(root) {
+    root.querySelectorAll('[data-invite-bot]').forEach(btn => {
+      if (btn._inviteBound) return;
+      btn._inviteBound = true;
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const appId = btn.getAttribute('data-invite-bot');
+        const name  = btn.getAttribute('data-bot-name') || appId;
+        this._openInviteModal(appId, name);
+      });
+    });
+  }
+
+  _openInviteModal(appId, name) {
+    document.querySelector('.ts-invite-overlay')?.remove();
+    const overlay = document.createElement('div');
+    overlay.className = 'ts-invite-overlay';
+
+    const _buildUrl = (perms) =>
+      `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(appId)}&scope=bot+applications.commands&permissions=${encodeURIComponent(perms || '8')}`;
+
+    overlay.innerHTML = `
+      <div class="ts-invite-modal">
+        <div class="ts-token-modal-head">
+          <div class="ts-token-modal-title">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-inline-end:6px" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            دعوة البوت · <span class="ts-invite-bot-name">${escapeHtml(name)}</span>
+          </div>
+          <button class="ts-token-modal-close" type="button" aria-label="close">×</button>
+        </div>
+        <div class="ts-invite-body">
+
+          <!-- ── Section 1: Invite URL ── -->
+          <div class="ts-invite-section">
+            <div class="ts-invite-section-title">🔗 رابط الدعوة</div>
+            <div class="ts-invite-perms-row">
+              <label class="ts-invite-perms-label" for="ts-invite-perms">Permissions</label>
+              <input type="number" id="ts-invite-perms" class="ts-invite-perms-input" value="8" min="0" title="8 = Administrator | 0 = بدون صلاحيات">
+              <button class="ts-btn ts-btn-xs" id="ts-invite-regen" title="إعادة توليد الرابط">↺</button>
+            </div>
+            <div class="ts-invite-url-row">
+              <input type="text" id="ts-invite-url" class="ts-invite-url-input" readonly
+                value="${escapeAttr(_buildUrl('8'))}">
+              <button class="ts-btn ts-btn-xs" id="ts-invite-copy" title="نسخ الرابط">📋</button>
+              <a class="ts-btn ts-btn-xs" id="ts-invite-open" href="${escapeAttr(_buildUrl('8'))}" target="_blank" rel="noopener" title="فتح في المتصفح">↗</a>
+            </div>
+          </div>
+
+          <!-- ── Divider ── -->
+          <div class="ts-invite-divider">
+            <span>إضافة تلقائية من الحساب</span>
+          </div>
+
+          <!-- ── Section 2: Auto-add ── -->
+          <div class="ts-invite-section">
+            ${this.selectedEmail ? `
+              <input type="text" id="ts-invite-guild-search" class="ts-invite-search" placeholder="🔍 ابحث عن سيرفر…">
+              <div class="ts-invite-guild-list" id="ts-invite-guild-list">
+                <div class="ts-invite-guild-loading">⏳ جاري تحميل السيرفرات…</div>
+              </div>
+              <button class="ts-btn mint ts-invite-add-btn" id="ts-invite-add-btn" disabled>
+                ➕ إضافة للسيرفر المختار
+              </button>
+            ` : `<div class="ts-invite-no-account">اختر حساباً من القائمة الرئيسية لتفعيل الإضافة التلقائية</div>`}
+          </div>
+
+          <!-- ── Live Log ── -->
+          <div class="ts-invite-log" id="ts-invite-log" style="display:none"></div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add('open'));
+
+    // Close
+    overlay.querySelector('.ts-token-modal-close').addEventListener('click', () => {
+      overlay.classList.remove('open');
+      setTimeout(() => overlay.remove(), 260);
+    });
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) { overlay.classList.remove('open'); setTimeout(() => overlay.remove(), 260); }
+    });
+
+    // Permissions regen
+    const permsInput = overlay.querySelector('#ts-invite-perms');
+    const urlInput   = overlay.querySelector('#ts-invite-url');
+    const openLink   = overlay.querySelector('#ts-invite-open');
+    const regenUrl   = () => {
+      const u = _buildUrl(permsInput?.value || '8');
+      if (urlInput)  urlInput.value = u;
+      if (openLink) openLink.href  = u;
+    };
+    overlay.querySelector('#ts-invite-regen')?.addEventListener('click', regenUrl);
+    permsInput?.addEventListener('input', regenUrl);
+
+    // Copy
+    overlay.querySelector('#ts-invite-copy')?.addEventListener('click', () => {
+      const url = overlay.querySelector('#ts-invite-url')?.value || '';
+      navigator.clipboard?.writeText(url).then(() => showNotification('تم نسخ الرابط ✓', 'success')).catch(() => showNotification('تعذّر النسخ', 'error'));
+    });
+
+    if (!this.selectedEmail) return;
+
+    // Load guilds
+    let allGuilds = [];
+    let selectedGuildId = null;
+    const listEl  = overlay.querySelector('#ts-invite-guild-list');
+    const addBtn  = overlay.querySelector('#ts-invite-add-btn');
+    const logEl   = overlay.querySelector('#ts-invite-log');
+    const searchEl = overlay.querySelector('#ts-invite-guild-search');
+
+    const renderGuilds = (guilds) => {
+      if (!listEl) return;
+      if (!guilds.length) { listEl.innerHTML = '<div class="ts-invite-guild-empty">لا توجد سيرفرات بصلاحيات الإدارة</div>'; return; }
+      listEl.innerHTML = guilds.map(g => `
+        <div class="ts-invite-guild-item${g.id === selectedGuildId ? ' selected' : ''}" data-guild-id="${escapeAttr(g.id)}" data-guild-name="${escapeAttr(g.name)}">
+          ${g.icon
+            ? `<img class="ts-invite-guild-icon" src="${escapeAttr(g.icon)}" alt="" onerror="this.style.display='none'">`
+            : `<span class="ts-invite-guild-icon ts-invite-guild-initials">${escapeHtml((g.name||'?')[0].toUpperCase())}</span>`}
+          <span class="ts-invite-guild-name">${escapeHtml(g.name)}</span>
+          ${g.owner ? '<span class="ts-invite-guild-owner">👑</span>' : ''}
+        </div>
+      `).join('');
+      listEl.querySelectorAll('.ts-invite-guild-item').forEach(item => {
+        item.addEventListener('click', () => {
+          selectedGuildId = item.getAttribute('data-guild-id');
+          listEl.querySelectorAll('.ts-invite-guild-item').forEach(i => i.classList.remove('selected'));
+          item.classList.add('selected');
+          if (addBtn) addBtn.disabled = false;
+        });
+      });
+    };
+
+    window.electronAPI.tsBotInviteGuilds(this.selectedEmail).then(r => {
+      if (!r?.success) throw new Error(r?.error || 'فشل تحميل السيرفرات');
+      allGuilds = r.guilds || [];
+      renderGuilds(allGuilds);
+    }).catch(e => {
+      if (listEl) listEl.innerHTML = `<div class="ts-invite-guild-empty" style="color:#ff6b7b">✗ ${escapeHtml(e.message)}</div>`;
+    });
+
+    // Search filter
+    searchEl?.addEventListener('input', () => {
+      const q = (searchEl.value || '').toLowerCase().trim();
+      renderGuilds(q ? allGuilds.filter(g => g.name.toLowerCase().includes(q)) : allGuilds);
+    });
+
+    // Add bot to guild (SSE)
+    const addLog = (icon, msg) => {
+      if (!logEl) return;
+      logEl.style.display = '';
+      const line = document.createElement('div');
+      line.className = `ts-invite-log-line${icon === '✓' ? ' ok' : icon === '✗' ? ' fail' : ''}`;
+      line.textContent = `${icon} ${msg}`;
+      logEl.appendChild(line);
+      logEl.scrollTop = logEl.scrollHeight;
+    };
+
+    addBtn?.addEventListener('click', async () => {
+      if (!selectedGuildId) return;
+      addBtn.disabled = true;
+      const guildName = allGuilds.find(g => g.id === selectedGuildId)?.name || selectedGuildId;
+      addLog('⏳', `جاري إضافة البوت إلى "${guildName}"…`);
+      try {
+        const resp = await fetch('/api/ts/bot-add-to-guild', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email:       this.selectedEmail,
+            appId,
+            guildId:     selectedGuildId,
+            permissions: permsInput?.value || '8',
+          }),
+        });
+        const reader  = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let   buf     = '';
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const parts = buf.split('\n'); buf = parts.pop();
+          for (const line of parts) {
+            const t2 = line.trim();
+            if (!t2.startsWith('data:')) continue;
+            let evt; try { evt = JSON.parse(t2.slice(5).trim()); } catch { continue; }
+            if (evt.type === 'step') addLog('→', evt.msg);
+            else if (evt.type === 'done') { addLog('✓', `تم إضافة البوت إلى "${guildName}" بنجاح ✓`); addBtn.disabled = false; }
+            else if (evt.type === 'error') { addLog('✗', evt.error); addBtn.disabled = false; }
+          }
+        }
+      } catch (e) {
+        addLog('✗', e.message || String(e));
+        addBtn.disabled = false;
+      }
     });
   }
 
@@ -2572,6 +2772,14 @@ export class TrueStudioManager {
         title="${_hasAllIntents ? 'Intents مفعّلة ✓ — اضغط للتفاصيل' : 'رؤية/تفعيل/إيقاف Privileged Intents الثلاثة'}">
         <span class="ts-card-intents-icon">⚡</span> iNTeNT${_hasAllIntents ? ' <span class="ts-intent-on-dot"></span>' : ''}
       </button>` : '';
+    const inviteBtn = a.isBot ? `
+      <button class="ts-card-invite" type="button"
+        data-invite-bot="${escapeAttr(a.id)}"
+        data-bot-name="${escapeAttr(a.name)}"
+        title="رابط دعوة البوت / إضافة تلقائية للسيرفر">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+        دعوة
+      </button>` : '';
     const moveBtn = opts.showMoveToTeam ? `
       <button class="ts-card-move-team" type="button"
         data-move-app="${escapeAttr(a.id)}"
@@ -2580,14 +2788,16 @@ export class TrueStudioManager {
         ↗ ${escapeHtml(t('ts.move_to_team_btn'))}
       </button>` : '';
     return `
-      <div class="ts-app-card${a.isBot ? ' has-reset' : ''}${opts.showMoveToTeam ? ' has-move' : ''}" title="${escapeAttr(a.id)}">
+      <div class="ts-app-card${a.isBot ? ' has-reset' : ''}${opts.showMoveToTeam ? ' has-move' : ''}${_hasAllIntents ? ' intents-live' : ''}" title="${escapeAttr(a.id)}">
         <div class="ts-app-thumb">
           ${iconUrl ? `<img src="${iconUrl}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('span'),{textContent:'${escapeAttr(initials)}',className:'ts-thumb-text'}))">` : `<span class="ts-thumb-text">${escapeHtml(initials)}</span>`}
+          ${_hasAllIntents ? '<span class="ts-card-intent-badge" title="Privileged Intents مفعّلة ✓"></span>' : ''}
         </div>
         <div class="ts-app-name">${escapeHtml(a.name)}</div>
         ${tag}
         ${resetBtn}
         ${intentBtn}
+        ${inviteBtn}
         ${moveBtn}
       </div>
     `;

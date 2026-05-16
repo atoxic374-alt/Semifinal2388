@@ -3917,6 +3917,64 @@ const ts = require('./lib/trueStudio');
     } catch (e) { fail(res, e); }
   });
 
+  // ── Bot invite helpers ─────────────────────────────────────────────────
+  // Returns guilds where the selected account has MANAGE_GUILD or ADMINISTRATOR.
+  app.get('/api/ts/bot-invite-guilds', async (req, res) => {
+    try {
+      const email = String(req.query.email || '').toLowerCase();
+      if (!email) return fail(res, new Error('email required'));
+      const { token, client } = await tsGetToken(email);
+      const netOpts = { client };
+      const raw = await ts.getUserGuildsWithPerms({ token, netOpts });
+      const ADMIN  = BigInt(0x8);
+      const MANAGE = BigInt(0x20);
+      const guilds = raw.filter(g => {
+        try {
+          const p = BigInt(g.permissions || '0');
+          return (p & ADMIN) === ADMIN || (p & MANAGE) === MANAGE;
+        } catch { return !!g.owner; }
+      }).map(g => ({
+        id:    g.id,
+        name:  g.name,
+        icon:  g.icon ? `https://cdn.discordapp.com/icons/${g.id}/${g.icon}.png?size=64` : null,
+        owner: !!g.owner,
+      }));
+      ok(res, { guilds });
+    } catch (e) { fail(res, e); }
+  });
+
+  // SSE: adds a bot to one guild, streaming step-by-step progress.
+  app.post('/api/ts/bot-add-to-guild', async (req, res) => {
+    const { email, appId, guildId, permissions = '8' } = req.body || {};
+
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    const send    = obj => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(obj)}\n\n`); };
+    const endSSE  = ()  => { if (!res.writableEnded) res.end(); };
+
+    try {
+      if (!email || !appId || !guildId) throw new Error('email و appId و guildId مطلوبون');
+      send({ type: 'step', msg: '🔍 جاري التحقق من الحساب…' });
+      const { token, client } = await tsGetToken(email);
+      const netOpts = { client };
+      const health = await ts.accountHealthProbe({ token, netOpts });
+      if (!health.ok) throw new Error('Account blocked: ' + health.message);
+
+      send({ type: 'step', msg: '🤖 جاري إضافة البوت إلى السيرفر…' });
+      await ts.addBotToGuild({ token, clientId: appId, guildId, permissions: String(permissions), netOpts });
+
+      send({ type: 'done', appId, guildId });
+    } catch (e) {
+      send({ type: 'error', error: e.message || String(e) });
+    } finally {
+      endSSE();
+    }
+  });
+
   // Pre-flight: log in (and verify TOTP if a 2FA secret is saved) WITHOUT
   // creating any team or bot. Result is stored on the account so the UI can
   // show a green "verified" badge until next session.

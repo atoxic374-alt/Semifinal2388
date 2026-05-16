@@ -2511,6 +2511,280 @@
   .ts-batch-prog-bar.indeterminate { animation: none !important; }
 }
 
+/* ── Card-level intent live indicator ─────────────────────────────── */
+.ts-app-card.intents-live {
+  border-color: rgba(124,224,196,.32);
+  box-shadow: 0 0 0 1px rgba(124,224,196,.10), inset 0 1px 0 rgba(124,224,196,.10);
+}
+.ts-app-card.intents-live .ts-app-thumb {
+  border-color: rgba(124,224,196,.4);
+}
+/* Small glowing dot badge in the bottom-right corner of the thumbnail */
+.ts-card-intent-badge {
+  position: absolute;
+  bottom: -3px;
+  inset-inline-end: -3px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #43d391;
+  border: 2px solid var(--ts-bg, #0f1219);
+  box-shadow: 0 0 6px rgba(67,211,145,.75);
+  pointer-events: none;
+}
+/* The thumb wrapper must be relative for the badge to position correctly */
+.ts-app-card .ts-app-thumb { position: relative; }
+
+/* ── Invite link button on bot cards ──────────────────────────────── */
+.ts-card-invite {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .4px;
+  border-radius: 8px;
+  background: rgba(88,101,242,.12);
+  border: 1px solid rgba(88,101,242,.28);
+  color: #c5cbff;
+  cursor: pointer;
+  transition: background .15s, border-color .15s, transform .1s;
+}
+.ts-card-invite:hover {
+  background: rgba(88,101,242,.24);
+  border-color: rgba(88,101,242,.55);
+  transform: translateY(-1px);
+}
+.ts-card-invite:active { transform: translateY(0); }
+
+/* ── Invite modal overlay ─────────────────────────────────────────── */
+.ts-invite-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10050;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,.55);
+  backdrop-filter: blur(6px);
+  opacity: 0;
+  transition: opacity .22s ease;
+}
+.ts-invite-overlay.open { opacity: 1; }
+.ts-invite-modal {
+  width: min(520px, calc(100vw - 32px));
+  max-height: 85vh;
+  background: linear-gradient(160deg, rgba(18,22,36,.99), rgba(11,14,24,.99));
+  border: 1px solid rgba(88,101,242,.28);
+  border-radius: 20px;
+  box-shadow: 0 32px 80px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.05);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transform: translateY(20px) scale(.97);
+  opacity: 0;
+  transition: transform .28s cubic-bezier(.34,1.56,.64,1), opacity .22s ease;
+}
+.ts-invite-overlay.open .ts-invite-modal {
+  transform: translateY(0) scale(1);
+  opacity: 1;
+}
+.ts-invite-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.ts-invite-bot-name { color: #7ce0c4; font-weight: 700; }
+
+/* Sections */
+.ts-invite-section { display: flex; flex-direction: column; gap: 8px; }
+.ts-invite-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: #8a93a4;
+  letter-spacing: .6px;
+  text-transform: uppercase;
+}
+
+/* Permissions row */
+.ts-invite-perms-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ts-invite-perms-label { font-size: 12px; color: #8a93a4; flex-shrink: 0; }
+.ts-invite-perms-input {
+  width: 90px;
+  padding: 5px 8px;
+  background: rgba(255,255,255,.05);
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 8px;
+  color: #e2e8f0;
+  font-size: 12px;
+  font-family: 'JetBrains Mono', monospace;
+}
+.ts-invite-perms-input:focus { outline: none; border-color: rgba(88,101,242,.5); }
+
+/* URL row */
+.ts-invite-url-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ts-invite-url-input {
+  flex: 1;
+  padding: 7px 10px;
+  background: rgba(255,255,255,.04);
+  border: 1px solid rgba(255,255,255,.10);
+  border-radius: 10px;
+  color: #c5cbff;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  min-width: 0;
+}
+.ts-invite-url-input:focus { outline: none; }
+.ts-btn-xs {
+  padding: 5px 10px;
+  font-size: 11px;
+  border-radius: 8px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Divider */
+.ts-invite-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #4a5568;
+  letter-spacing: .4px;
+}
+.ts-invite-divider::before,
+.ts-invite-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: rgba(255,255,255,.07);
+}
+
+/* No-account hint */
+.ts-invite-no-account {
+  font-size: 12px;
+  color: #8a93a4;
+  text-align: center;
+  padding: 14px;
+  background: rgba(255,255,255,.03);
+  border-radius: 10px;
+  border: 1px dashed rgba(255,255,255,.08);
+}
+
+/* Search */
+.ts-invite-search {
+  width: 100%;
+  padding: 8px 12px;
+  background: rgba(255,255,255,.04);
+  border: 1px solid rgba(255,255,255,.10);
+  border-radius: 10px;
+  color: #e2e8f0;
+  font-size: 12px;
+  box-sizing: border-box;
+}
+.ts-invite-search:focus { outline: none; border-color: rgba(88,101,242,.45); }
+
+/* Guild list */
+.ts-invite-guild-list {
+  max-height: 200px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid rgba(255,255,255,.07);
+  border-radius: 12px;
+  padding: 6px;
+  background: rgba(255,255,255,.02);
+}
+.ts-invite-guild-loading,
+.ts-invite-guild-empty {
+  font-size: 12px;
+  color: #8a93a4;
+  text-align: center;
+  padding: 16px 8px;
+}
+.ts-invite-guild-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 9px;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background .12s;
+  border: 1px solid transparent;
+}
+.ts-invite-guild-item:hover { background: rgba(255,255,255,.06); }
+.ts-invite-guild-item.selected {
+  background: rgba(88,101,242,.18);
+  border-color: rgba(88,101,242,.4);
+}
+.ts-invite-guild-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.ts-invite-guild-initials {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(88,101,242,.25);
+  color: #c5cbff;
+  font-size: 13px;
+  font-weight: 700;
+}
+.ts-invite-guild-name {
+  flex: 1;
+  font-size: 13px;
+  color: #d4d9e3;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ts-invite-guild-owner { font-size: 12px; flex-shrink: 0; }
+
+/* Add button */
+.ts-invite-add-btn { width: 100%; margin-top: 4px; }
+
+/* Live log */
+.ts-invite-log {
+  background: rgba(0,0,0,.3);
+  border: 1px solid rgba(255,255,255,.07);
+  border-radius: 10px;
+  padding: 10px 12px;
+  max-height: 120px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+}
+.ts-invite-log-line { color: #8a93a4; }
+.ts-invite-log-line.ok   { color: #7ce0c4; }
+.ts-invite-log-line.fail { color: #ff6b7b; }
+
 /* ── Intent "already ON" state on bot cards ────────────────────────── */
 .ts-card-intents.intents-on {
   border-color: rgba(124,224,196,.45);

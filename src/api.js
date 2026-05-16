@@ -103,7 +103,7 @@ const _testFriends = [
   { id: '111111111111111118', username: 'mods_wand',  displayName: 'ModWand',       avatar: _testAvatar('M', _TEST_PALETTE[7]), bot:true  },
 ];
 const _testServers = [
-  { id: '999000000000000001', name: 'Replit Builders',  icon: _testServerIcon('R', _TEST_PALETTE[0]), members: 1843, owner: true,  channels: 14 },
+  { id: '999000000000000001', name: 'Rept Builders',  icon: _testServerIcon('R', _TEST_PALETTE[0]), members: 1843, owner: true,  channels: 14 },
   { id: '999000000000000002', name: 'Arabic Devs',      icon: _testServerIcon('ع', _TEST_PALETTE[2]), members: 4521, owner: false, channels: 22 },
   { id: '999000000000000003', name: 'Game Night',       icon: _testServerIcon('G', _TEST_PALETTE[3]), members:  217, owner: false, channels:  8 },
   { id: '999000000000000004', name: 'Design Critique',  icon: _testServerIcon('D', _TEST_PALETTE[1]), members:  812, owner: true,  channels: 11 },
@@ -489,7 +489,8 @@ window.electronAPI = {
   tsListTeams:       (email) => apiCall('GET', `/api/ts/teams?email=${encodeURIComponent(email)}`),
   tsCreateTeam:      (email, name) => apiCall('POST', '/api/ts/teams/create', { email, name }),
   tsAddAppToTeam:    (email, appId, teamId) => apiCall('POST', `/api/ts/teams/${encodeURIComponent(teamId)}/add-app`, { email, appId }),
-  tsResetAllStart:   (email, bots) => apiCall('POST', '/api/ts/reset-all/start', { email, bots }),
-  tsResetAllState:   () => apiCall('GET', '/api/ts/reset-all/state'),
-  tsResetAllStop:    () => apiCall('POST', '/api/ts/reset-all/stop'),
+  tsResetAllStart:    (email, bots) => apiCall('POST', '/api/ts/reset-all/start', { email, bots }),
+  tsResetAllState:    () => apiCall('GET', '/api/ts/reset-all/state'),
+  tsResetAllStop:     () => apiCall('POST', '/api/ts/reset-all/stop'),
+  tsBotInviteGuilds:  (email) => apiCall('GET', `/api/ts/bot-invite-guilds?email=${encodeURIComponent(email)}`),
 };
