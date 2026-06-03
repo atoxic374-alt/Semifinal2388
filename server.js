@@ -18,6 +18,7 @@ const helmet = require('helmet');
 const session = require('express-session');
 const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
+const { markRateLimited, isRateLimited, getRateLimitInfo, getAllStatus: getRLAllStatus } = require('./lib/rateLimitTracker');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -576,6 +577,98 @@ setInterval(() => {
   }
 }, 60000).unref?.();
 
+// ═══════════════════════════════════════════════
+//  RATE-LIMIT-AWARE DISCORD REQUEST WRAPPER
+//  Makes a Discord API call via axios. On 429 it marks the account
+//  rate-limited and automatically tries the next account in the pool.
+//  Each candidate uses its own proxy so IPs stay isolated.
+//
+//  opts:
+//    method   — HTTP verb (default: 'get')
+//    url      — full Discord API URL
+//    data     — request body (POST / PATCH / PUT)
+//    token    — preferred account token (falls back to active)
+//    rotate   — try next account on 429? (default: true)
+//    extra    — extra axios options (timeout, responseType…)
+// ═══════════════════════════════════════════════
+async function discordRequest({ method = 'get', url, data, token, rotate = true, extra = {} }) {
+  const allEntries = Array.from(clients.values());
+
+  // Primary: the entry whose token matches, or the currently active one
+  const primaryEntry = token
+    ? allEntries.find(e => e.token === token)
+    : allEntries.find(e => e.name === activeRef.get());
+
+  // Candidate list: primary first, then all others (when rotating)
+  const candidates = [];
+  if (primaryEntry) candidates.push(primaryEntry);
+  if (rotate) {
+    for (const e of allEntries) {
+      if (!candidates.includes(e)) candidates.push(e);
+    }
+  }
+
+  let lastError = new Error('No connected accounts available');
+
+  for (const entry of candidates) {
+    // Skip accounts that are still inside their rate-limit window
+    if (isRateLimited(entry.token)) {
+      if (entry === primaryEntry && rotate && candidates.length > 1) {
+        console.log(`[rate-limit] ${entry.name} still blocked → trying next account`);
+      }
+      lastError = new Error(`Account "${entry.name}" is rate-limited — rotating…`);
+      continue;
+    }
+
+    // Build axios config using this entry's own Discord headers + proxy
+    const axiosCfg = {
+      method,
+      url,
+      headers: discordHeaders(entry.token),
+      ...extra,
+      validateStatus: () => true,
+    };
+    if (data !== undefined) axiosCfg.data = data;
+
+    if (entry.proxy) {
+      try {
+        const pa = buildProxyAgents(entry.proxy);
+        if (pa) axiosCfg.httpsAgent = pa.agent;
+      } catch (_) {}
+    }
+
+    let resp;
+    try {
+      resp = await axios(axiosCfg);
+    } catch (networkErr) {
+      throw networkErr; // real network error — don't swallow
+    }
+
+    // ── 429 Rate Limited ─────────────────────────────────────────
+    if (resp.status === 429) {
+      const retryAfterMs = Math.ceil(
+        parseFloat(resp.headers?.['retry-after'] ?? resp.data?.retry_after ?? 5) * 1000
+      );
+      markRateLimited(entry.token, retryAfterMs, url, entry.name);
+      console.log(`[rate-limit] ${entry.name} → 429 on ${url} (blocked ${Math.ceil(retryAfterMs / 1000)}s)`);
+      lastError = new Error(`Rate limited on "${entry.name}" — retry in ${Math.ceil(retryAfterMs / 1000)}s`);
+      if (!rotate) throw lastError;
+      continue; // try next candidate
+    }
+
+    // ── Any other 4xx / 5xx ──────────────────────────────────────
+    if (resp.status >= 400) {
+      const err = new Error(resp.data?.message || resp.data?.error || `HTTP ${resp.status}`);
+      err.response = { status: resp.status, data: resp.data, headers: resp.headers };
+      throw err;
+    }
+
+    return resp; // ✅ success
+  }
+
+  throw lastError; // all candidates exhausted or all rate-limited
+}
+
 // Standardized error handler
 function ok(res, payload = {}) { res.json({ success: true, ...payload }); }
 function fail(res, err) {
@@ -771,9 +864,7 @@ app.get('/api/discord/friends', async (req, res) => {
   try {
     const c = pickClient(req);
     if (!c?.token) return fail(res, new Error('Not connected to Discord'));
-    const r = await axios.get('https://discord.com/api/v9/users/@me/relationships', {
-      headers: { Authorization: c.token }
-    });
+    const r = await discordRequest({ url: 'https://discord.com/api/v9/users/@me/relationships', token: c.token });
     const friends = r.data.filter(x => x.type === 1).map(f => ({
       id: f.user.id,
       username: f.user.username,

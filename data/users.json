@@ -339,6 +339,26 @@
           "ip": "127.0.0.1"
         }
       ]
+    },
+    {
+      "id": "u_64e55e8634305cce",
+      "username": "jei2ieidid",
+      "passwordHash": "$2b$10$aR2EU8MHhOodAMoIhsDw2.K9I.9dwO44oClvByPh5n/Qvml/K7WJK",
+      "discordId": null,
+      "discordUsername": null,
+      "discordAvatar": null,
+      "createdAt": 1780488740726,
+      "lastLogin": 1780488740726,
+      "deviceTokens": [
+        {
+          "id": "cedc05e8160510c9",
+          "hash": "d9b6e9e6b786375f101e678cea513339a3da6300f6f4c5ad0f37a968f24aa2ae",
+          "createdAt": 1780488740726,
+          "lastSeen": 1780488740726,
+          "ua": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+          "ip": "127.0.0.1"
+        }
+      ]
     }
   ]
 }
