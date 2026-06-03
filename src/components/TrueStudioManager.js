@@ -668,6 +668,14 @@ export class TrueStudioManager {
       if (!r?.success && r?.error) throw new Error(r.error);
       this.pfp = r?.pfp || { avatar, banner, updatedAt: Date.now() };
       showNotification(clear ? 'تم مسح Pfp المحفوظ' : 'تم حفظ Pfp — سيطبق على البوتات الجديدة', 'success');
+      // Update the library modal pfp-all button live if it's already open
+      const pfpAllBtn = this._libModal?.querySelector('#ts-lib-pfp-all');
+      if (pfpAllBtn) {
+        const hasPfp = !!(this.pfp?.avatar || this.pfp?.banner);
+        pfpAllBtn.disabled = !hasPfp;
+        pfpAllBtn.classList.toggle('mint', hasPfp);
+        pfpAllBtn.title = hasPfp ? 'تطبيق Pfp المحفوظ على كل البوتات ✓' : 'احفظ Avatar أو Banner أولاً';
+      }
       this.render();
     } catch (e) {
       showNotification('فشل حفظ Pfp: ' + (e.message || e), 'error');
@@ -1554,9 +1562,9 @@ export class TrueStudioManager {
               title="تفعيل الثلاث Privileged Intents لكل بوتات المكتبة">
               <span class="ts-drawn-icon bolt" aria-hidden="true"><i></i></span> iNTeNT ALl
             </button>
-            <button class="ts-btn" id="ts-lib-pfp-all"
+            <button class="ts-btn${(this.pfp?.avatar || this.pfp?.banner) ? ' mint' : ''}" id="ts-lib-pfp-all"
               ${(!this.pfp?.avatar && !this.pfp?.banner) ? 'disabled' : ''}
-              title="تطبيق Pfp المحفوظ على Bot Tokens الحالية">
+              title="${(this.pfp?.avatar || this.pfp?.banner) ? 'تطبيق Pfp المحفوظ على كل البوتات ✓' : 'احفظ Avatar أو Banner أولاً'}">
               <span class="ts-drawn-icon image" aria-hidden="true"><i></i></span> Pfp all
             </button>
             <button class="ts-btn" id="ts-lib-bulk-invite"
