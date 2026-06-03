@@ -3261,7 +3261,29 @@ const ts = require('./lib/trueStudio');
   }
 
   function isRateLimitedError(err) {
-    return err?.status === 429 || err?.code === 'RATE_LIMITED' || /rate[- ]?limit|429/i.test(err?.message || '');
+    return err?.status === 429 || err?.code === 'RATE_LIMITED' || err?.code === 'CLOUDFLARE_BLOCK' || /rate[- ]?limit|429/i.test(err?.message || '');
+  }
+
+  // Detects Cloudflare IP blocks vs normal Discord 429s.
+  // Source: Official Discord docs + discord.food + community research.
+  //
+  // A real Discord per-route 429 ALWAYS includes:
+  //   X-RateLimit-Bucket header  → rateLimit.bucket !== null
+  //   retry_after in JSON body   → rateLimit.retryAfter > 0
+  //
+  // A Cloudflare IP block has NEITHER — just a JSON {code:0} body or HTML
+  // with a "blocked" message. Cloudflare blocks can last up to 24 hours so
+  // waiting 60s on the same account is pointless → switch immediately.
+  function isCloudflareBlock(err) {
+    if (err?.code === 'CLOUDFLARE_BLOCK') return true; // set by _req fast-fail
+    if (err?.status !== 429) return false;
+    const msg = String(err?.message || err?.data?.message || '').toLowerCase();
+    if (/blocked|error\s*1015|cloudflare|temporarily restricted/i.test(msg)) return true;
+    if (err?.data?.code === 0) return true;
+    // No bucket + no retry_after → Discord always sends these on real 429s
+    const hasBucket = err?.rateLimit?.bucket != null;
+    const hasRetry  = Number(err?.rateLimit?.retryAfter) > 0 || Number(err?.rateLimit?.waitMs) > 0 || Number(err?.retryAfter) > 0;
+    return !hasBucket && !hasRetry;
   }
 
   async function withTsRateRetry(label, fn, { attempts = 2, send = null, minWaitMs = 0 } = {}) {
@@ -5496,29 +5518,46 @@ const ts = require('./lib/trueStudio');
                 batchHad401 = true;
               }
               if (isRateLimitedError(err)) {
-                const _rlMs = Math.max(retryAfterMs(err), 10_000);
-                tsLog('warn', `⚠️ Rate limit (429) على ${slot.name} [${currentEmail}] — جاري البحث عن حساب بديل…`);
+                // ── Distinguish Cloudflare block from real Discord 429 ────────
+                // Research (Official Discord docs + discord.food):
+                //   Real Discord 429 → X-RateLimit-Bucket + retry_after always present
+                //   Cloudflare block → neither present, lasts up to 24h, no point waiting
+                const _isCf  = isCloudflareBlock(err);
+                const _rlMs  = _isCf ? 0 : Math.max(retryAfterMs(err), 10_000);
+                const _label = _isCf
+                  ? `🚫 Cloudflare block على ${slot.name} [${currentEmail}] — تبديل فوري للحساب`
+                  : `⚠️ Rate limit (429) على ${slot.name} [${currentEmail}] — جاري البحث عن حساب بديل`;
+                tsLog('warn', _label);
+
+                let _retryAllowed = true;
+
                 if (!batchRateLimitHandled) {
                   batchRateLimitHandled = true;
-                  // Mark current account as paused for the duration of the rate limit
-                  accountPaused[currentEmail] = Date.now() + Math.max(_rlMs, 60_000);
+
+                  // Pause current account:
+                  //   Cloudflare → 4 hours (block is long-lived, don't waste it)
+                  //   Discord 429 → actual retry_after + 60s safety
+                  accountPaused[currentEmail] = Date.now() + (_isCf ? 4 * 60 * 60 * 1000 : Math.max(_rlMs, 60_000));
+
                   // Try to switch to another saved TS account
                   const switched = await switchToNextAccount();
+
                   if (switched) {
-                    tsLog('info', `الاستمرار بالإنشاء من الحساب: ${currentEmail}`);
+                    tsLog('info', `✓ جاري الاستمرار من الحساب: ${currentEmail}`);
+                  } else if (_isCf) {
+                    // Cloudflare + no other account → don't waste 60s (it won't lift)
+                    tsLog('error', `🚫 Cloudflare block ولا يوجد حساب بديل — تخطّي ${slot.name} وإكمال باقي الطلبات`);
+                    _retryAllowed = false;
                   } else {
-                    // No other account available — pause for 60s then retry same account
+                    // Discord 429 + no other account → wait 60s then retry same account
                     tsLog('warn', `لا يوجد حساب بديل — إيقاف الجلسة 60 ثانية ثم المحاولة من نفس الحساب…`);
                     s.state = 'waiting';
                     s.waitUntilTs = Date.now() + 60_000;
                     s.waitTotalMs = 60_000;
                     pushTsEvent('ts_progress');
                     await tsSleep(60_000);
-                    s.state = 'running';
-                    s.waitUntilTs = 0;
-                    s.waitTotalMs = 0;
+                    s.state = 'running'; s.waitUntilTs = 0; s.waitTotalMs = 0;
                     pushTsEvent('ts_progress');
-                    // Health check after wait
                     try {
                       const _rh = await ts.accountHealthProbe({ token, netOpts });
                       if (!_rh.ok) throw new Error(_rh.message);
@@ -5529,31 +5568,31 @@ const ts = require('./lib/trueStudio');
                     }
                   }
                 }
-                // Retry this bot slot with the current (possibly switched) context
-                try {
-                  const _retryStart = Date.now();
-                  const { appPayload: rApp, botToken: rTok } = await createOneBotAsync(slot.botIndex, slot.num, slot.name, teamIdSnapshot);
-                  const rDurMs = Date.now() - _retryStart;
-                  s.bots.push({ name: slot.name, appId: rApp.id, botUserId: rApp.bot?.id || null, token: rTok });
-                  s.done += 1; s.failed -= 1;
-                  if (rules.linkBots && teamId) teamAppCounts[teamId] = (teamAppCounts[teamId] || 0) + 1;
-                  tsLog('success', 'تم (retry/' + currentEmail + '): ' + slot.name, { durationMs: rDurMs, appId: rApp.id, botName: slot.name });
+
+                // Retry this bot slot only if allowed (not a Cloudflare dead-end)
+                if (_retryAllowed) {
                   try {
-                    const tkList = await botTokensStore.get() || [];
-                    const tkFiltered = tkList.filter(t => t.appId !== rApp.id);
-                    tkFiltered.unshift({
-                      appId: rApp.id, name: slot.name,
-                      icon: rApp.icon || null,
-                      token: rTok,
-                      email: currentEmail || '',
-                      resetAt: Date.now(),
-                      createdAt: Date.now(),
-                    });
-                    await botTokensStore.set(tkFiltered);
-                  } catch (_) {}
-                  pushTsEvent('ts_bot_created', { bot: { name: slot.name, appId: rApp.id, hasToken: true, durationMs: rDurMs, isRetry: true } });
-                } catch (re) {
-                  tsLog('error', 'فشل retry ' + slot.name + ' (حتى بعد التبديل): ' + (re?.message || re));
+                    const _retryStart = Date.now();
+                    const { appPayload: rApp, botToken: rTok } = await createOneBotAsync(slot.botIndex, slot.num, slot.name, teamIdSnapshot);
+                    const rDurMs = Date.now() - _retryStart;
+                    s.bots.push({ name: slot.name, appId: rApp.id, botUserId: rApp.bot?.id || null, token: rTok });
+                    s.done += 1; s.failed -= 1;
+                    if (rules.linkBots && teamId) teamAppCounts[teamId] = (teamAppCounts[teamId] || 0) + 1;
+                    tsLog('success', `تم (retry/${currentEmail}): ${slot.name}`, { durationMs: rDurMs, appId: rApp.id, botName: slot.name });
+                    try {
+                      const tkList = await botTokensStore.get() || [];
+                      const tkFiltered = tkList.filter(t => t.appId !== rApp.id);
+                      tkFiltered.unshift({
+                        appId: rApp.id, name: slot.name, icon: rApp.icon || null,
+                        token: rTok, email: currentEmail || '',
+                        resetAt: Date.now(), createdAt: Date.now(),
+                      });
+                      await botTokensStore.set(tkFiltered);
+                    } catch (_) {}
+                    pushTsEvent('ts_bot_created', { bot: { name: slot.name, appId: rApp.id, hasToken: true, durationMs: rDurMs, isRetry: true } });
+                  } catch (re) {
+                    tsLog('error', `فشل retry ${slot.name} (حتى بعد التبديل): ` + (re?.message || re));
+                  }
                 }
               }
               pushTsEvent('ts_progress');
