@@ -319,6 +319,10 @@ export class TrueStudioManager {
           bar.style.width = elapsedPct + '%';
         }
       }
+      this.contentArea.querySelectorAll('[data-ts-account-hold-until]').forEach(node => {
+        const until = Number(node.getAttribute('data-ts-account-hold-until') || 0);
+        node.textContent = this._fmtMs(Math.max(0, until - Date.now()));
+      });
     }, 500);
   }
 
@@ -368,6 +372,7 @@ export class TrueStudioManager {
             ${s.state === 'waiting' ? `<div class="ts-countdown-bar" id="ts-countdown-bar"><span style="width:0%"></span></div>` : ''}
           </div>
         </div>
+        ${this._renderAccountRateLimits(s)}
 
         <!-- Account picker -->
         <div class="ts-card">
@@ -757,6 +762,22 @@ export class TrueStudioManager {
       return `${meta.label} <span class="ts-stat-extra">(${this._fmtMs(left)})</span>`;
     }
     return meta.label;
+  }
+
+  _renderAccountRateLimits(s) {
+    const holds = Object.entries(s?.accountRateLimits || {})
+      .filter(([, h]) => h && Number(h.waitUntilTs || 0) > Date.now());
+    if (!holds.length) return '';
+    return `
+      <div class="ts-account-holds">
+        ${holds.map(([email, h]) => `
+          <div class="ts-account-hold">
+            <span class="ts-account-hold-main">${escapeHtml(email)} · rate limit</span>
+            <span class="ts-account-hold-time" data-ts-account-hold-until="${Number(h.waitUntilTs || 0)}">${this._fmtMs(Math.max(0, Number(h.waitUntilTs || 0) - Date.now()))}</span>
+          </div>
+        `).join('')}
+      </div>
+    `;
   }
 
   _optionLabel(a) {

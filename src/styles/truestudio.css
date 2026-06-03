@@ -848,6 +848,36 @@
   transition: width 0.4s linear;
 }
 
+.ts-account-holds {
+  display: grid;
+  gap: 6px;
+  margin: -6px 0 12px;
+}
+.ts-account-hold {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 32px;
+  padding: 7px 10px;
+  border: 1px solid rgba(240,178,50,0.25);
+  border-radius: 6px;
+  background: rgba(240,178,50,0.08);
+  color: #d5a844;
+  font-size: 11px;
+}
+.ts-account-hold-main {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ts-account-hold-time {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--ts-warn);
+}
+
 /* ── Bots-created list (compact) ── */
 .ts-bots-list {
   margin-top: 12px;

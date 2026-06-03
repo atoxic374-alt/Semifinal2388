@@ -3049,6 +3049,7 @@ const ts = require('./lib/trueStudio');
       teamName: s.teamName,
       waitUntilTs: s.waitUntilTs,
       waitTotalMs: s.waitTotalMs,
+      accountRateLimits: s.accountRateLimits || {},
       startedAt: s.startedAt,
       finishedAt: s.finishedAt,
       bots: (s.bots || []).map(b => ({ name: b.name, appId: b.appId, botUserId: b.botUserId, hasToken: !!b.token })),
@@ -3179,6 +3180,7 @@ const ts = require('./lib/trueStudio');
   // ── Async sleep that respects cancel flag ──────────────────────
   async function tsSleep(ms) {
     const s = tsSession();
+    const prevState = s.state;
     s.waitUntilTs = Date.now() + ms;
     s.waitTotalMs = ms;
     s.state = 'waiting';
@@ -3193,8 +3195,118 @@ const ts = require('./lib/trueStudio');
     s.waitUntilTs = 0;
     s.waitTotalMs = 0;
     if (s.cancelRequested) return;
-    s.state = 'running';
+    s.state = (prevState === 'idle' || prevState === 'done' || prevState === 'cancelled' || prevState === 'error')
+      ? prevState
+      : 'running';
     pushTsEvent('ts_progress');
+  }
+
+  function makeTsRateLimiter(label, send = null, { minimumGapMs = 250, account = null } = {}) {
+    let lastLogAt = 0;
+    const accountKey = String(account || '').toLowerCase();
+    return ts.createRateLimitGuard({
+      label,
+      minimumGapMs,
+      safetyMs: 900,
+      onWait: async ({ phase, reason, waitMs, route, bucket, scope }) => {
+        const s = tsSession();
+        if (phase === 'start' && waitMs > 0) {
+          const prevState = s.state;
+          s.waitUntilTs = Date.now() + waitMs;
+          s.waitTotalMs = waitMs;
+          s.state = 'waiting';
+          if (!s.accountRateLimits || typeof s.accountRateLimits !== 'object') s.accountRateLimits = {};
+          if (accountKey) {
+            s.accountRateLimits[accountKey] = {
+              label,
+              reason,
+              waitUntilTs: s.waitUntilTs,
+              waitTotalMs: waitMs,
+              route: route || null,
+              bucket: bucket || null,
+              scope: scope || null,
+              prevState,
+            };
+          }
+          const now = Date.now();
+          if (now - lastLogAt > 2500) {
+            lastLogAt = now;
+            const seconds = Math.max(1, Math.ceil(waitMs / 1000));
+            tsLog('warn', `${accountKey || 'account'} موقوف مؤقتاً بسبب rate limit: انتظار ${seconds}s قبل الطلب التالي (${label}/${reason})`);
+          }
+          try { send?.({ type: 'rate_limit_wait', label, account: accountKey || null, reason, waitMs, route, bucket, scope }); } catch (_) {}
+          pushTsEvent('ts_progress');
+        } else if (phase === 'end') {
+          const prevState = accountKey && s.accountRateLimits?.[accountKey]?.prevState;
+          if (!s.cancelRequested && s.state === 'waiting') {
+            s.state = (prevState === 'idle' || prevState === 'done' || prevState === 'cancelled' || prevState === 'error')
+              ? prevState
+              : 'running';
+          }
+          s.waitUntilTs = 0;
+          s.waitTotalMs = 0;
+          if (accountKey && s.accountRateLimits) delete s.accountRateLimits[accountKey];
+          try { send?.({ type: 'rate_limit_resume', label, account: accountKey || null, reason, route, bucket, scope }); } catch (_) {}
+          pushTsEvent('ts_progress');
+        }
+      },
+    });
+  }
+
+  function retryAfterMs(err, fallbackMs = 60_000) {
+    const seconds = Number(err?.retryAfter ?? err?.retry_after ?? err?.data?.retry_after ?? err?.rateLimit?.retryAfter ?? err?.rateLimit?.resetAfter ?? 0);
+    if (Number.isFinite(seconds) && seconds > 0) return Math.ceil(seconds * 1000) + 900;
+    const ms = Number(err?.rateLimit?.waitMs || 0);
+    return Number.isFinite(ms) && ms > 0 ? ms + 900 : fallbackMs;
+  }
+
+  function isRateLimitedError(err) {
+    return err?.status === 429 || err?.code === 'RATE_LIMITED' || /rate[- ]?limit|429/i.test(err?.message || '');
+  }
+
+  async function withTsRateRetry(label, fn, { attempts = 2, send = null, minWaitMs = 0 } = {}) {
+    let lastErr = null;
+    for (let attempt = 0; attempt <= attempts; attempt++) {
+      try {
+        return await fn(attempt);
+      } catch (e) {
+        lastErr = e;
+        if (!isRateLimitedError(e) || attempt >= attempts) throw e;
+        const waitMs = Math.max(retryAfterMs(e), minWaitMs);
+        const seconds = Math.ceil(waitMs / 1000);
+        tsLog('warn', `${label}: rate limit — انتظار ${seconds}s ثم إعادة المحاولة (${attempt + 1}/${attempts})`);
+        try { send?.({ type: 'retry', label, attempt: attempt + 1, retryMs: waitMs }); } catch (_) {}
+        await tsSleep(waitMs);
+      }
+    }
+    throw lastErr;
+  }
+
+  const _tsAccountQueues = new Map();
+  function accountQueueKey(email) {
+    return `${currentUserId()}|${String(email || '').trim().toLowerCase()}`;
+  }
+
+  function enqueueTsAccount(email, job, { label = 'Bot Studio task' } = {}) {
+    const key = accountQueueKey(email);
+    const hadQueue = _tsAccountQueues.has(key);
+    const prev = _tsAccountQueues.get(key) || Promise.resolve();
+    const run = prev.catch(() => {}).then(async () => {
+      try {
+        return await job();
+      } finally {
+        if (_tsAccountQueues.get(key) === run) _tsAccountQueues.delete(key);
+      }
+    });
+    _tsAccountQueues.set(key, run);
+    if (hadQueue) {
+      try { tsLog('info', `${label}: تمت إضافته لطابور الحساب ${String(email || '').toLowerCase()}`); } catch (_) {}
+    }
+    return run;
+  }
+
+  function isTsAccountQueued(email) {
+    return _tsAccountQueues.has(accountQueueKey(email));
   }
 
   // ── Captcha settings (per-user, encrypted) ─────────────────────
@@ -3859,67 +3971,75 @@ const ts = require('./lib/trueStudio');
     try {
       if (!email) throw new Error('اختر حساباً أولاً');
 
-      const { token, client } = await tsGetToken(email);
-      const netOpts = { client };
-      const health = await ts.accountHealthProbe({ token, netOpts });
-      if (!health.ok) throw new Error('Account blocked: ' + health.message);
+      if (isTsAccountQueued(email)) send({ type: 'queued', account: email });
+      await enqueueTsAccount(email, async () => {
+        const { token, client } = await tsGetToken(email);
+        const rateLimiter = makeTsRateLimiter('pfp-apply-all', send, { minimumGapMs: 750, account: email });
+        const netOpts = { client, solveCaptcha: buildSolveCaptcha(), rateLimiter, captchaContext: 'pfp-apply-all' };
+        const health = await ts.accountHealthProbe({ token, netOpts });
+        if (!health.ok) throw new Error('Account blocked: ' + health.message);
 
-      const libApps = await ts.listApplications({ token, netOpts });
-      const bots = libApps.filter(a => a && a.bot && a.id);
-      if (!bots.length) throw new Error('لا توجد بوتات في المكتبة');
+        const libApps = await ts.listApplications({ token, netOpts });
+        const bots = libApps.filter(a => a && a.bot && a.id);
+        if (!bots.length) throw new Error('لا توجد بوتات في المكتبة');
 
-      send({ type: 'start', total: bots.length });
+        send({ type: 'start', total: bots.length });
 
-      let okCount = 0, failCount = 0;
+        let okCount = 0, failCount = 0;
 
-      for (let i = 0; i < bots.length; i++) {
-        const bot = bots[i];
-        let botOk = false, botErr = null, appOk = false, appErr = null;
+        for (let i = 0; i < bots.length; i++) {
+          const bot = bots[i];
+          let botOk = false, botErr = null, appOk = false, appErr = null;
 
-        // 1. Update bot avatar / banner
-        try {
-          await ts.updateBotProfileViaOwner({
-            token, appId: bot.id,
-            avatar: p.avatar || undefined,
-            banner: p.banner || undefined,
-            netOpts,
+          try {
+            await withTsRateRetry(`تحديث صورة البوت ${bot.name || bot.id}`, () =>
+              ts.updateBotProfileViaOwner({
+                token, appId: bot.id,
+                avatar: p.avatar || undefined,
+                banner: p.banner || undefined,
+                netOpts,
+              }),
+              { attempts: 2, send }
+            );
+            botOk = true;
+          } catch (e) {
+            botErr = e.message || String(e);
+          }
+
+          try {
+            await withTsRateRetry(`تحديث صورة التطبيق ${bot.name || bot.id}`, () =>
+              ts.updateAppVisuals({
+                token, appId: bot.id,
+                icon:       p.avatar || undefined,
+                coverImage: p.banner || undefined,
+                netOpts,
+              }),
+              { attempts: 2, send }
+            );
+            appOk = true;
+          } catch (e) {
+            appErr = e.message || String(e);
+          }
+
+          const overallOk = botOk;
+          if (overallOk) okCount++; else failCount++;
+
+          send({
+            type: 'progress',
+            index: i + 1, total: bots.length,
+            appId: bot.id, name: bot.name || bot.id,
+            ok: overallOk, error: botErr || undefined,
+            appOk, appError: appErr || undefined,
           });
-          botOk = true;
-        } catch (e) {
-          botErr = e.message || String(e);
-          if (e.status === 429) await ts.humanDelay(3000, 5000);
+
+          if (i < bots.length - 1) {
+            if ((i + 1) % 10 === 0) await tsSleep(10_000 + Math.floor(Math.random() * 8_000));
+            else await ts.humanDelay(1200, 2600);
+          }
         }
 
-        // 2. Update app icon / cover_image (same data — keeps library listing in sync)
-        try {
-          await ts.updateAppVisuals({
-            token, appId: bot.id,
-            icon:       p.avatar || undefined,
-            coverImage: p.banner || undefined,
-            netOpts,
-          });
-          appOk = true;
-        } catch (e) {
-          appErr = e.message || String(e);
-          if (e.status === 429) await ts.humanDelay(3000, 5000);
-        }
-
-        const overallOk = botOk;   // bot update is the primary; app update is a bonus
-        if (overallOk) okCount++; else failCount++;
-
-        send({
-          type: 'progress',
-          index: i + 1, total: bots.length,
-          appId: bot.id, name: bot.name || bot.id,
-          ok: overallOk, error: botErr || undefined,
-          appOk, appError: appErr || undefined,
-        });
-
-        // Short humanized delay between bots — much faster than before
-        if (i < bots.length - 1) await ts.humanDelay(150, 350);
-      }
-
-      send({ type: 'done', okCount, failCount });
+        send({ type: 'done', okCount, failCount });
+      }, { label: 'Apply all PFP' });
     } catch (e) {
       send({ type: 'error', error: e.message || String(e) });
     } finally {
@@ -3946,11 +4066,19 @@ const ts = require('./lib/trueStudio');
       const email = String(req.body?.email || '').toLowerCase();
       const enabled = req.body?.enabled !== false;
       if (!appId || !email) throw new Error('Application id and email are required');
-      const { token, client } = await tsGetToken(email);
-      const health = await ts.accountHealthProbe({ token, netOpts: { client } });
-      if (!health.ok) return fail(res, new Error('Account health check blocked intent update: ' + health.message));
-      const updated = await ts.setApplicationIntents({ token, appId, enabled, netOpts: { client } });
-      ok(res, { appId, intents: ts.normalizeIntentState(updated), app: { id: updated.id, name: updated.name, flags: updated.flags, flags_new: updated.flags_new }, health });
+      const result = await enqueueTsAccount(email, async () => {
+        const { token, client } = await tsGetToken(email);
+        const rateLimiter = makeTsRateLimiter('single-intents', null, { minimumGapMs: 500, account: email });
+        const netOpts = { client, solveCaptcha: buildSolveCaptcha(), rateLimiter, captchaContext: 'single-intents' };
+        const health = await ts.accountHealthProbe({ token, netOpts });
+        if (!health.ok) throw new Error('Account health check blocked intent update: ' + health.message);
+        const updated = await withTsRateRetry('تفعيل iNTeNTs', () =>
+          ts.setApplicationIntents({ token, appId, enabled, netOpts }),
+          { attempts: 2 }
+        );
+        return { appId, intents: ts.normalizeIntentState(updated), app: { id: updated.id, name: updated.name, flags: updated.flags, flags_new: updated.flags_new }, health };
+      }, { label: 'Single intents' });
+      ok(res, result);
     } catch (e) { fail(res, e); }
   });
 
@@ -3959,38 +4087,48 @@ const ts = require('./lib/trueStudio');
       const email = String(req.body?.email || '').toLowerCase();
       const enabled = req.body?.enabled !== false;
       if (!email) throw new Error('Email is required');
-      const { token, client } = await tsGetToken(email);
-      const health = await ts.accountHealthProbe({ token, netOpts: { client } });
-      if (!health.ok) return fail(res, new Error('Account health check blocked bulk intent update: ' + health.message));
-      const libApps = await ts.listApplications({ token, netOpts: { client } });
-      const bots = libApps.filter(a => a && a.bot && a.id);
-      const results = [];
-      for (const appObj of bots) {
-        // Skip bots already in the desired state
-        const currentState = ts.normalizeIntentState(appObj);
-        const allEnabled = Object.values(currentState.state || {}).every(s => s.enabled);
-        if (enabled && allEnabled) {
-          results.push({ appId: appObj.id, name: appObj.name, ok: true, skipped: true });
-          continue;
+      const payload = await enqueueTsAccount(email, async () => {
+        const { token, client } = await tsGetToken(email);
+        const rateLimiter = makeTsRateLimiter('intents-apply-all', null, { minimumGapMs: 700, account: email });
+        const netOpts = { client, solveCaptcha: buildSolveCaptcha(), rateLimiter, captchaContext: 'intents-apply-all' };
+        const health = await ts.accountHealthProbe({ token, netOpts });
+        if (!health.ok) throw new Error('Account health check blocked bulk intent update: ' + health.message);
+        const libApps = await ts.listApplications({ token, netOpts });
+        const bots = libApps.filter(a => a && a.bot && a.id);
+        const results = [];
+        for (let i = 0; i < bots.length; i++) {
+          const appObj = bots[i];
+          const currentState = ts.normalizeIntentState(appObj);
+          const allEnabled = Object.values(currentState.state || {}).every(s => s.enabled);
+          if (enabled && allEnabled) {
+            results.push({ appId: appObj.id, name: appObj.name, ok: true, skipped: true });
+            continue;
+          }
+          const allDisabled = Object.values(currentState.state || {}).every(s => !s.enabled);
+          if (!enabled && allDisabled) {
+            results.push({ appId: appObj.id, name: appObj.name, ok: true, skipped: true });
+            continue;
+          }
+          try {
+            const updated = await withTsRateRetry(`تفعيل iNTeNTs على ${appObj.name || appObj.id}`, () =>
+              ts.setApplicationIntents({ token, appId: appObj.id, enabled, netOpts, app: appObj }),
+              { attempts: 2 }
+            );
+            results.push({ appId: appObj.id, name: appObj.name, ok: true, skipped: false, intents: ts.normalizeIntentState(updated) });
+          } catch (e) {
+            results.push({ appId: appObj.id, name: appObj.name, ok: false, skipped: false, error: e.message || String(e), status: e.status || 0, code: e.code || '' });
+          }
+          if (i < bots.length - 1) {
+            if ((i + 1) % 15 === 0) await tsSleep(12_000 + Math.floor(Math.random() * 10_000));
+            else await ts.humanDelay(1300, 2800);
+          }
         }
-        const allDisabled = Object.values(currentState.state || {}).every(s => !s.enabled);
-        if (!enabled && allDisabled) {
-          results.push({ appId: appObj.id, name: appObj.name, ok: true, skipped: true });
-          continue;
-        }
-        try {
-          const updated = await ts.setApplicationIntents({ token, appId: appObj.id, enabled, netOpts: { client } });
-          results.push({ appId: appObj.id, name: appObj.name, ok: true, skipped: false, intents: ts.normalizeIntentState(updated) });
-          await ts.humanDelay(700, 1400);
-        } catch (e) {
-          results.push({ appId: appObj.id, name: appObj.name, ok: false, skipped: false, error: e.message || String(e), status: e.status || 0, code: e.code || '' });
-          if (e.status === 429) await ts.humanDelay(3000, 5000);
-        }
-      }
-      const okCount = results.filter(r => r.ok).length;
-      const failCount = results.filter(r => !r.ok).length;
-      const skippedCount = results.filter(r => r.skipped).length;
-      ok(res, { results, okCount, failCount, skippedCount, health });
+        const okCount = results.filter(r => r.ok).length;
+        const failCount = results.filter(r => !r.ok).length;
+        const skippedCount = results.filter(r => r.skipped).length;
+        return { results, okCount, failCount, skippedCount, health };
+      }, { label: 'Apply all intents' });
+      ok(res, payload);
     } catch (e) { fail(res, e); }
   });
 
@@ -4051,14 +4189,21 @@ const ts = require('./lib/trueStudio');
 
     try {
       if (!email || !appId || !guildId) throw new Error('email و appId و guildId مطلوبون');
-      send({ type: 'step', msg: 'جاري التحقق من الحساب…' });
-      const { token, client } = await tsGetToken(email);
-      const netOpts = { client };
-      const health = await ts.accountHealthProbe({ token, netOpts });
-      if (!health.ok) throw new Error('Account blocked: ' + health.message);
+      if (isTsAccountQueued(email)) send({ type: 'queued', account: email });
+      await enqueueTsAccount(email, async () => {
+        send({ type: 'step', msg: 'جاري التحقق من الحساب…' });
+        const { token, client } = await tsGetToken(email);
+        const rateLimiter = makeTsRateLimiter('bot-add-to-guild', send, { minimumGapMs: 900, account: email });
+        const netOpts = { client, solveCaptcha: buildSolveCaptcha(), rateLimiter, captchaContext: 'bot-add-to-guild' };
+        const health = await ts.accountHealthProbe({ token, netOpts });
+        if (!health.ok) throw new Error('Account blocked: ' + health.message);
 
-      send({ type: 'step', msg: 'جاري إضافة البوت إلى السيرفر…' });
-      await ts.addBotToGuild({ token, clientId: appId, guildId, permissions: String(permissions), netOpts });
+        send({ type: 'step', msg: 'جاري إضافة البوت إلى السيرفر…' });
+        await withTsRateRetry('إضافة البوت للسيرفر', () =>
+          ts.addBotToGuild({ token, clientId: appId, guildId, permissions: String(permissions), netOpts }),
+          { attempts: 2, send, minWaitMs: 60_000 }
+        );
+      }, { label: 'Add bot to guild' });
 
       send({ type: 'done', appId, guildId });
     } catch (e) {
@@ -4085,69 +4230,70 @@ const ts = require('./lib/trueStudio');
       if (!email || !Array.isArray(appIds) || !appIds.length || !guildId)
         throw new Error('email, appIds[], و guildId مطلوبون');
 
-      const { token, client } = await tsGetToken(email);
-      const netOpts = { client };
+      if (isTsAccountQueued(email)) send({ type: 'queued', account: email });
+      await enqueueTsAccount(email, async () => {
+        const { token, client } = await tsGetToken(email);
+        const rateLimiter = makeTsRateLimiter('bot-bulk-add-to-guild', send, { minimumGapMs: 1000, account: email });
+        const netOpts = { client, solveCaptcha: buildSolveCaptcha(), rateLimiter, captchaContext: 'bot-bulk-add-to-guild' };
 
-      const health = await ts.accountHealthProbe({ token, netOpts });
-      if (!health.ok) throw new Error('Account blocked: ' + health.message);
+        const health = await ts.accountHealthProbe({ token, netOpts });
+        if (!health.ok) throw new Error('Account blocked: ' + health.message);
 
-      send({ type: 'start', total: appIds.length });
+        send({ type: 'start', total: appIds.length });
 
-      let okCount = 0, failCount = 0, skipCount = 0;
+        let okCount = 0, failCount = 0, skipCount = 0;
 
-      for (let i = 0; i < appIds.length; i++) {
-        const appId = appIds[i];
-        let succeeded = false;
-        let lastErr   = null;
-        let skipped   = false;
+        for (let i = 0; i < appIds.length; i++) {
+          const appId = appIds[i];
+          let succeeded = false;
+          let lastErr   = null;
+          let skipped   = false;
 
-        /* --- retry loop: up to 3 attempts on 429 --- */
-        for (let attempt = 0; attempt < 3; attempt++) {
-          try {
-            await ts.addBotToGuild({ token, clientId: appId, guildId, permissions: String(permissions), netOpts });
-            succeeded = true;
-            okCount++;
-            break;
-          } catch (e) {
-            if (e.status === 429 || e.code === 'RATE_LIMITED') {
-              const retryMs = Math.max(Number(e.retryAfter || e.data?.retry_after || 5) * 1000, 1500);
-              send({ type: 'retry', index: i + 1, total: appIds.length, appId, attempt: attempt + 1, retryMs });
-              await new Promise(r => setTimeout(r, retryMs + 600));
-            } else if (e.status === 403) {
-              /* 403 = already in server or missing guild perms — treat as skip */
-              succeeded = true; skipped = true; okCount++; skipCount++;
-              lastErr = e;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+              await ts.addBotToGuild({ token, clientId: appId, guildId, permissions: String(permissions), netOpts });
+              succeeded = true;
+              okCount++;
               break;
-            } else if (e.code === 'CAPTCHA' || e.captchaSitekey) {
-              lastErr = new Error('Captcha required — cannot auto-add this bot');
-              break;
-            } else {
-              lastErr = e;
-              break;
+            } catch (e) {
+              if (e.status === 429 || e.code === 'RATE_LIMITED') {
+                const retryMs = Math.max(retryAfterMs(e), 60_000);
+                send({ type: 'retry', index: i + 1, total: appIds.length, appId, attempt: attempt + 1, retryMs });
+                await tsSleep(retryMs);
+              } else if (e.status === 403) {
+                succeeded = true; skipped = true; okCount++; skipCount++;
+                lastErr = e;
+                break;
+              } else if (e.code === 'CAPTCHA' || e.code === 'CAPTCHA_REQUIRED' || e.code === 'CAPTCHA_FAILED' || e.captchaSitekey) {
+                lastErr = new Error('Captcha required/failed while adding this bot: ' + (e.message || e));
+                break;
+              } else {
+                lastErr = e;
+                break;
+              }
             }
+          }
+
+          if (!succeeded && !skipped) failCount++;
+
+          send({
+            type:    'progress',
+            index:   i + 1,
+            total:   appIds.length,
+            appId,
+            ok:      succeeded,
+            skipped,
+            error:   (!succeeded && lastErr) ? (lastErr.message || String(lastErr)) : undefined,
+          });
+
+          if (i < appIds.length - 1) {
+            if ((i + 1) % 8 === 0) await tsSleep(12_000 + Math.floor(Math.random() * 8_000));
+            else await ts.humanDelay(1800, 3600);
           }
         }
 
-        if (!succeeded && !skipped) failCount++;
-
-        send({
-          type:    'progress',
-          index:   i + 1,
-          total:   appIds.length,
-          appId,
-          ok:      succeeded,
-          skipped,
-          error:   (!succeeded && lastErr) ? (lastErr.message || String(lastErr)) : undefined,
-        });
-
-        /* safety delay between bots to respect rate limits */
-        if (i < appIds.length - 1) {
-          const delay = 700 + Math.floor(Math.random() * 700); /* 700–1400ms */
-          await new Promise(r => setTimeout(r, delay));
-        }
-      }
-
-      send({ type: 'done', okCount, failCount, skipCount });
+        send({ type: 'done', okCount, failCount, skipCount });
+      }, { label: 'Bulk add bots to guild' });
     } catch (e) {
       send({ type: 'error', error: e.message || String(e) });
     } finally {
@@ -4694,56 +4840,61 @@ const ts = require('./lib/trueStudio');
     const uid = currentUserId();
     withUser(uid, async () => {
       try {
-        const acct = tsFindAccount(email);
-        if (!acct) throw new Error('Account not found');
-        const creds = tsDecryptAccount(acct);
-        const { token, client } = await tsGetToken(email);
-        const netOpts = {
-          solveCaptcha: buildSolveCaptcha(), client,
-          totpSecret: creds.totpSecret || undefined,
-          password: creds.password || undefined,
-        };
-        const health = await ts.accountHealthProbe({ token, netOpts });
-        if (!health.ok) throw new Error('فحص الحساب أوقف Reset All: ' + health.message);
-        // Warm-up the dev portal once per cached client
-        if (!client.devPortalLoaded) {
-          try {
-            await ts.simulateBrowsing({ token, netOpts });
-            await ts.humanDelay(600, 1200);
-            await ts.loadDevPortal({ client, token, netOpts });
-          } catch (_) {}
-        }
-        for (let i = 0; i < bots.length; i++) {
-          if (s.cancelRequested) break;
-          const bot = bots[i];
-          s.current = bot.name;
-          pushResetAllEvent('ts_reset_all_progress');
-          try {
-            let mfaToken = null;
-            if (creds.totpSecret) {
-              try { mfaToken = await ts.acquireMfa({ token, totpSecret: creds.totpSecret, netOpts }); } catch (_) {}
-            }
-            try { await ts.simulateResetTokenButtonClick({ client, token, appId: bot.id, netOpts }); } catch (_) {}
-            try { await ts.ensureBot({ token, appId: bot.id, netOpts }); await ts.humanDelay(500, 900); } catch (_) {}
-            const newToken = await ts.resetBotToken({ token, appId: bot.id, mfa: mfaToken, netOpts });
-            if (!newToken) throw new Error('No token returned');
-            // Save to persistent bot-tokens store
-            const list = await botTokensStore.get() || [];
-            const filtered = list.filter(t => t.appId !== bot.id);
-            filtered.unshift({ appId: bot.id, name: bot.name, icon: bot.icon || null, token: newToken, email, resetAt: Date.now() });
-            await botTokensStore.set(filtered);
-            s.done++;
-            pushResetAllEvent('ts_reset_all_progress', { lastBot: { appId: bot.id, name: bot.name, icon: bot.icon || null, token: newToken } });
-          } catch (e) {
-            s.failed++;
-            s.errors.push(bot.name + ': ' + (e?.message || String(e)));
+        await enqueueTsAccount(email, async () => {
+          const acct = tsFindAccount(email);
+          if (!acct) throw new Error('Account not found');
+          const creds = tsDecryptAccount(acct);
+          const { token, client } = await tsGetToken(email);
+          const rateLimiter = makeTsRateLimiter('reset-all', null, { minimumGapMs: 900, account: email });
+          const netOpts = {
+            solveCaptcha: buildSolveCaptcha(), client,
+            totpSecret: creds.totpSecret || undefined,
+            password: creds.password || undefined,
+            rateLimiter,
+            captchaContext: 'reset-all',
+          };
+          const health = await ts.accountHealthProbe({ token, netOpts });
+          if (!health.ok) throw new Error('فحص الحساب أوقف Reset All: ' + health.message);
+          if (!client.devPortalLoaded) {
+            try {
+              await ts.simulateBrowsing({ token, netOpts });
+              await ts.humanDelay(600, 1200);
+              await ts.loadDevPortal({ client, token, netOpts });
+            } catch (_) {}
+          }
+          for (let i = 0; i < bots.length; i++) {
+            if (s.cancelRequested) break;
+            const bot = bots[i];
+            s.current = bot.name;
             pushResetAllEvent('ts_reset_all_progress');
+            try {
+              let mfaToken = null;
+              if (creds.totpSecret) {
+                try { mfaToken = await ts.acquireMfa({ token, totpSecret: creds.totpSecret, netOpts }); } catch (_) {}
+              }
+              try { await ts.simulateResetTokenButtonClick({ client, token, appId: bot.id, netOpts }); } catch (_) {}
+              try { await ts.ensureBot({ token, appId: bot.id, netOpts }); await ts.humanDelay(500, 900); } catch (_) {}
+              const newToken = await withTsRateRetry(`Reset token ${bot.name || bot.id}`, () =>
+                ts.resetBotToken({ token, appId: bot.id, mfa: mfaToken, netOpts }),
+                { attempts: 2, minWaitMs: 60_000 }
+              );
+              if (!newToken) throw new Error('No token returned');
+              const list = await botTokensStore.get() || [];
+              const filtered = list.filter(t => t.appId !== bot.id);
+              filtered.unshift({ appId: bot.id, name: bot.name, icon: bot.icon || null, token: newToken, email, resetAt: Date.now() });
+              await botTokensStore.set(filtered);
+              s.done++;
+              pushResetAllEvent('ts_reset_all_progress', { lastBot: { appId: bot.id, name: bot.name, icon: bot.icon || null, token: newToken } });
+            } catch (e) {
+              s.failed++;
+              s.errors.push(bot.name + ': ' + (e?.message || String(e)));
+              pushResetAllEvent('ts_reset_all_progress');
+            }
+            if (i < bots.length - 1 && !s.cancelRequested) {
+              await new Promise(r => setTimeout(r, 8000 + Math.floor(Math.random() * 10000)));
+            }
           }
-          // Human-like delay between bots
-          if (i < bots.length - 1 && !s.cancelRequested) {
-            await new Promise(r => setTimeout(r, 8000 + Math.floor(Math.random() * 10000)));
-          }
-        }
+        }, { label: 'Reset all bot tokens' });
         s.state = s.cancelRequested ? 'cancelled' : 'done';
       } catch (e) {
         s.state = 'error';
@@ -4805,6 +4956,10 @@ const ts = require('./lib/trueStudio');
     s.startedAt = Date.now();
     s.state = 'running';
     s.log = [];
+    if (isTsAccountQueued(creds.email)) {
+      s.state = 'waiting';
+      s.current = 'Queued for account';
+    }
     pushTsEvent('ts_progress');
 
     // Kick off in background but reply immediately
@@ -4812,7 +4967,15 @@ const ts = require('./lib/trueStudio');
     ok(res, { snapshot: tsSnapshot() });
 
     const batchSize = Math.max(1, Math.min(5, parseInt(req.body?.batchSize) || 1));
-    withUser(uid, () => runTsSession({ creds, rules: r, count: n, prefix: pfx, waitMinutes: wait, proxyList, speedFactor, selectedTeamId: selTeamId, brightData: bd, batchSize })
+    withUser(uid, () => enqueueTsAccount(creds.email, async () => {
+      const ses = tsSession();
+      if (!ses.cancelRequested) {
+        ses.state = 'running';
+        if (ses.current === 'Queued for account') ses.current = '';
+        pushTsEvent('ts_progress');
+      }
+      return runTsSession({ creds, rules: r, count: n, prefix: pfx, waitMinutes: wait, proxyList, speedFactor, selectedTeamId: selTeamId, brightData: bd, batchSize });
+    }, { label: 'Create bots session' })
       .catch(e => {
         const ses = tsSession();
         ses.state = 'error';
@@ -4881,8 +5044,17 @@ const ts = require('./lib/trueStudio');
         tsStoreToken(creds.email, token, client);
         tsLog('success', 'تم تسجيل الدخول بنجاح' + (userId ? ' (uid ' + userId + ')' : ''));
       }
+      const rateLimiter = makeTsRateLimiter('bot-create', null, { minimumGapMs: 800, account: creds.email });
       // Build netOpts ONCE per session, carrying the warmed client + speedFactor.
-      const netOpts = { solveCaptcha: buildSolveCaptcha(), client, totpSecret: creds.totpSecret || undefined, password: creds.password || undefined, speedFactor };
+      const netOpts = {
+        solveCaptcha: buildSolveCaptcha(),
+        client,
+        totpSecret: creds.totpSecret || undefined,
+        password: creds.password || undefined,
+        speedFactor,
+        rateLimiter,
+        captchaContext: 'bot-create',
+      };
       const health = await ts.accountHealthProbe({ token, netOpts });
       if (!health.ok) {
         throw new Error('فحص الحساب أوقف التنفيذ: ' + health.message);
@@ -4891,6 +5063,30 @@ const ts = require('./lib/trueStudio');
       if (bd) tsLog('info', 'Bright Data IP rotation: كل بوت ← session ID عشوائي → IP مختلف تلقائياً ✓ (Zone: ' + bd.zoneName + ')');
       else if (proxyList.length > 1) tsLog('info', 'قائمة Proxy: ' + proxyList.length + ' عنوان — سيتغير IP تلقائياً مع كل بوت ✓');
       else if (proxyList.length === 1) tsLog('info', 'Proxy ثابت: ' + proxyList[0].replace(/:[^:@]+@/, ':***@'));
+
+      const LONG_CREATE_REFRESH_MS = 4 * 60 * 1000;
+      async function refreshDeveloperContext(reason) {
+        if (s.cancelRequested) return;
+        tsLog('info', `تحديث جلسة Developer Portal بسبب: ${reason}`);
+        try {
+          const h = await ts.accountHealthProbe({ token, netOpts });
+          if (!h.ok) {
+            tsLog('warn', 'فحص الحساب بعد التحديث لم ينجح: ' + h.message);
+            return;
+          }
+        } catch (e) {
+          tsLog('warn', 'فشل فحص الحساب أثناء تحديث الجلسة: ' + (e.message || e));
+        }
+        try {
+          client.devPortalLoaded = false;
+          await ts.simulateBrowsing({ token, netOpts });
+          await ts.humanDelay(900, 1800, speedFactor);
+          await ts.loadDevPortal({ client, token, netOpts });
+          tsLog('success', 'تم تحديث Developer Portal — الاستئناف من آخر رقم محفوظ');
+        } catch (e) {
+          tsLog('warn', 'تعذر تحديث Developer Portal: ' + (e.message || e));
+        }
+      }
 
       // Behavioural warm-up — once per cached client.
       if (!client.devPortalLoaded) {
@@ -5042,7 +5238,7 @@ const ts = require('./lib/trueStudio');
           const savedPfp = tsPfpSettings();
           if (savedPfp.avatar || savedPfp.banner) {
             try {
-              await ts.updateBotProfile({ botToken, avatar: savedPfp.avatar || undefined, banner: savedPfp.banner || undefined });
+              await ts.updateBotProfile({ botToken, avatar: savedPfp.avatar || undefined, banner: savedPfp.banner || undefined, netOpts: botNetOpts });
               tsLog('success', 'تم تطبيق Pfp المحفوظ على ' + name);
             } catch (e) {
               tsLog('warn', 'تعذر تطبيق Pfp على ' + name + ': ' + (e.message || e));
@@ -5052,7 +5248,7 @@ const ts = require('./lib/trueStudio');
           // Auto-intents: if the setting is on, enable all 3 Privileged Intents right after creation
           if (!!(ensureData().tsAutoIntents)) {
             try {
-              await ts.setApplicationIntents({ token, appId: appPayload.id, enabled: true, netOpts: botNetOpts });
+              await ts.setApplicationIntents({ token, appId: appPayload.id, enabled: true, netOpts: botNetOpts, app: appPayload });
               tsLog('success', 'تم تفعيل iNTeNTs تلقائياً على ' + name);
             } catch (e) {
               tsLog('warn', 'تعذر تفعيل iNTeNTs على ' + name + ': ' + (e.message || e));
@@ -5118,6 +5314,7 @@ const ts = require('./lib/trueStudio');
 
           // Commit the counter advance atomically (before launching parallel work)
           d.tsLastNumber = baseNum + batchSlots.length;
+          writeData(d);
 
           const teamIdSnapshot = teamId; // freeze — rotation only happens between batches
 
@@ -5133,12 +5330,15 @@ const ts = require('./lib/trueStudio');
           pushTsEvent('ts_progress');
 
           // Launch all bots in this batch concurrently
+          const batchStartedAt = Date.now();
           const results = await Promise.allSettled(
             batchSlots.map(slot => createOneBotAsync(slot.botIndex, slot.num, slot.name, teamIdSnapshot))
           );
+          const batchDurationMs = Date.now() - batchStartedAt;
 
           // Process results sequentially — JS is single-threaded here so no races
           let batchHad401 = false;
+          let batchRateLimitWaited = false;
           for (let k = 0; k < results.length; k++) {
             const result = results[k];
             const slot   = batchSlots[k];
@@ -5175,11 +5375,21 @@ const ts = require('./lib/trueStudio');
                 tsLog('error', 'تم إلغاء التوكن من Discord — توقف الجلسة. الحساب قد يكون مُعلَّقاً.');
                 batchHad401 = true;
               }
-              if (err?.status === 429) {
-                const ra = err?.retryAfter || err?.retry_after || 5;
-                tsLog('warn', 'Rate limit (429) على ' + slot.name + ' — retry_after: ' + ra + 's — إعادة محاولة تلقائية…');
-                // Auto-retry once after the rate-limit window
-                await new Promise(r => setTimeout(r, Math.max(ra * 1000, 3000)));
+              if (isRateLimitedError(err)) {
+                const waitMs = Math.max(retryAfterMs(err), 60_000);
+                tsLog('warn', 'Rate limit (429) على ' + slot.name + ' — انتظار ' + Math.ceil(waitMs / 1000) + 's ثم فحص الحساب وإعادة المحاولة…');
+                if (!batchRateLimitWaited) {
+                  batchRateLimitWaited = true;
+                  await tsSleep(waitMs);
+                  try {
+                    const retryHealth = await ts.accountHealthProbe({ token, netOpts });
+                    if (!retryHealth.ok) throw new Error(retryHealth.message);
+                    tsLog('info', 'فحص الحساب بعد الانتظار OK — تحديث Developer Portal ثم الاستئناف');
+                    await refreshDeveloperContext('انتهاء انتظار rate limit');
+                  } catch (probeErr) {
+                    tsLog('warn', 'تعذر تأكيد صحة الحساب بعد الانتظار: ' + (probeErr.message || probeErr));
+                  }
+                }
                 try {
                   const _retryStart = Date.now();
                   const { appPayload: rApp, botToken: rTok } = await createOneBotAsync(slot.botIndex, slot.num, slot.name, teamIdSnapshot);
@@ -5188,6 +5398,19 @@ const ts = require('./lib/trueStudio');
                   s.done += 1; s.failed -= 1;
                   if (rules.linkBots && teamId) teamAppCounts[teamId] = (teamAppCounts[teamId] || 0) + 1;
                   tsLog('success', 'تم (retry): ' + slot.name, { durationMs: rDurMs, appId: rApp.id, botName: slot.name });
+                  try {
+                    const tkList = await botTokensStore.get() || [];
+                    const tkFiltered = tkList.filter(t => t.appId !== rApp.id);
+                    tkFiltered.unshift({
+                      appId: rApp.id, name: slot.name,
+                      icon: rApp.icon || null,
+                      token: rTok,
+                      email: creds.email || '',
+                      resetAt: Date.now(),
+                      createdAt: Date.now(),
+                    });
+                    await botTokensStore.set(tkFiltered);
+                  } catch (_) {}
                   pushTsEvent('ts_bot_created', { bot: { name: slot.name, appId: rApp.id, hasToken: true, durationMs: rDurMs, isRetry: true } });
                 } catch (re) {
                   tsLog('error', 'فشل retry ' + slot.name + ': ' + (re?.message || re));
@@ -5201,6 +5424,9 @@ const ts = require('./lib/trueStudio');
           pushTsEvent('ts_progress');
 
           if (batchHad401) break;
+          if (batchDurationMs > LONG_CREATE_REFRESH_MS && !s.pendingCaptcha && !s.cancelRequested) {
+            await refreshDeveloperContext(`دفعة الإنشاء أخذت ${Math.ceil(batchDurationMs / 1000)}s`);
+          }
           i = batchEnd;
 
           // Inter-batch cooldown
