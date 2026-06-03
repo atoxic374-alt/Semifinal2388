@@ -877,6 +877,15 @@
   font-variant-numeric: tabular-nums;
   color: var(--ts-warn);
 }
+/* Paused accounts (RL/CF-block by switcher) — slightly different colour */
+.ts-account-hold--paused {
+  border-color: rgba(160,120,240,0.28);
+  background: rgba(160,120,240,0.09);
+  color: #b89ee8;
+}
+.ts-account-hold--paused .ts-account-hold-time {
+  color: #c4aef5;
+}
 
 /* ── Bots-created list (compact) ── */
 .ts-bots-list {

@@ -773,15 +773,26 @@ export class TrueStudioManager {
   }
 
   _renderAccountRateLimits(s) {
-    const holds = Object.entries(s?.accountRateLimits || {})
-      .filter(([, h]) => h && Number(h.waitUntilTs || 0) > Date.now());
+    // Merge Discord route rate-limits + our paused-account entries into one list
+    const now = Date.now();
+    const routeHolds = Object.entries(s?.accountRateLimits || {})
+      .filter(([, h]) => h && Number(h.waitUntilTs || 0) > now)
+      .map(([email, h]) => ({ email, until: Number(h.waitUntilTs || 0), kind: 'rate-limit' }));
+    const pausedHolds = Object.entries(s?.pausedAccounts || {})
+      .filter(([, h]) => h && Number(h.waitUntilTs || 0) > now)
+      .map(([email, h]) => ({ email, until: Number(h.waitUntilTs || 0), kind: 'paused' }));
+    // Deduplicate (paused takes precedence over route RL for same email)
+    const seen = new Set();
+    const holds = [...pausedHolds, ...routeHolds].filter(({ email }) => {
+      if (seen.has(email)) return false; seen.add(email); return true;
+    });
     if (!holds.length) return '';
     return `
       <div class="ts-account-holds">
-        ${holds.map(([email, h]) => `
-          <div class="ts-account-hold">
-            <span class="ts-account-hold-main">${escapeHtml(email)} · rate limit</span>
-            <span class="ts-account-hold-time" data-ts-account-hold-until="${Number(h.waitUntilTs || 0)}">${this._fmtMs(Math.max(0, Number(h.waitUntilTs || 0) - Date.now()))}</span>
+        ${holds.map(({ email, until, kind }) => `
+          <div class="ts-account-hold ts-account-hold--${kind}">
+            <span class="ts-account-hold-main">${escapeHtml(email)} · ${kind === 'paused' ? 'متوقف مؤقتاً' : 'rate limit'}</span>
+            <span class="ts-account-hold-time" data-ts-account-hold-until="${until}">${this._fmtMs(Math.max(0, until - now))}</span>
           </div>
         `).join('')}
       </div>

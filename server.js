@@ -3050,6 +3050,13 @@ const ts = require('./lib/trueStudio');
       waitUntilTs: s.waitUntilTs,
       waitTotalMs: s.waitTotalMs,
       accountRateLimits: s.accountRateLimits || {},
+      // Accounts temporarily paused by the switcher (RL or CF block).
+      // Format: { email: unPauseTimestampMs } — same as accountRateLimits for frontend reuse.
+      pausedAccounts: Object.fromEntries(
+        Object.entries(s.pausedAccounts || {})
+          .filter(([, until]) => Number(until) > Date.now())
+          .map(([email, until]) => [email, { waitUntilTs: Number(until) }])
+      ),
       startedAt: s.startedAt,
       finishedAt: s.finishedAt,
       bots: (s.bots || []).map(b => ({ name: b.name, appId: b.appId, botUserId: b.botUserId, hasToken: !!b.token })),
@@ -5087,12 +5094,18 @@ const ts = require('./lib/trueStudio');
       else if (proxyList.length === 1) tsLog('info', 'Proxy ثابت: ' + proxyList[0].replace(/:[^:@]+@/, ':***@'));
 
       const LONG_CREATE_REFRESH_MS = 4 * 60 * 1000;
+      // Per-bot hard timeout: if a single bot creation takes longer than this,
+      // we treat it like a hung session — health-check then refresh/switch.
+      // Axios has a 32s HTTP timeout so this covers queued waits + retry loops.
+      const BOT_CREATION_TIMEOUT_MS = 75_000;
 
       // ── Account-switching pool ───────────────────────────────────────────
       // Tracks the currently active TS account email (may change on rate limit).
       let currentEmail = (creds.email || '').toLowerCase();
       // accountPaused[email] = timestamp until which this account is paused.
-      const accountPaused = {};
+      // Share reference with s.pausedAccounts so tsSnapshot() always sees live data.
+      const accountPaused = s.pausedAccounts;
+      accountPaused[currentEmail] = accountPaused[currentEmail] || 0; // ensure entry exists
 
       // Build pool: primary account first, then all other saved TS accounts.
       const _poolRaw = tsAccountsRaw();
@@ -5151,6 +5164,27 @@ const ts = require('./lib/trueStudio');
         return { email: _email, token: _token, client: _client, mfaToken: _mfa, netOpts: _no, rateLimiter: _rl, creds: acct };
       }
 
+      // Format seconds into a human-readable countdown string (2m 15s, 45s, etc.)
+      function _fmtCountdown(sec) {
+        if (sec <= 0) return '0s';
+        const m = Math.floor(sec / 60), s = sec % 60;
+        return m > 0 ? `${m}m ${s}s` : `${s}s`;
+      }
+
+      // Wrap a bot-creation promise with a hard timeout.
+      // Rejects with { code:'OP_TIMEOUT' } if it takes longer than BOT_CREATION_TIMEOUT_MS.
+      function _withBotTimeout(promise, botName) {
+        return new Promise((resolve, reject) => {
+          const t = setTimeout(() => {
+            reject(Object.assign(
+              new Error(`⏱ TIMEOUT: إنشاء "${botName}" تجاوز ${BOT_CREATION_TIMEOUT_MS / 1000}s`),
+              { code: 'OP_TIMEOUT' }
+            ));
+          }, BOT_CREATION_TIMEOUT_MS);
+          promise.then(v => { clearTimeout(t); resolve(v); }, e => { clearTimeout(t); reject(e); });
+        });
+      }
+
       // Find and activate the next available (non-rate-limited) account.
       // Reassigns the outer-scope: token, client, mfaToken, netOpts, rateLimiter, currentEmail.
       // Returns true on success, false if no usable account found.
@@ -5160,7 +5194,8 @@ const ts = require('./lib/trueStudio');
           const _ae = (_acct.email || '').toLowerCase();
           if (_ae === currentEmail) continue;
           if (accountPaused[_ae] && accountPaused[_ae] > _now) {
-            tsLog('info', `${_ae}: متوقف مؤقتاً حتى ${Math.ceil((accountPaused[_ae] - _now) / 1000)}s — تخطّي`);
+            const _remSec = Math.ceil((accountPaused[_ae] - _now) / 1000);
+            tsLog('info', `${_ae}: متوقف مؤقتاً — ${_fmtCountdown(_remSec)} — تخطّي`);
             continue;
           }
           try {
@@ -5168,8 +5203,9 @@ const ts = require('./lib/trueStudio');
             const _ctx = await buildAccountCtx(_acct);
             const _h = await ts.accountHealthProbe({ token: _ctx.token, netOpts: _ctx.netOpts });
             if (!_h.ok) {
-              tsLog('warn', `${_ae}: فحص فشل (${_h.message}) — تخطّي`);
-              accountPaused[_ae] = _now + 5 * 60 * 1000;
+              tsLog('warn', `${_ae}: فحص فشل (${_h.message}) — متوقف 2 دقيقة`);
+              accountPaused[_ae] = _now + 2 * 60 * 1000;
+              pushTsEvent('ts_progress');
               continue;
             }
             // Commit the switch
@@ -5191,7 +5227,8 @@ const ts = require('./lib/trueStudio');
             return true;
           } catch (_e) {
             tsLog('warn', `فشل التبديل إلى ${_ae}: ` + (_e.message || _e));
-            accountPaused[_ae] = _now + 5 * 60 * 1000;
+            accountPaused[_ae] = _now + 2 * 60 * 1000;
+            pushTsEvent('ts_progress');
           }
         }
         return false; // no available account
@@ -5473,7 +5510,10 @@ const ts = require('./lib/trueStudio');
             batchSlots.map((slot, _si) => {
               const _stagger = _si * 200;
               return (_stagger > 0 ? ts.humanDelay(_stagger, _stagger + 80, 1.0) : Promise.resolve())
-                .then(() => createOneBotAsync(slot.botIndex, slot.num, slot.name, teamIdSnapshot));
+                .then(() => _withBotTimeout(
+                createOneBotAsync(slot.botIndex, slot.num, slot.name, teamIdSnapshot),
+                slot.name
+              ));
             })
           );
           const batchDurationMs = Date.now() - batchStartedAt;
@@ -5517,6 +5557,44 @@ const ts = require('./lib/trueStudio');
                 tsLog('error', 'تم إلغاء التوكن من Discord — توقف الجلسة. الحساب قد يكون مُعلَّقاً.');
                 batchHad401 = true;
               }
+
+              // ── Per-bot timeout: session likely hung ─────────────────────────
+              if (err?.code === 'OP_TIMEOUT') {
+                tsLog('warn', `⏱ ${slot.name}: تجاوز ${BOT_CREATION_TIMEOUT_MS / 1000}s — فحص الحساب وتحديث الجلسة…`);
+                try {
+                  const _th = await ts.accountHealthProbe({ token, netOpts });
+                  if (_th.ok) {
+                    // Account is fine — portal may have drifted; refresh it then retry
+                    tsLog('info', 'الحساب سليم — تحديث Developer Portal وإعادة المحاولة…');
+                    await refreshDeveloperContext(`timeout on ${slot.name}`);
+                  } else {
+                    // Health failed — likely RL or ban — switch account
+                    tsLog('warn', `فحص الحساب فشل (${_th.message}) — تبديل الحساب…`);
+                    accountPaused[currentEmail] = Date.now() + 2 * 60 * 1000;
+                    pushTsEvent('ts_progress');
+                    await switchToNextAccount();
+                  }
+                  // Retry this bot once with a fresh context
+                  const _tRetryStart = Date.now();
+                  const { appPayload: tApp, botToken: tTok } = await createOneBotAsync(slot.botIndex, slot.num, slot.name, teamIdSnapshot);
+                  const tDurMs = Date.now() - _tRetryStart;
+                  s.bots.push({ name: slot.name, appId: tApp.id, botUserId: tApp.bot?.id || null, token: tTok });
+                  s.done += 1; s.failed -= 1;
+                  if (rules.linkBots && teamId) teamAppCounts[teamId] = (teamAppCounts[teamId] || 0) + 1;
+                  tsLog('success', `تم (timeout-retry): ${slot.name}`, { durationMs: tDurMs, appId: tApp.id });
+                  try {
+                    const _tkList = await botTokensStore.get() || [];
+                    const _tkFiltered = _tkList.filter(t => t.appId !== tApp.id);
+                    _tkFiltered.unshift({ appId: tApp.id, name: slot.name, icon: tApp.icon || null,
+                      token: tTok, email: currentEmail || '', resetAt: Date.now(), createdAt: Date.now() });
+                    await botTokensStore.set(_tkFiltered);
+                  } catch (_) {}
+                  pushTsEvent('ts_bot_created', { bot: { name: slot.name, appId: tApp.id, hasToken: true, durationMs: tDurMs, isRetry: true } });
+                } catch (_te) {
+                  tsLog('error', `فشل بعد timeout-retry لـ ${slot.name}: ` + (_te?.message || _te));
+                }
+              }
+
               if (isRateLimitedError(err)) {
                 // ── Distinguish Cloudflare block from real Discord 429 ────────
                 // Research (Official Discord docs + discord.food):
