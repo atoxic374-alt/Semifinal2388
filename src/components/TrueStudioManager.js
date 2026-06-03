@@ -374,6 +374,9 @@ export class TrueStudioManager {
         </div>
         ${this._renderAccountRateLimits(s)}
 
+        <!-- Live account pool panel -->
+        <div id="ts-account-pool">${this._renderAccountPool(s)}</div>
+
         <!-- Account picker -->
         <div class="ts-card">
           <div class="ts-card-head">
@@ -773,30 +776,80 @@ export class TrueStudioManager {
   }
 
   _renderAccountRateLimits(s) {
-    // Merge Discord route rate-limits + our paused-account entries into one list
+    // Only Discord per-route bucket rate-limits (technical detail, separate from paused-account pool)
     const now = Date.now();
-    const routeHolds = Object.entries(s?.accountRateLimits || {})
-      .filter(([, h]) => h && Number(h.waitUntilTs || 0) > now)
-      .map(([email, h]) => ({ email, until: Number(h.waitUntilTs || 0), kind: 'rate-limit' }));
-    const pausedHolds = Object.entries(s?.pausedAccounts || {})
-      .filter(([, h]) => h && Number(h.waitUntilTs || 0) > now)
-      .map(([email, h]) => ({ email, until: Number(h.waitUntilTs || 0), kind: 'paused' }));
-    // Deduplicate (paused takes precedence over route RL for same email)
-    const seen = new Set();
-    const holds = [...pausedHolds, ...routeHolds].filter(({ email }) => {
-      if (seen.has(email)) return false; seen.add(email); return true;
-    });
+    const holds = Object.entries(s?.accountRateLimits || {})
+      .filter(([, h]) => h && Number(h.waitUntilTs || 0) > now);
     if (!holds.length) return '';
     return `
       <div class="ts-account-holds">
-        ${holds.map(({ email, until, kind }) => `
-          <div class="ts-account-hold ts-account-hold--${kind}">
-            <span class="ts-account-hold-main">${escapeHtml(email)} · ${kind === 'paused' ? 'متوقف مؤقتاً' : 'rate limit'}</span>
-            <span class="ts-account-hold-time" data-ts-account-hold-until="${until}">${this._fmtMs(Math.max(0, until - now))}</span>
+        ${holds.map(([email, h]) => `
+          <div class="ts-account-hold">
+            <span class="ts-account-hold-main">${escapeHtml(email)} · rate limit</span>
+            <span class="ts-account-hold-time" data-ts-account-hold-until="${Number(h.waitUntilTs || 0)}">${this._fmtMs(Math.max(0, Number(h.waitUntilTs || 0) - now))}</span>
           </div>
         `).join('')}
       </div>
     `;
+  }
+
+  _renderAccountPool(s) {
+    // Only visible while a session is active or just finished
+    if (!s || !['running', 'waiting', 'done', 'error', 'cancelled'].includes(s.state)) return '';
+    const now = Date.now();
+    const activeEmail = (s.account || '').toLowerCase();
+    const paused = s.pausedAccounts || {};
+
+    // Build display pool: active account first, then all other saved accounts
+    const seen = new Set();
+    const rows = [];
+    if (activeEmail) { seen.add(activeEmail); rows.push({ email: activeEmail, isActive: true }); }
+    for (const a of (this.accounts || [])) {
+      const ae = (a.email || '').toLowerCase();
+      if (!seen.has(ae)) { seen.add(ae); rows.push({ email: ae, isActive: false }); }
+    }
+
+    // Only render panel if we have at least 1 account to show
+    if (rows.length === 0) return '';
+
+    const cells = rows.map(({ email, isActive }) => {
+      const p = paused[email];
+      const until = p ? Number(p.waitUntilTs || 0) : 0;
+      const isPaused = until > now;
+
+      if (isActive) {
+        return `
+          <div class="ts-pool-row ts-pool-row--active">
+            <span class="ts-pool-dot ts-pool-dot--active"></span>
+            <span class="ts-pool-email">${escapeHtml(email)}</span>
+            <span class="ts-pool-badge ts-pool-badge--active">نشط ●</span>
+          </div>`;
+      }
+      if (isPaused) {
+        return `
+          <div class="ts-pool-row ts-pool-row--paused">
+            <span class="ts-pool-dot ts-pool-dot--paused"></span>
+            <span class="ts-pool-email">${escapeHtml(email)}</span>
+            <span class="ts-pool-badge ts-pool-badge--paused" data-ts-account-hold-until="${until}">${this._fmtMs(Math.max(0, until - now))}</span>
+          </div>`;
+      }
+      return `
+        <div class="ts-pool-row ts-pool-row--ready">
+          <span class="ts-pool-dot ts-pool-dot--ready"></span>
+          <span class="ts-pool-email">${escapeHtml(email)}</span>
+          <span class="ts-pool-badge ts-pool-badge--ready">متاح</span>
+        </div>`;
+    }).join('');
+
+    return `
+      <div class="ts-pool-panel">
+        <div class="ts-pool-header">
+          <span class="ts-pool-icon">⇄</span>
+          <span class="ts-pool-title">حسابات الجلسة</span>
+          <span class="ts-pool-count">${rows.length} حساب</span>
+        </div>
+        <div class="ts-pool-rows">${cells}</div>
+      </div>`;
   }
 
   _optionLabel(a) {
@@ -3363,6 +3416,10 @@ export class TrueStudioManager {
     if (this._libModal && this._libCurrentTab === 'created') {
       this._renderLibraryTab();
     }
+    // Live account pool panel — refresh on every SSE update
+    const poolWrap = this.contentArea.querySelector('#ts-account-pool');
+    if (poolWrap) poolWrap.innerHTML = this._renderAccountPool(s);
+
     // Add or remove the countdown bar dynamically
     const stats = this.contentArea.querySelector('.ts-stats .ts-stat:nth-child(2)');
     if (stats) {

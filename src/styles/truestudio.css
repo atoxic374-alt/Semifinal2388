@@ -887,6 +887,106 @@
   color: #c4aef5;
 }
 
+/* ── Live Account Pool Panel ── */
+.ts-pool-panel {
+  margin: 0 0 12px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(255,255,255,0.03);
+}
+.ts-pool-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(255,255,255,0.04);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  font-size: 11px;
+  color: var(--ts-muted);
+}
+.ts-pool-icon {
+  font-size: 13px;
+  opacity: .7;
+}
+.ts-pool-title {
+  flex: 1;
+  font-weight: 600;
+  color: var(--ts-text);
+  letter-spacing: .3px;
+}
+.ts-pool-count {
+  font-variant-numeric: tabular-nums;
+  opacity: .6;
+}
+.ts-pool-rows {
+  display: grid;
+  gap: 0;
+}
+.ts-pool-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  font-size: 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  transition: background .15s;
+}
+.ts-pool-row:last-child { border-bottom: none; }
+/* dot indicator */
+.ts-pool-dot {
+  flex: 0 0 8px;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+}
+.ts-pool-dot--active  { background: #4ade80; box-shadow: 0 0 6px #4ade8088; animation: pool-pulse 1.4s ease-in-out infinite; }
+.ts-pool-dot--paused  { background: #a78bfa; }
+.ts-pool-dot--ready   { background: rgba(255,255,255,0.18); }
+@keyframes pool-pulse {
+  0%,100% { box-shadow: 0 0 4px #4ade8066; }
+  50%      { box-shadow: 0 0 10px #4ade80cc; }
+}
+/* email */
+.ts-pool-email {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ts-text);
+  direction: ltr;
+  text-align: left;
+}
+/* status badge */
+.ts-pool-badge {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 20px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: .3px;
+}
+.ts-pool-badge--active {
+  background: rgba(74,222,128,.15);
+  color: #4ade80;
+  border: 1px solid rgba(74,222,128,.3);
+}
+.ts-pool-badge--paused {
+  background: rgba(167,139,250,.14);
+  color: #a78bfa;
+  border: 1px solid rgba(167,139,250,.3);
+}
+.ts-pool-badge--ready {
+  background: rgba(255,255,255,.06);
+  color: var(--ts-muted);
+  border: 1px solid rgba(255,255,255,.1);
+}
+/* row backgrounds */
+.ts-pool-row--active  { background: rgba(74,222,128,.04); }
+.ts-pool-row--paused  { background: rgba(167,139,250,.04); }
+.ts-pool-row--ready   { background: transparent; }
+
 /* ── Bots-created list (compact) ── */
 .ts-bots-list {
   margin-top: 12px;
