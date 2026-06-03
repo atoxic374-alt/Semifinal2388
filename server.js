@@ -5044,9 +5044,9 @@ const ts = require('./lib/trueStudio');
         tsStoreToken(creds.email, token, client);
         tsLog('success', 'تم تسجيل الدخول بنجاح' + (userId ? ' (uid ' + userId + ')' : ''));
       }
-      const rateLimiter = makeTsRateLimiter('bot-create', null, { minimumGapMs: 800, account: creds.email });
+      let rateLimiter = makeTsRateLimiter('bot-create', null, { minimumGapMs: 800, account: creds.email });
       // Build netOpts ONCE per session, carrying the warmed client + speedFactor.
-      const netOpts = {
+      let netOpts = {
         solveCaptcha: buildSolveCaptcha(),
         client,
         totpSecret: creds.totpSecret || undefined,
@@ -5065,6 +5065,117 @@ const ts = require('./lib/trueStudio');
       else if (proxyList.length === 1) tsLog('info', 'Proxy ثابت: ' + proxyList[0].replace(/:[^:@]+@/, ':***@'));
 
       const LONG_CREATE_REFRESH_MS = 4 * 60 * 1000;
+
+      // ── Account-switching pool ───────────────────────────────────────────
+      // Tracks the currently active TS account email (may change on rate limit).
+      let currentEmail = (creds.email || '').toLowerCase();
+      // accountPaused[email] = timestamp until which this account is paused.
+      const accountPaused = {};
+
+      // Build pool: primary account first, then all other saved TS accounts.
+      const _poolRaw = tsAccountsRaw();
+      const accountPool = [creds];
+      for (const _a of _poolRaw) {
+        const _ae = (_a.email || '').toLowerCase();
+        if (_ae && _ae !== currentEmail) {
+          try {
+            const _dec = tsDecryptAccount(_a);
+            if (_dec.directToken || _dec.password) accountPool.push(_dec);
+          } catch (_) {}
+        }
+      }
+
+      // Login/warm-up a single account and return its ctx object.
+      // Reuses already-cached tokens (tsCachedToken).
+      async function buildAccountCtx(acct) {
+        const _email = (acct.email || '').toLowerCase();
+        let _token, _client;
+        const _cached = tsCachedToken(_email);
+        if (_cached?.token && _cached?.client) {
+          _token = _cached.token; _client = _cached.client;
+          tsLog('info', `جلسة محفوظة لـ ${_email} ✓`);
+        } else if (acct.directToken) {
+          _token = acct.directToken;
+          const _lp = bd ? buildBrightDataUrl(bd, 'login') : (proxyList[0] || null);
+          _client = ts.createClient(_lp);
+          tsLog('info', `${_email}: تسخين جلسة التوكن المباشر…`);
+          try { await ts.warmUpClient(_client); } catch (_e) { tsLog('warn', `${_email}: تسخين: ` + (_e.message || _e)); }
+          tsStoreToken(_email, _token, _client);
+        } else if (acct.password) {
+          tsLog('info', `${_email}: تسجيل دخول…`);
+          const _lp = bd ? buildBrightDataUrl(bd, 'login') : (proxyList[0] || null);
+          _client = ts.createClient(_lp);
+          const _r = await ts.login({ email: _email, password: acct.password, totpSecret: acct.totpSecret, netOpts: { solveCaptcha: buildSolveCaptcha(), client: _client, speedFactor } });
+          _token = _r.token;
+          tsStoreToken(_email, _token, _client);
+          tsLog('success', `${_email}: دخول ناجح ✓`);
+        } else {
+          throw new Error(`${_email}: لا يوجد توكن أو كلمة مرور`);
+        }
+        const _rl = makeTsRateLimiter('bot-create', null, { minimumGapMs: 800, account: _email });
+        const _no = {
+          solveCaptcha: buildSolveCaptcha(),
+          client: _client,
+          totpSecret: acct.totpSecret || undefined,
+          password: acct.password || undefined,
+          speedFactor,
+          rateLimiter: _rl,
+          captchaContext: 'bot-create',
+        };
+        let _mfa = null;
+        if (acct.totpSecret) {
+          try { _mfa = await ts.acquireMfa({ token: _token, totpSecret: acct.totpSecret, netOpts: _no }); } catch (_e) {}
+        }
+        return { email: _email, token: _token, client: _client, mfaToken: _mfa, netOpts: _no, rateLimiter: _rl, creds: acct };
+      }
+
+      // Find and activate the next available (non-rate-limited) account.
+      // Reassigns the outer-scope: token, client, mfaToken, netOpts, rateLimiter, currentEmail.
+      // Returns true on success, false if no usable account found.
+      async function switchToNextAccount() {
+        const _now = Date.now();
+        for (const _acct of accountPool) {
+          const _ae = (_acct.email || '').toLowerCase();
+          if (_ae === currentEmail) continue;
+          if (accountPaused[_ae] && accountPaused[_ae] > _now) {
+            tsLog('info', `${_ae}: متوقف مؤقتاً حتى ${Math.ceil((accountPaused[_ae] - _now) / 1000)}s — تخطّي`);
+            continue;
+          }
+          try {
+            tsLog('info', `⇄ جاري التبديل إلى: ${_ae} — فحص الحساب…`);
+            const _ctx = await buildAccountCtx(_acct);
+            const _h = await ts.accountHealthProbe({ token: _ctx.token, netOpts: _ctx.netOpts });
+            if (!_h.ok) {
+              tsLog('warn', `${_ae}: فحص فشل (${_h.message}) — تخطّي`);
+              accountPaused[_ae] = _now + 5 * 60 * 1000;
+              continue;
+            }
+            // Commit the switch
+            token = _ctx.token; client = _ctx.client; mfaToken = _ctx.mfaToken;
+            netOpts = _ctx.netOpts; rateLimiter = _ctx.rateLimiter; currentEmail = _ctx.email;
+            s.account = currentEmail;
+            tsLog('success', `✓ تم التبديل إلى: ${currentEmail} — الحساب سليم`);
+            pushTsEvent('ts_progress');
+            // Warm up dev portal on new account
+            try {
+              client.devPortalLoaded = false;
+              await ts.simulateBrowsing({ token, netOpts });
+              await ts.humanDelay(1000, 2000, speedFactor);
+              await ts.loadDevPortal({ client, token, netOpts });
+              tsLog('success', `Developer Portal جاهز على ${currentEmail} ✓`);
+            } catch (_e) {
+              tsLog('warn', `تعذر تحضير Portal على ${currentEmail}: ` + (_e.message || _e));
+            }
+            return true;
+          } catch (_e) {
+            tsLog('warn', `فشل التبديل إلى ${_ae}: ` + (_e.message || _e));
+            accountPaused[_ae] = _now + 5 * 60 * 1000;
+          }
+        }
+        return false; // no available account
+      }
+      // ────────────────────────────────────────────────────────────────────
+
       async function refreshDeveloperContext(reason) {
         if (s.cancelRequested) return;
         tsLog('info', `تحديث جلسة Developer Portal بسبب: ${reason}`);
@@ -5329,16 +5440,25 @@ const ts = require('./lib/trueStudio');
             : batchSlots.map(b => b.name).join(' + ');
           pushTsEvent('ts_progress');
 
-          // Launch all bots in this batch concurrently
+          // Launch all bots in this batch concurrently.
+          // Stagger starts by 200ms per slot so concurrent requests don't all
+          // hit the same API bucket at the exact same millisecond — this is the
+          // lightest possible rate-limit prevention: no extra delays for sequential
+          // mode (effectiveBatch=1 → stagger=0), and negligible overhead for
+          // parallel mode (max 800ms spread over 5 bots).
           const batchStartedAt = Date.now();
           const results = await Promise.allSettled(
-            batchSlots.map(slot => createOneBotAsync(slot.botIndex, slot.num, slot.name, teamIdSnapshot))
+            batchSlots.map((slot, _si) => {
+              const _stagger = _si * 200;
+              return (_stagger > 0 ? ts.humanDelay(_stagger, _stagger + 80, 1.0) : Promise.resolve())
+                .then(() => createOneBotAsync(slot.botIndex, slot.num, slot.name, teamIdSnapshot));
+            })
           );
           const batchDurationMs = Date.now() - batchStartedAt;
 
           // Process results sequentially — JS is single-threaded here so no races
           let batchHad401 = false;
-          let batchRateLimitWaited = false;
+          let batchRateLimitHandled = false;
           for (let k = 0; k < results.length; k++) {
             const result = results[k];
             const slot   = batchSlots[k];
@@ -5371,25 +5491,45 @@ const ts = require('./lib/trueStudio');
               s.failed += 1;
               tsLog('error', 'فشل ' + slot.name + ': ' + msg);
               if (err?.status === 401 || /Unauthorized/i.test(msg)) {
-                tsClearToken(creds.email);
+                tsClearToken(currentEmail);
                 tsLog('error', 'تم إلغاء التوكن من Discord — توقف الجلسة. الحساب قد يكون مُعلَّقاً.');
                 batchHad401 = true;
               }
               if (isRateLimitedError(err)) {
-                const waitMs = Math.max(retryAfterMs(err), 60_000);
-                tsLog('warn', 'Rate limit (429) على ' + slot.name + ' — انتظار ' + Math.ceil(waitMs / 1000) + 's ثم فحص الحساب وإعادة المحاولة…');
-                if (!batchRateLimitWaited) {
-                  batchRateLimitWaited = true;
-                  await tsSleep(waitMs);
-                  try {
-                    const retryHealth = await ts.accountHealthProbe({ token, netOpts });
-                    if (!retryHealth.ok) throw new Error(retryHealth.message);
-                    tsLog('info', 'فحص الحساب بعد الانتظار OK — تحديث Developer Portal ثم الاستئناف');
-                    await refreshDeveloperContext('انتهاء انتظار rate limit');
-                  } catch (probeErr) {
-                    tsLog('warn', 'تعذر تأكيد صحة الحساب بعد الانتظار: ' + (probeErr.message || probeErr));
+                const _rlMs = Math.max(retryAfterMs(err), 10_000);
+                tsLog('warn', `⚠️ Rate limit (429) على ${slot.name} [${currentEmail}] — جاري البحث عن حساب بديل…`);
+                if (!batchRateLimitHandled) {
+                  batchRateLimitHandled = true;
+                  // Mark current account as paused for the duration of the rate limit
+                  accountPaused[currentEmail] = Date.now() + Math.max(_rlMs, 60_000);
+                  // Try to switch to another saved TS account
+                  const switched = await switchToNextAccount();
+                  if (switched) {
+                    tsLog('info', `الاستمرار بالإنشاء من الحساب: ${currentEmail}`);
+                  } else {
+                    // No other account available — pause for 60s then retry same account
+                    tsLog('warn', `لا يوجد حساب بديل — إيقاف الجلسة 60 ثانية ثم المحاولة من نفس الحساب…`);
+                    s.state = 'waiting';
+                    s.waitUntilTs = Date.now() + 60_000;
+                    s.waitTotalMs = 60_000;
+                    pushTsEvent('ts_progress');
+                    await tsSleep(60_000);
+                    s.state = 'running';
+                    s.waitUntilTs = 0;
+                    s.waitTotalMs = 0;
+                    pushTsEvent('ts_progress');
+                    // Health check after wait
+                    try {
+                      const _rh = await ts.accountHealthProbe({ token, netOpts });
+                      if (!_rh.ok) throw new Error(_rh.message);
+                      tsLog('info', 'فحص الحساب بعد الانتظار OK — تحديث Portal ثم الاستئناف');
+                      await refreshDeveloperContext('انتهاء انتظار rate limit');
+                    } catch (_pe) {
+                      tsLog('warn', 'تعذر فحص الحساب بعد الانتظار: ' + (_pe.message || _pe));
+                    }
                   }
                 }
+                // Retry this bot slot with the current (possibly switched) context
                 try {
                   const _retryStart = Date.now();
                   const { appPayload: rApp, botToken: rTok } = await createOneBotAsync(slot.botIndex, slot.num, slot.name, teamIdSnapshot);
@@ -5397,7 +5537,7 @@ const ts = require('./lib/trueStudio');
                   s.bots.push({ name: slot.name, appId: rApp.id, botUserId: rApp.bot?.id || null, token: rTok });
                   s.done += 1; s.failed -= 1;
                   if (rules.linkBots && teamId) teamAppCounts[teamId] = (teamAppCounts[teamId] || 0) + 1;
-                  tsLog('success', 'تم (retry): ' + slot.name, { durationMs: rDurMs, appId: rApp.id, botName: slot.name });
+                  tsLog('success', 'تم (retry/' + currentEmail + '): ' + slot.name, { durationMs: rDurMs, appId: rApp.id, botName: slot.name });
                   try {
                     const tkList = await botTokensStore.get() || [];
                     const tkFiltered = tkList.filter(t => t.appId !== rApp.id);
@@ -5405,7 +5545,7 @@ const ts = require('./lib/trueStudio');
                       appId: rApp.id, name: slot.name,
                       icon: rApp.icon || null,
                       token: rTok,
-                      email: creds.email || '',
+                      email: currentEmail || '',
                       resetAt: Date.now(),
                       createdAt: Date.now(),
                     });
@@ -5413,7 +5553,7 @@ const ts = require('./lib/trueStudio');
                   } catch (_) {}
                   pushTsEvent('ts_bot_created', { bot: { name: slot.name, appId: rApp.id, hasToken: true, durationMs: rDurMs, isRetry: true } });
                 } catch (re) {
-                  tsLog('error', 'فشل retry ' + slot.name + ': ' + (re?.message || re));
+                  tsLog('error', 'فشل retry ' + slot.name + ' (حتى بعد التبديل): ' + (re?.message || re));
                 }
               }
               pushTsEvent('ts_progress');
