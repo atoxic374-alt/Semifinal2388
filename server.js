@@ -635,8 +635,10 @@ async function connectOne(token, name, proxy) {
     try {
       const a = buildProxyAgents(proxy);
       if (a) {
-        opts.http = { agent: a.http };
-        opts.ws   = { agent: a.ws };
+        // Each client gets its own agent instance — never share between clients.
+        // discord.js-selfbot-v13 expects the same agent object for both REST and WS.
+        opts.http = { agent: a.agent };
+        opts.ws   = { agent: a.agent };
         console.log(`[proxy] ${finalName} → ${maskProxy(proxy)}`);
       }
     } catch (e) {
