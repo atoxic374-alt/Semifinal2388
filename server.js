@@ -5094,10 +5094,14 @@ const ts = require('./lib/trueStudio');
       else if (proxyList.length === 1) tsLog('info', 'Proxy ثابت: ' + proxyList[0].replace(/:[^:@]+@/, ':***@'));
 
       const LONG_CREATE_REFRESH_MS = 4 * 60 * 1000;
-      // Per-bot hard timeout: if a single bot creation takes longer than this,
-      // we treat it like a hung session — health-check then refresh/switch.
-      // Axios has a 32s HTTP timeout so this covers queued waits + retry loops.
-      const BOT_CREATION_TIMEOUT_MS = 75_000;
+      // Per-bot hard timeout — counts only "non-captcha" time.
+      // Captcha solving (manual or automated) is paused from this counter so
+      // a genuine captcha doesn't trigger a false timeout.
+      // Axios HTTP timeout = 32s, rate-limit back-off up to ~4×30s = 120s worst
+      // case, but _req retries have their own waits.  90s covers all normal
+      // operations (login, browse, createApplication, ensureBot, resetBotToken)
+      // without a captcha.
+      const BOT_CREATION_TIMEOUT_MS = 90_000;
 
       // ── Account-switching pool ───────────────────────────────────────────
       // Tracks the currently active TS account email (may change on rate limit).
@@ -5171,17 +5175,57 @@ const ts = require('./lib/trueStudio');
         return m > 0 ? `${m}m ${s}s` : `${s}s`;
       }
 
-      // Wrap a bot-creation promise with a hard timeout.
-      // Rejects with { code:'OP_TIMEOUT' } if it takes longer than BOT_CREATION_TIMEOUT_MS.
+      // Wrap a bot-creation promise with a smart timeout.
+      //
+      // The countdown PAUSES while s.pendingCaptcha is set (captcha solving is
+      // outside our control and can legitimately take several minutes).
+      // It also pauses while s.state === 'waiting' (e.g. the 60s no-account wait),
+      // so inter-bot waits set by the caller don't count against this budget.
+      //
+      // Only "dead" time — when the session is running but nothing is happening —
+      // counts toward BOT_CREATION_TIMEOUT_MS.
       function _withBotTimeout(promise, botName) {
         return new Promise((resolve, reject) => {
-          const t = setTimeout(() => {
-            reject(Object.assign(
-              new Error(`⏱ TIMEOUT: إنشاء "${botName}" تجاوز ${BOT_CREATION_TIMEOUT_MS / 1000}s`),
-              { code: 'OP_TIMEOUT' }
-            ));
-          }, BOT_CREATION_TIMEOUT_MS);
-          promise.then(v => { clearTimeout(t); resolve(v); }, e => { clearTimeout(t); reject(e); });
+          let done = false;
+          let elapsedMs = 0;              // accumulated non-paused time
+          let lastTickAt = Date.now();
+          let captchaPauseLogged = false;
+
+          const tick = () => {
+            if (done) return;
+            const now = Date.now();
+            const isCaptcha = !!s.pendingCaptcha;
+            const isWaiting = s.state === 'waiting';
+            const paused    = isCaptcha || isWaiting;
+
+            if (!paused) {
+              elapsedMs += now - lastTickAt;
+            } else if (isCaptcha && !captchaPauseLogged) {
+              captchaPauseLogged = true;
+              tsLog('info', `⏱ "${botName}": كابتشا معلّق — العداد متوقف`);
+            } else if (!isCaptcha && captchaPauseLogged) {
+              captchaPauseLogged = false;
+              tsLog('info', `⏱ "${botName}": الكابتشا اكتمل — استئناف العداد (${Math.round(elapsedMs / 1000)}s مستهلَكة)`);
+            }
+
+            lastTickAt = now;
+
+            if (elapsedMs >= BOT_CREATION_TIMEOUT_MS) {
+              done = true;
+              reject(Object.assign(
+                new Error(`⏱ TIMEOUT: "${botName}" تجاوز ${Math.round(BOT_CREATION_TIMEOUT_MS / 1000)}s من الوقت الفعلي`),
+                { code: 'OP_TIMEOUT' }
+              ));
+              return;
+            }
+            t = setTimeout(tick, 1000);
+          };
+
+          let t = setTimeout(tick, 1000);
+          promise.then(
+            v => { done = true; clearTimeout(t); resolve(v); },
+            e => { done = true; clearTimeout(t); reject(e); }
+          );
         });
       }
 
@@ -5558,40 +5602,58 @@ const ts = require('./lib/trueStudio');
                 batchHad401 = true;
               }
 
-              // ── Per-bot timeout: session likely hung ─────────────────────────
+              // ── Per-bot timeout: do a FULL session restart then retry once ───
+              // "Refresh portal" is not enough — if the session hung it means the
+              // client state is stale. We re-login, get a fresh client, and reload
+              // the portal from scratch. Bot counter is safe because d.tsLastNumber
+              // was already written to disk before this batch started.
               if (err?.code === 'OP_TIMEOUT') {
-                tsLog('warn', `⏱ ${slot.name}: تجاوز ${BOT_CREATION_TIMEOUT_MS / 1000}s — فحص الحساب وتحديث الجلسة…`);
+                tsLog('warn', `⏱ ${slot.name}: تجاوز ${Math.round(BOT_CREATION_TIMEOUT_MS / 1000)}s — إعادة تشغيل الجلسة كاملاً…`);
                 try {
-                  const _th = await ts.accountHealthProbe({ token, netOpts });
-                  if (_th.ok) {
-                    // Account is fine — portal may have drifted; refresh it then retry
-                    tsLog('info', 'الحساب سليم — تحديث Developer Portal وإعادة المحاولة…');
-                    await refreshDeveloperContext(`timeout on ${slot.name}`);
-                  } else {
-                    // Health failed — likely RL or ban — switch account
-                    tsLog('warn', `فحص الحساب فشل (${_th.message}) — تبديل الحساب…`);
-                    accountPaused[currentEmail] = Date.now() + 2 * 60 * 1000;
-                    pushTsEvent('ts_progress');
-                    await switchToNextAccount();
-                  }
-                  // Retry this bot once with a fresh context
-                  const _tRetryStart = Date.now();
-                  const { appPayload: tApp, botToken: tTok } = await createOneBotAsync(slot.botIndex, slot.num, slot.name, teamIdSnapshot);
-                  const tDurMs = Date.now() - _tRetryStart;
+                  // Build a completely fresh context for the current account
+                  // (fresh login → fresh token → fresh warmed client → fresh portal).
+                  const _restartCreds = accountPool.find(
+                    a => (a.email || '').toLowerCase() === currentEmail
+                  ) || creds;
+
+                  tsLog('info', `🔄 إعادة تسجيل الدخول بـ ${currentEmail}…`);
+                  const _freshCtx = await buildAccountCtx(_restartCreds);
+
+                  // Commit fresh context into the outer-scope variables
+                  token        = _freshCtx.token;
+                  client       = _freshCtx.client;
+                  mfaToken     = _freshCtx.mfaToken;
+                  netOpts      = _freshCtx.netOpts;
+                  rateLimiter  = _freshCtx.rateLimiter;
+                  // currentEmail stays the same (same account, fresh session)
+
+                  tsLog('success', `✓ الجلسة أُعيدت بنجاح — إعادة إنشاء ${slot.name}…`);
+
+                  // Retry the bot with the brand-new session
+                  const _tStart = Date.now();
+                  const { appPayload: tApp, botToken: tTok } = await createOneBotAsync(
+                    slot.botIndex, slot.num, slot.name, teamIdSnapshot
+                  );
+                  const tDurMs = Date.now() - _tStart;
                   s.bots.push({ name: slot.name, appId: tApp.id, botUserId: tApp.bot?.id || null, token: tTok });
                   s.done += 1; s.failed -= 1;
                   if (rules.linkBots && teamId) teamAppCounts[teamId] = (teamAppCounts[teamId] || 0) + 1;
-                  tsLog('success', `تم (timeout-retry): ${slot.name}`, { durationMs: tDurMs, appId: tApp.id });
+                  tsLog('success', `تم (session-restart): ${slot.name} ⚡ ${(tDurMs/1000).toFixed(1)}s`, { durationMs: tDurMs, appId: tApp.id });
                   try {
                     const _tkList = await botTokensStore.get() || [];
                     const _tkFiltered = _tkList.filter(t => t.appId !== tApp.id);
-                    _tkFiltered.unshift({ appId: tApp.id, name: slot.name, icon: tApp.icon || null,
-                      token: tTok, email: currentEmail || '', resetAt: Date.now(), createdAt: Date.now() });
+                    _tkFiltered.unshift({
+                      appId: tApp.id, name: slot.name, icon: tApp.icon || null,
+                      token: tTok, email: currentEmail || '',
+                      resetAt: Date.now(), createdAt: Date.now(),
+                    });
                     await botTokensStore.set(_tkFiltered);
                   } catch (_) {}
-                  pushTsEvent('ts_bot_created', { bot: { name: slot.name, appId: tApp.id, hasToken: true, durationMs: tDurMs, isRetry: true } });
+                  pushTsEvent('ts_bot_created', {
+                    bot: { name: slot.name, appId: tApp.id, hasToken: true, durationMs: tDurMs, isRetry: true },
+                  });
                 } catch (_te) {
-                  tsLog('error', `فشل بعد timeout-retry لـ ${slot.name}: ` + (_te?.message || _te));
+                  tsLog('error', `فشل بعد إعادة الجلسة لـ ${slot.name}: ` + (_te?.message || _te));
                 }
               }
 
