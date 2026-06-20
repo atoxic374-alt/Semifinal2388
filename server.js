@@ -164,13 +164,14 @@ app.post('/api/auth/signup', async (req, res) => {
       if (err) return res.status(500).json({ success: false, error: 'session_error' });
       req.session.user = { id: u.id, username: u.username, loginAt: Date.now() };
       users.touchLogin(u.id);
-      // Always issue a long-lived device token so the user never has to log in
-      // again from this browser unless they explicitly log out.
       try {
         const tok = users.issueDeviceToken(u.id, { ua: req.headers['user-agent'], ip: req.ip });
         auth.setDeviceCookie(res, tok);
       } catch {}
-      res.json({ success: true, user: users.publicUser(users.findById(u.id)) });
+      req.session.save((saveErr) => {
+        if (saveErr) return res.status(500).json({ success: false, error: 'session_save_error' });
+        res.json({ success: true, user: users.publicUser(users.findById(u.id)) });
+      });
     });
   } catch (e) {
     res.status(400).json({ success: false, error: e.message });
@@ -193,13 +194,14 @@ app.post('/api/auth/login', async (req, res) => {
       if (err) return res.status(500).json({ success: false, error: 'session_error' });
       req.session.user = { id: u.id, username: u.username, loginAt: Date.now() };
       users.touchLogin(u.id);
-      // Always issue a long-lived device token — once the user logs in here,
-      // this browser stays signed in until they hit Logout.
       try {
         const tok = users.issueDeviceToken(u.id, { ua: req.headers['user-agent'], ip: req.ip });
         auth.setDeviceCookie(res, tok);
       } catch {}
-      res.json({ success: true, user: users.publicUser(users.findById(u.id)) });
+      req.session.save((saveErr) => {
+        if (saveErr) return res.status(500).json({ success: false, error: 'session_save_error' });
+        res.json({ success: true, user: users.publicUser(users.findById(u.id)) });
+      });
     });
   } catch (e) {
     res.status(400).json({ success: false, error: e.message });
