@@ -1,6 +1,17 @@
 {
   "history": [
     {
+      "id": "mqmgs2me60y9",
+      "ts": 1781966390342,
+      "account": "acc_3",
+      "type": "connect",
+      "target": {
+        "username": "sexyloord",
+        "id": "515673394788958219"
+      },
+      "status": "success"
+    },
+    {
       "id": "mqmgpx1n4nnm",
       "ts": 1781966289803,
       "account": "acc_2",
@@ -105,7 +116,7 @@
       }
     }
   ],
-  "tsLastNumber": 4,
+  "tsLastNumber": 5,
   "tsCaptcha": {
     "provider": "2captcha",
     "apiKey": "v1:85e73addd3164e3e57341cea:d98644c02faf32a8922a93ca157f518e:ba10c3fc33dc0b803f48b9e4b0b69a143249b76ff9b2b6622e0f31746060b882"
