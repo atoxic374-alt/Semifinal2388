@@ -22,7 +22,7 @@ const { markRateLimited, isRateLimited, getRateLimitInfo, getAllStatus: getRLAll
 
 const app = express();
 app.set('trust proxy', 1);
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 
 // Bounded-set helper — prevents Sets used for "first-time-only" warnings or
 // dedupe windows from growing without limit. When the cap is hit we drop the
