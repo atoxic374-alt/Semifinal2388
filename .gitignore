@@ -1,0 +1,9 @@
+node_modules/
+data/
+app_data.json
+app_data.json.bak.*
+saved_tokens.json
+saved_tokens.json.bak.*
+*.bak.*
+.env
+dist/
