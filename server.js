@@ -5106,14 +5106,6 @@ const ts = require('./lib/trueStudio');
       else if (proxyList.length === 1) tsLog('info', 'Proxy ثابت: ' + proxyList[0].replace(/:[^:@]+@/, ':***@'));
 
       const LONG_CREATE_REFRESH_MS = 4 * 60 * 1000;
-      // Per-bot hard timeout — counts only "non-captcha" time.
-      // Captcha solving (manual or automated) is paused from this counter so
-      // a genuine captcha doesn't trigger a false timeout.
-      // Axios HTTP timeout = 32s, rate-limit back-off up to ~4×30s = 120s worst
-      // case, but _req retries have their own waits.  90s covers all normal
-      // operations (login, browse, createApplication, ensureBot, resetBotToken)
-      // without a captcha.
-      const BOT_CREATION_TIMEOUT_MS = 90_000;
 
       // ── Account-switching pool ───────────────────────────────────────────
       // Tracks the currently active TS account email (may change on rate limit).
@@ -5191,59 +5183,6 @@ const ts = require('./lib/trueStudio');
         return m > 0 ? `${m}m ${s}s` : `${s}s`;
       }
 
-      // Wrap a bot-creation promise with a smart timeout.
-      //
-      // The countdown PAUSES while s.pendingCaptcha is set (captcha solving is
-      // outside our control and can legitimately take several minutes).
-      // It also pauses while s.state === 'waiting' (e.g. the 60s no-account wait),
-      // so inter-bot waits set by the caller don't count against this budget.
-      //
-      // Only "dead" time — when the session is running but nothing is happening —
-      // counts toward BOT_CREATION_TIMEOUT_MS.
-      function _withBotTimeout(promise, botName) {
-        return new Promise((resolve, reject) => {
-          let done = false;
-          let elapsedMs = 0;              // accumulated non-paused time
-          let lastTickAt = Date.now();
-          let captchaPauseLogged = false;
-
-          const tick = () => {
-            if (done) return;
-            const now = Date.now();
-            const isCaptcha = !!s.pendingCaptcha;
-            const isWaiting = s.state === 'waiting';
-            const paused    = isCaptcha || isWaiting;
-
-            if (!paused) {
-              elapsedMs += now - lastTickAt;
-            } else if (isCaptcha && !captchaPauseLogged) {
-              captchaPauseLogged = true;
-              tsLog('info', `⏱ "${botName}": كابتشا معلّق — العداد متوقف`);
-            } else if (!isCaptcha && captchaPauseLogged) {
-              captchaPauseLogged = false;
-              tsLog('info', `⏱ "${botName}": الكابتشا اكتمل — استئناف العداد (${Math.round(elapsedMs / 1000)}s مستهلَكة)`);
-            }
-
-            lastTickAt = now;
-
-            if (elapsedMs >= BOT_CREATION_TIMEOUT_MS) {
-              done = true;
-              reject(Object.assign(
-                new Error(`⏱ TIMEOUT: "${botName}" تجاوز ${Math.round(BOT_CREATION_TIMEOUT_MS / 1000)}s من الوقت الفعلي`),
-                { code: 'OP_TIMEOUT' }
-              ));
-              return;
-            }
-            t = setTimeout(tick, 1000);
-          };
-
-          let t = setTimeout(tick, 1000);
-          promise.then(
-            v => { done = true; clearTimeout(t); resolve(v); },
-            e => { done = true; clearTimeout(t); reject(e); }
-          );
-        });
-      }
 
       // Find and activate the next available (non-rate-limited) account.
       // Reassigns the outer-scope: token, client, mfaToken, netOpts, rateLimiter, currentEmail.
@@ -5585,10 +5524,7 @@ const ts = require('./lib/trueStudio');
             batchSlots.map((slot, _si) => {
               const _stagger = _si * 200;
               return (_stagger > 0 ? ts.humanDelay(_stagger, _stagger + 80, 1.0) : Promise.resolve())
-                .then(() => _withBotTimeout(
-                createOneBotAsync(slot.botIndex, slot.num, slot.name, teamIdSnapshot),
-                slot.name
-              ));
+                .then(() => createOneBotAsync(slot.botIndex, slot.num, slot.name, teamIdSnapshot));
             })
           );
           const batchDurationMs = Date.now() - batchStartedAt;
