@@ -62,6 +62,7 @@ export class TrueStudioManager {
     this._pfpPreviewVisible = false;  // toggle pfp preview section
     this._intentsAllRunning = false;  // guard: only one intents-all at a time
     this._pfpAllRunning = false;      // guard: only one pfp-all at a time
+    this._publicAllRunning = false;   // guard: only one public-all at a time
     this._autoIntents = false;        // auto-enable intents when creating new bots
     this.pfp = { avatar: null, banner: null, updatedAt: 0 };
   }
@@ -1637,6 +1638,11 @@ export class TrueStudioManager {
               title="تفعيل الثلاث Privileged Intents لكل بوتات المكتبة">
               <span class="ts-drawn-icon bolt" aria-hidden="true"><i></i></span> iNTeNT ALl
             </button>
+            <button class="ts-btn ts-public-all-btn" id="ts-lib-public-all"
+              ${(!this.selectedEmail) ? 'disabled' : ''}
+              title="تفعيل Public للبوتات (يسمح لأي أحد بإضافة البوت)">
+              🌐 Public All
+            </button>
             <button class="ts-btn${(this.pfp?.avatar || this.pfp?.banner) ? ' mint' : ''}" id="ts-lib-pfp-all"
               ${(!this.pfp?.avatar && !this.pfp?.banner) ? 'disabled' : ''}
               title="${(this.pfp?.avatar || this.pfp?.banner) ? 'تطبيق Pfp المحفوظ على كل البوتات ✓' : 'احفظ Avatar أو Banner أولاً'}">
@@ -1682,6 +1688,7 @@ export class TrueStudioManager {
     overlay.querySelector('#ts-lib-refresh-modal').addEventListener('click', () => this.loadLibrary());
     overlay.querySelector('#ts-lib-reset-all').addEventListener('click', () => this._resetAllBots());
     overlay.querySelector('#ts-lib-intents-all')?.addEventListener('click', () => this._applyIntentsAll(true));
+    overlay.querySelector('#ts-lib-public-all')?.addEventListener('click', () => this._applyPublicAll(true));
     overlay.querySelector('#ts-lib-pfp-all')?.addEventListener('click', () => this._applyPfpAll());
     overlay.querySelector('#ts-lib-bulk-invite')?.addEventListener('click', () => this._openBulkInviteModal());
     overlay.querySelector('#ts-lib-stop-all').addEventListener('click', async () => {
@@ -1781,6 +1788,7 @@ export class TrueStudioManager {
       `;
       this._bindResetButtons(body);
       this._bindIntentButtons(body);
+      this._bindPublicButtons(body);
       this._bindInviteButtons(body);
       body.querySelector('#ts-lib-create-team')?.addEventListener('click', () => this._openCreateTeamModal());
       return;
@@ -1795,6 +1803,7 @@ export class TrueStudioManager {
       body.innerHTML = `<div class="ts-cards">${apps.map(a => this._renderAppCard(a, { showMoveToTeam: teams.length > 0 })).join('')}</div>`;
       this._bindResetButtons(body);
       this._bindIntentButtons(body);
+      this._bindPublicButtons(body);
       this._bindInviteButtons(body);
       this._bindMoveToTeamButtons(body);
       return;
@@ -1825,6 +1834,88 @@ export class TrueStudioManager {
         const name  = btn.getAttribute('data-bot-name') || appId;
         this._openInviteModal(appId, name);
       });
+    });
+  }
+
+  _bindPublicButtons(root) {
+    root.querySelectorAll('[data-public-bot]').forEach(btn => {
+      if (btn._publicBound) return;
+      btn._publicBound = true;
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!this.selectedEmail) { showNotification('اختر حساباً أولاً', 'error'); return; }
+        const appId = btn.getAttribute('data-public-bot');
+        const name  = btn.getAttribute('data-bot-name') || appId;
+        const isOn  = btn.getAttribute('data-public-state') === '1';
+        const next  = !isOn;
+        btn.disabled = true;
+        btn.innerHTML = next ? '⏳' : '⏳';
+        try {
+          const r = await window.electronAPI.tsSetPublic(appId, this.selectedEmail, next);
+          if (!r?.success && r?.error) throw new Error(r.error);
+          const nowPublic = !!r.botPublic;
+          btn.setAttribute('data-public-state', nowPublic ? '1' : '0');
+          btn.className = `ts-card-public${nowPublic ? ' public-on' : ''}`;
+          btn.title = nowPublic ? 'البوت Public ✓ — أي أحد يقدر يضيفه' : 'تفعيل Public — يسمح لأي أحد بإضافة البوت';
+          btn.innerHTML = `🌐${nowPublic ? ' <span class="ts-public-on-dot"></span>' : ''}`;
+          const card = btn.closest('.ts-app-card');
+          if (card) {
+            card.classList.toggle('public-live', nowPublic);
+            const existingBadge = card.querySelector('.ts-card-public-badge');
+            if (nowPublic && !existingBadge) {
+              card.querySelector('.ts-app-thumb')?.insertAdjacentHTML('beforeend', '<span class="ts-card-public-badge" title="Public ✓">🌐</span>');
+            } else if (!nowPublic && existingBadge) {
+              existingBadge.remove();
+            }
+          }
+          showNotification(nowPublic ? `✅ ${name}: تم تفعيل Public` : `🔒 ${name}: تم إيقاف Public`, nowPublic ? 'success' : 'info');
+        } catch (e) {
+          showNotification('فشل تغيير Public: ' + (e.message || e), 'error');
+          btn.innerHTML = `🌐${isOn ? ' <span class="ts-public-on-dot"></span>' : ''}`;
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    });
+  }
+
+  async _applyPublicAll(enabled = true) {
+    if (!this.selectedEmail) { showNotification('اختر حساباً أولاً', 'error'); return; }
+    if (this._publicAllRunning) { showNotification('Public All جاري التنفيذ بالفعل…', 'info'); return; }
+    const confirmed = await showConfirm(
+      `${enabled ? 'تفعيل' : 'إيقاف'} Public لكل بوتات المكتبة؟ (البوتات المفعّلة بالفعل ستُتخطى تلقائياً)`,
+      { confirmText: enabled ? '🌐 Public All' : 'Private All', cancelText: 'إلغاء' }
+    );
+    if (!confirmed) return;
+
+    this._publicAllRunning = true;
+    const btn = this._libModal?.querySelector('#ts-lib-public-all');
+    if (btn) { btn.disabled = true; }
+
+    const prog = this._openBatchProgressModal(
+      `🌐 Public All`,
+      `${enabled ? 'تفعيل' : 'إيقاف'} Public — الخادم يعالج كل البوتات`
+    );
+    prog.setIndeterminate(true);
+    prog.setStatus('⏳ جاري الاتصال بالخادم وقراءة المكتبة…');
+
+    window.electronAPI.tsApplyPublicAll(this.selectedEmail, enabled).then(r => {
+      if (!r?.success && r?.error) throw new Error(r.error);
+      prog.setIndeterminate(false);
+      const okCount      = r.okCount      || 0;
+      const failCount    = r.failCount    || 0;
+      const skippedCount = r.skippedCount || 0;
+      const items = (r.results || []).map(x => ({
+        name: x.name || x.appId, ok: x.ok, skipped: !!x.skipped, error: x.error,
+      }));
+      prog.done(okCount, failCount, items, skippedCount);
+      if ((okCount - skippedCount) > 0) this.loadLibrary().catch(() => {});
+    }).catch(e => {
+      prog.setIndeterminate(false);
+      prog.error(e.message || String(e));
+    }).finally(() => {
+      this._publicAllRunning = false;
+      if (btn) { btn.disabled = false; }
     });
   }
 
@@ -3164,12 +3255,21 @@ export class TrueStudioManager {
       (_flags & _INTENT_LIMITED) === _INTENT_LIMITED ||
       ((_flags & 4096) && (_flags & 16384) && (_flags & 262144))
     );
+    const _isPublic = !!a.bot_public;
     const intentBtn = a.isBot ? `
       <button class="ts-card-intents${_hasAllIntents ? ' intents-on' : ''}" type="button"
         data-intents-bot="${escapeAttr(a.id)}"
         data-bot-name="${escapeAttr(a.name)}"
         title="${_hasAllIntents ? 'Intents مفعّلة ✓ — اضغط للتفاصيل' : 'رؤية/تفعيل/إيقاف Privileged Intents الثلاثة'}">
         <span class="ts-card-intents-icon">⚡</span> iNTeNT${_hasAllIntents ? ' <span class="ts-intent-on-dot"></span>' : ''}
+      </button>` : '';
+    const publicBtn = a.isBot ? `
+      <button class="ts-card-public${_isPublic ? ' public-on' : ''}" type="button"
+        data-public-bot="${escapeAttr(a.id)}"
+        data-bot-name="${escapeAttr(a.name)}"
+        data-public-state="${_isPublic ? '1' : '0'}"
+        title="${_isPublic ? 'البوت Public ✓ — أي أحد يقدر يضيفه' : 'تفعيل Public — يسمح لأي أحد بإضافة البوت'}">
+        🌐${_isPublic ? ' <span class="ts-public-on-dot"></span>' : ''}
       </button>` : '';
     const inviteBtn = a.isBot ? `
       <button class="ts-card-invite" type="button"
@@ -3187,15 +3287,17 @@ export class TrueStudioManager {
         ↗ ${escapeHtml(t('ts.move_to_team_btn'))}
       </button>` : '';
     return `
-      <div class="ts-app-card${a.isBot ? ' has-reset' : ''}${opts.showMoveToTeam ? ' has-move' : ''}${_hasAllIntents ? ' intents-live' : ''}" title="${escapeAttr(a.id)}">
+      <div class="ts-app-card${a.isBot ? ' has-reset' : ''}${opts.showMoveToTeam ? ' has-move' : ''}${_hasAllIntents ? ' intents-live' : ''}${_isPublic ? ' public-live' : ''}" title="${escapeAttr(a.id)}">
         <div class="ts-app-thumb">
           ${iconUrl ? `<img src="${iconUrl}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('span'),{textContent:'${escapeAttr(initials)}',className:'ts-thumb-text'}))">` : `<span class="ts-thumb-text">${escapeHtml(initials)}</span>`}
           ${_hasAllIntents ? '<span class="ts-card-intent-badge" title="Privileged Intents مفعّلة ✓"></span>' : ''}
+          ${_isPublic ? '<span class="ts-card-public-badge" title="Public ✓">🌐</span>' : ''}
         </div>
         <div class="ts-app-name">${escapeHtml(a.name)}</div>
         ${tag}
         ${resetBtn}
         ${intentBtn}
+        ${publicBtn}
         ${inviteBtn}
         ${moveBtn}
       </div>

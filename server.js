@@ -4172,6 +4172,92 @@ const ts = require('./lib/trueStudio');
     } catch (e) { fail(res, e); }
   });
 
+  // ── Public bot (single) ────────────────────────────────────────────────
+  app.get('/api/ts/applications/:appId/public', async (req, res) => {
+    try {
+      const appId = req.params.appId;
+      const email = String(req.query.email || '').toLowerCase();
+      if (!email) throw new Error('Email is required');
+      const payload = await enqueueTsAccount(email, async () => {
+        const { token, client } = await tsGetToken(email);
+        const netOpts = { client };
+        const appObj = await ts.getApplication({ token, appId, netOpts });
+        return { appId, botPublic: !!appObj?.bot_public };
+      }, { label: 'Get public status' });
+      ok(res, payload);
+    } catch (e) { fail(res, e); }
+  });
+
+  app.post('/api/ts/applications/:appId/public', async (req, res) => {
+    try {
+      const appId = req.params.appId;
+      const email = String(req.body?.email || '').toLowerCase();
+      const enabled = req.body?.enabled !== false;
+      if (!email) throw new Error('Email is required');
+      const payload = await enqueueTsAccount(email, async () => {
+        const { token, client } = await tsGetToken(email);
+        const health = await ts.accountHealthProbe({ token, netOpts: { client } });
+        if (!health.ok) throw new Error('Account health check blocked public update: ' + health.message);
+        const rateLimiter = makeTsRateLimiter('single-public', null, { minimumGapMs: 500, account: email });
+        const netOpts = { client, solveCaptcha: buildSolveCaptcha(), rateLimiter };
+        const updated = await withTsRateRetry('تفعيل Public', () =>
+          ts.setApplicationPublic({ token, appId, enabled, netOpts }),
+          { attempts: 2 }
+        );
+        return { appId, botPublic: !!updated?.bot_public, health };
+      }, { label: 'Set public bot' });
+      ok(res, payload);
+    } catch (e) { fail(res, e); }
+  });
+
+  // ── Public All ─────────────────────────────────────────────────────────
+  app.post('/api/ts/public/apply-all', async (req, res) => {
+    try {
+      const email = String(req.body?.email || '').toLowerCase();
+      const enabled = req.body?.enabled !== false;
+      if (!email) throw new Error('Email is required');
+      const payload = await enqueueTsAccount(email, async () => {
+        const { token, client } = await tsGetToken(email);
+        const rateLimiter = makeTsRateLimiter('public-apply-all', null, { minimumGapMs: 700, account: email });
+        const netOpts = { client, solveCaptcha: buildSolveCaptcha(), rateLimiter };
+        const health = await ts.accountHealthProbe({ token, netOpts });
+        if (!health.ok) throw new Error('Account health check blocked bulk public update: ' + health.message);
+        const libApps = await ts.listApplications({ token, netOpts });
+        const bots = libApps.filter(a => a && a.bot && a.id);
+        const results = [];
+        for (let i = 0; i < bots.length; i++) {
+          const appObj = bots[i];
+          if (enabled && !!appObj.bot_public) {
+            results.push({ appId: appObj.id, name: appObj.name, ok: true, skipped: true });
+            continue;
+          }
+          if (!enabled && !appObj.bot_public) {
+            results.push({ appId: appObj.id, name: appObj.name, ok: true, skipped: true });
+            continue;
+          }
+          try {
+            const updated = await withTsRateRetry(`Public على ${appObj.name || appObj.id}`, () =>
+              ts.setApplicationPublic({ token, appId: appObj.id, enabled, netOpts, app: appObj }),
+              { attempts: 2 }
+            );
+            results.push({ appId: appObj.id, name: appObj.name, ok: true, skipped: false, botPublic: !!updated?.bot_public });
+          } catch (e) {
+            results.push({ appId: appObj.id, name: appObj.name, ok: false, skipped: false, error: e.message || String(e) });
+          }
+          if (i < bots.length - 1) {
+            if ((i + 1) % 15 === 0) await tsSleep(12_000 + Math.floor(Math.random() * 10_000));
+            else await ts.humanDelay(1300, 2800);
+          }
+        }
+        const okCount = results.filter(r => r.ok).length;
+        const failCount = results.filter(r => !r.ok).length;
+        const skippedCount = results.filter(r => r.skipped).length;
+        return { results, okCount, failCount, skippedCount, health };
+      }, { label: 'Apply all public' });
+      ok(res, payload);
+    } catch (e) { fail(res, e); }
+  });
+
   // Auto-intents setting: when ON, any new bot created via the session gets all 3 intents enabled automatically
   app.get('/api/ts/auto-intents', (req, res) => {
     try {
@@ -5421,6 +5507,13 @@ const ts = require('./lib/trueStudio');
               tsLog('success', 'تم تفعيل iNTeNTs تلقائياً على ' + name);
             } catch (e) {
               tsLog('warn', 'تعذر تفعيل iNTeNTs على ' + name + ': ' + (e.message || e));
+            }
+            // Auto-public: enable bot_public alongside intents
+            try {
+              await ts.setApplicationPublic({ token, appId: appPayload.id, enabled: true, netOpts: botNetOpts, app: appPayload });
+              tsLog('success', 'تم تفعيل Public تلقائياً على ' + name);
+            } catch (e) {
+              tsLog('warn', 'تعذر تفعيل Public على ' + name + ': ' + (e.message || e));
             }
           }
 
