@@ -5490,11 +5490,17 @@ const ts = require('./lib/trueStudio');
           let botClient = client;
           let botNetOpts = netOpts;
           if (bd) {
+            // Bright Data: unique session ID → single stable IP for this bot's lifetime
             const sessionId = 'bot' + num + '_' + Math.random().toString(36).slice(2, 8);
             const bdProxy = buildBrightDataUrl(bd, sessionId);
             botClient = ts.cloneClientWithProxy(client, bdProxy);
             botNetOpts = { ...netOpts, client: botClient };
-          } else if (proxyList.length > 1) {
+          } else if (proxyList.length >= 1) {
+            // ✅ FIX: clone even for a SINGLE rotating proxy URL.
+            // Without this, all bots share the same axios instance → same TCP
+            // connection → same IP even with a rotating proxy.
+            // With a fresh clone: new axios instance, keepAlive:false → new TCP
+            // CONNECT per request → new IP from webshare/rotating proxy.
             const botProxy = proxyList[botIndex % proxyList.length];
             botClient = ts.cloneClientWithProxy(client, botProxy);
             botNetOpts = { ...netOpts, client: botClient };
@@ -5505,6 +5511,18 @@ const ts = require('./lib/trueStudio');
           const pause = (min, max) => useParallelMode
             ? Promise.resolve()
             : ts.humanDelay(min, max, speedFactor);
+
+          // ── Confirm IP + fingerprint before creation ───────────────────────
+          if (botClient !== client) {
+            // Non-blocking: check IP in background, log result
+            ts.getClientIp(botClient).then(ip => {
+              const ua = botClient.uaInfo?.ua || '';
+              const uaShort = ua.match(/Chrome\/(\d+)/)?.[0] || ua.slice(0, 30);
+              tsLog('info',
+                `🌐 Bot-${num} IP: ${ip || '?'} · UA: ${uaShort}`
+              );
+            }).catch(() => {});
+          }
 
           const linkAtCreation = rules.linkBots && teamIdForBot;
           const appPayload = await ts.createApplication({
