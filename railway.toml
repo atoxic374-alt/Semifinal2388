@@ -6,3 +6,6 @@ buildCommand = "npm install"
 startCommand = "node server.js"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
+
+[build.nixpacksPlan.phases.setup]
+nixPkgs = ["nodejs_20"]
