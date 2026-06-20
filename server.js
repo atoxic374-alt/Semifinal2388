@@ -57,10 +57,6 @@ app.use(helmet({
 app.use(cookieParser());
 app.use(express.json({ limit: '30mb' }));
 
-const IS_CLOUD = !!(
-  process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_SERVICE_ID ||
-  process.env.RENDER || process.env.FLY_APP_NAME || process.env.HEROKU_APP_NAME
-);
 app.use(session({
   name: 'dam.sid',
   secret: auth.SESSION_SECRET,
@@ -70,7 +66,7 @@ app.use(session({
   cookie: {
     httpOnly: true,
     sameSite: 'lax',
-    secure: IS_CLOUD, // true on Railway/cloud (HTTPS proxy), false locally
+    secure: false, // proxy terminates TLS; cookie still flows over HTTPS via proxy
     maxAge: 90 * 24 * 60 * 60 * 1000, // 90 days; device-token cookie is 1y
   },
 }));
