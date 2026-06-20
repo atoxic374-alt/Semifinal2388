@@ -18,6 +18,7 @@ const helmet = require('helmet');
 const session = require('express-session');
 const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
+const FileStore = require('session-file-store')(session);
 const { markRateLimited, isRateLimited, getRateLimitInfo, getAllStatus: getRLAllStatus } = require('./lib/rateLimitTracker');
 
 const app = express();
@@ -57,17 +58,25 @@ app.use(helmet({
 app.use(cookieParser());
 app.use(express.json({ limit: '30mb' }));
 
+const SESSION_DIR = path.join(__dirname, 'data', 'sessions');
+fs.mkdirSync(SESSION_DIR, { recursive: true });
 app.use(session({
   name: 'dam.sid',
   secret: auth.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
-  rolling: true, // every request extends the cookie's expiry
+  rolling: true,
+  store: new FileStore({
+    path: SESSION_DIR,
+    ttl: 90 * 24 * 60 * 60, // 90 days in seconds
+    retries: 1,
+    logFn: () => {},
+  }),
   cookie: {
     httpOnly: true,
     sameSite: 'lax',
-    secure: false, // proxy terminates TLS; cookie still flows over HTTPS via proxy
-    maxAge: 90 * 24 * 60 * 60 * 1000, // 90 days; device-token cookie is 1y
+    secure: false,
+    maxAge: 90 * 24 * 60 * 60 * 1000,
   },
 }));
 
