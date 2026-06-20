@@ -36,6 +36,7 @@ export class TrueStudioManager {
         protocol:     'http', // 'http' (port 33335) | 'socks5h' (port 22228)
       },
       batchSize: 1,
+      botsPerAccount: 0, // 0 = disabled (don't rotate by count)
     };
     this.sse = null;
     this._countdownTimer = null;
@@ -467,6 +468,16 @@ export class TrueStudioManager {
                 value="${escapeAttr(this.form.prefix)}" maxlength="24"
                 ${!this.form.rules.createBots ? 'disabled' : ''} />
             </div>
+          </div>
+          <div class="ts-field${!this.form.rules.createBots ? ' ts-field-muted' : ''}" style="margin-top:10px;">
+            <div class="ts-field-label" style="display:flex;align-items:center;gap:6px;">
+              بوت لكل حساب
+              <span style="font-size:10px;color:var(--ts-muted,#7e8592);font-weight:400;">(0 = يبدّل فقط عند Rate Limit)</span>
+            </div>
+            <input type="number" id="ts-bots-per-account" class="ts-input numeric" min="0" max="50"
+              value="${this.form.botsPerAccount || 0}"
+              placeholder="0"
+              ${!this.form.rules.createBots ? 'disabled' : ''} />
           </div>
           <div class="ts-field${(!this.form.rules.createBots && !this.form.rules.createTeams) ? ' ts-field-muted' : ''}">
             <div class="ts-field-label">${t('ts.wait_minutes')}</div>
@@ -3554,6 +3565,9 @@ export class TrueStudioManager {
     $('#ts-wait')?.addEventListener('input', (e) => {
       this.form.waitMinutes = Math.max(0, Math.min(60, parseInt(e.target.value) || 0));
     });
+    $('#ts-bots-per-account')?.addEventListener('input', (e) => {
+      this.form.botsPerAccount = Math.max(0, Math.min(50, parseInt(e.target.value) || 0));
+    });
 
     // Speed pills (radio buttons)
     this.contentArea.querySelectorAll('[name="ts-speed"]').forEach(radio => {
@@ -3831,6 +3845,7 @@ export class TrueStudioManager {
         selectedTeamId: this.form.selectedTeamId || '',
         brightData: this.form.brightData || null,
         batchSize: this.form.batchSize || 1,
+        botsPerAccount: this.form.botsPerAccount || 0,
       });
       showNotification(t('ts.session_started'), 'success');
       sfx.ding?.();

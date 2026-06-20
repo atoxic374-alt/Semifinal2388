@@ -4996,6 +4996,7 @@ const ts = require('./lib/trueStudio');
     ok(res, { snapshot: tsSnapshot() });
 
     const batchSize = Math.max(1, Math.min(5, parseInt(req.body?.batchSize) || 1));
+    const botsPerAccount = Math.max(0, Math.min(50, parseInt(req.body?.botsPerAccount) || 0));
     withUser(uid, () => enqueueTsAccount(creds.email, async () => {
       const ses = tsSession();
       if (!ses.cancelRequested) {
@@ -5003,7 +5004,7 @@ const ts = require('./lib/trueStudio');
         if (ses.current === 'Queued for account') ses.current = '';
         pushTsEvent('ts_progress');
       }
-      return runTsSession({ creds, rules: r, count: n, prefix: pfx, waitMinutes: wait, proxyList, speedFactor, selectedTeamId: selTeamId, brightData: bd, batchSize });
+      return runTsSession({ creds, rules: r, count: n, prefix: pfx, waitMinutes: wait, proxyList, speedFactor, selectedTeamId: selTeamId, brightData: bd, batchSize, botsPerAccount });
     }, { label: 'Create bots session' })
       .catch(e => {
         const ses = tsSession();
@@ -5035,7 +5036,7 @@ const ts = require('./lib/trueStudio');
     return `http://${user}:${pass}@${host}:33335`;
   }
 
-  async function runTsSession({ creds, rules, count, prefix, waitMinutes, proxyList = [], speedFactor = 1.0, selectedTeamId, brightData: bd = null, batchSize: requestedBatchSize = 1 }) {
+  async function runTsSession({ creds, rules, count, prefix, waitMinutes, proxyList = [], speedFactor = 1.0, selectedTeamId, brightData: bd = null, batchSize: requestedBatchSize = 1, botsPerAccount = 0 }) {
     const s = tsSession();
     try {
       // Reuse the token + warmed client cached by Test/verify so cookies and
@@ -5110,6 +5111,10 @@ const ts = require('./lib/trueStudio');
       // Share reference with s.pausedAccounts so tsSnapshot() always sees live data.
       const accountPaused = s.pausedAccounts;
       accountPaused[currentEmail] = accountPaused[currentEmail] || 0; // ensure entry exists
+
+      // botsPerAccount rotation tracker — counts bots created by the current account.
+      // When botsPerAccount > 0, we force-switch after that many bots regardless of rate limits.
+      let botsCreatedByCurrentAccount = 0;
 
       // Build pool: primary account first, then all other saved TS accounts.
       const _poolRaw = tsAccountsRaw();
@@ -5485,6 +5490,21 @@ const ts = require('./lib/trueStudio');
         while (i < count) {
           if (s.cancelRequested) break;
 
+          // ── botsPerAccount forced rotation ───────────────────────────────
+          // When botsPerAccount > 0 and the current account has created that many
+          // bots, force-switch to the next account in the pool BEFORE creating more.
+          if (botsPerAccount > 0 && botsCreatedByCurrentAccount >= botsPerAccount && accountPool.length > 1) {
+            tsLog('info', `⇄ ${currentEmail}: أنجز ${botsCreatedByCurrentAccount}/${botsPerAccount} بوت — تبديل إجباري للحساب التالي…`);
+            const switched = await switchToNextAccount();
+            if (switched) {
+              botsCreatedByCurrentAccount = 0;
+              tsLog('success', `✓ تم التبديل — سيعمل ${currentEmail} الآن`);
+            } else {
+              tsLog('warn', 'لا يوجد حساب آخر متاح — سيكمل الحساب الحالي');
+            }
+            pushTsEvent('ts_progress');
+          }
+
           // Team rotation — evaluated once per batch (sequential, before parallel work)
           if (rules.linkBots && teamId && (teamAppCounts[teamId] || 0) >= 25) {
             const nextTeam = availableTeams.find(t => t.id !== teamId && (teamAppCounts[t.id] || 0) < 25);
@@ -5573,6 +5593,7 @@ const ts = require('./lib/trueStudio');
               const { appPayload, botToken, durationMs } = result.value;
               s.bots.push({ name: slot.name, appId: appPayload.id, botUserId: appPayload.bot?.id || null, token: botToken });
               s.done += 1;
+              botsCreatedByCurrentAccount += 1;
               if (rules.linkBots && teamId) teamAppCounts[teamId] = (teamAppCounts[teamId] || 0) + 1;
               const durSec = durationMs ? (durationMs / 1000).toFixed(1) : null;
               const durLabel = durSec ? ` ⚡ ${durSec}s` : '';
