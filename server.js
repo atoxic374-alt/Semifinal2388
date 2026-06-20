@@ -3994,7 +3994,13 @@ const ts = require('./lib/trueStudio');
       res.status(400).json({ success: false, error: 'Save an avatar or banner first' });
       return;
     }
-    const email = String(req.body?.email || '').toLowerCase();
+    const email      = String(req.body?.email || '').toLowerCase();
+    // appIds: optional array — if provided, only process those bots; otherwise all bots
+    const appIds     = Array.isArray(req.body?.appIds) && req.body.appIds.length
+      ? req.body.appIds.map(String)
+      : null;
+    // name: optional — set as the external app name (no bot username change)
+    const newName    = req.body?.name ? String(req.body.name).trim().slice(0, 32) : null;
 
     // Set SSE headers
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
@@ -4020,8 +4026,12 @@ const ts = require('./lib/trueStudio');
         if (!health.ok) throw new Error('Account blocked: ' + health.message);
 
         const libApps = await ts.listApplications({ token, netOpts });
-        const bots = libApps.filter(a => a && a.bot && a.id);
+        let bots = libApps.filter(a => a && a.bot && a.id);
         if (!bots.length) throw new Error('لا توجد بوتات في المكتبة');
+
+        // Filter to selected bots if appIds provided
+        if (appIds) bots = bots.filter(b => appIds.includes(String(b.id)));
+        if (!bots.length) throw new Error('لم يتم العثور على البوتات المحددة');
 
         send({ type: 'start', total: bots.length });
 
@@ -4031,34 +4041,56 @@ const ts = require('./lib/trueStudio');
           const bot = bots[i];
           let botOk = false, botErr = null, appOk = false, appErr = null;
 
-          try {
-            await withTsRateRetry(`تحديث صورة البوت ${bot.name || bot.id}`, () =>
-              ts.updateBotProfileViaOwner({
-                token, appId: bot.id,
-                avatar: p.avatar || undefined,
-                banner: p.banner || undefined,
-                netOpts,
-              }),
-              { attempts: 2, send }
-            );
-            botOk = true;
-          } catch (e) {
-            botErr = e.message || String(e);
+          // Smart skip: only set avatar/banner if the bot doesn't already have them
+          const botHasAvatar = !!(bot.bot?.avatar);
+          const botHasBanner = !!(bot.bot?.banner);
+          const avatarToSet  = (!botHasAvatar && p.avatar) ? p.avatar : undefined;
+          const bannerToSet  = (!botHasBanner && p.banner) ? p.banner : undefined;
+
+          // Update bot profile (avatar + banner) — only fields that are missing
+          if (avatarToSet !== undefined || bannerToSet !== undefined) {
+            try {
+              await withTsRateRetry(`تحديث صورة البوت ${bot.name || bot.id}`, () =>
+                ts.updateBotProfileViaOwner({
+                  token, appId: bot.id,
+                  avatar: avatarToSet,
+                  banner: bannerToSet,
+                  netOpts,
+                }),
+                { attempts: 2, send }
+              );
+              botOk = true;
+            } catch (e) {
+              botErr = e.message || String(e);
+            }
+          } else {
+            botOk = true; // nothing to change → skip counts as ok
           }
 
-          try {
-            await withTsRateRetry(`تحديث صورة التطبيق ${bot.name || bot.id}`, () =>
-              ts.updateAppVisuals({
-                token, appId: bot.id,
-                icon:       p.avatar || undefined,
-                coverImage: p.banner || undefined,
-                netOpts,
-              }),
-              { attempts: 2, send }
-            );
+          // Update app visuals (icon + cover_image) + name (always if provided)
+          const appHasIcon  = !!(bot.icon);
+          const appHasCover = !!(bot.cover_image);
+          const iconToSet   = (!appHasIcon  && p.avatar) ? p.avatar : undefined;
+          const coverToSet  = (!appHasCover && p.banner) ? p.banner : undefined;
+
+          if (iconToSet !== undefined || coverToSet !== undefined || newName) {
+            try {
+              await withTsRateRetry(`تحديث تطبيق ${bot.name || bot.id}`, () =>
+                ts.updateAppVisuals({
+                  token, appId: bot.id,
+                  icon:       iconToSet,
+                  coverImage: coverToSet,
+                  name:       newName || undefined,
+                  netOpts,
+                }),
+                { attempts: 2, send }
+              );
+              appOk = true;
+            } catch (e) {
+              appErr = e.message || String(e);
+            }
+          } else {
             appOk = true;
-          } catch (e) {
-            appErr = e.message || String(e);
           }
 
           const overallOk = botOk;
@@ -4070,6 +4102,7 @@ const ts = require('./lib/trueStudio');
             appId: bot.id, name: bot.name || bot.id,
             ok: overallOk, error: botErr || undefined,
             appOk, appError: appErr || undefined,
+            skippedAvatar: botHasAvatar, skippedBanner: botHasBanner,
           });
 
           if (i < bots.length - 1) {
@@ -4539,9 +4572,13 @@ const ts = require('./lib/trueStudio');
           id: a.id,
           name: a.name,
           icon: a.icon || null,
+          coverImage: a.cover_image || null,
           isBot: !!a.bot,
           botId: a.bot?.id || null,
           botUsername: a.bot?.username || null,
+          botAvatar: a.bot?.avatar || null,
+          botBanner: a.bot?.banner || null,
+          bot_public: !!a.bot_public,
           createdAt: snowflakeToTs(a.id),
         };
       }

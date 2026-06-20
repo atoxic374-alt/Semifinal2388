@@ -703,15 +703,29 @@ export class TrueStudioManager {
     if (!this.pfp?.avatar && !this.pfp?.banner) { showNotification('احفظ Avatar أو Banner أولاً', 'error'); return; }
     if (this._pfpAllRunning) { showNotification('Pfp all جاري التنفيذ بالفعل…', 'info'); return; }
     if (!this.selectedEmail) { showNotification('اختر حساباً أولاً لتطبيق Pfp all', 'error'); return; }
-    const confirmed = await showConfirm('تطبيق الصورة والبنر المحفوظين على كل بوتات المكتبة؟\n(يُحدَّث البوت + أيقونة/بنر التطبيق في المكتبة)', { confirmText: 'Pfp all', cancelText: 'إلغاء' });
-    if (!confirmed) return;
 
+    // ── Step 1: pick bots (multi-select) ───────────────────────────────────
+    const allBots = this._getAllLibraryBots();
+    if (!allBots.length) { showNotification('لا توجد بوتات في المكتبة — حدّث المكتبة أولاً', 'error'); return; }
+
+    const selectedIds = await this._openPfpBotPickerModal(allBots);
+    if (!selectedIds) return; // cancelled
+
+    // ── Step 2: ask for name ────────────────────────────────────────────────
+    const newName = await this._openPfpNameModal();
+    if (newName === null) return; // cancelled
+
+    // ── Step 3: execute ────────────────────────────────────────────────────
     this._pfpAllRunning = true;
     this._libModal?.querySelectorAll('#ts-lib-pfp-all').forEach(b => { b.disabled = true; });
 
-    const prog = this._openBatchProgressModal('🖼 Pfp all', 'تطبيق الصورة والبنر على بوتات المكتبة…');
+    const targetBots = selectedIds.length ? allBots.filter(b => selectedIds.includes(b.id)) : allBots;
+    const prog = this._openBatchProgressModal(
+      '🖼 Pfp all',
+      `تطبيق على ${targetBots.length} بوت${newName ? ` · الاسم: ${newName}` : ''}…`
+    );
     prog.setIndeterminate(true);
-    prog.setStatus('⏳ جاري تحميل قائمة البوتات…');
+    prog.setStatus('⏳ جاري الاتصال بالخادم…');
 
     let okCount = 0, failCount = 0;
 
@@ -719,10 +733,13 @@ export class TrueStudioManager {
       const resp = await fetch('/api/ts/pfp/apply-all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: this.selectedEmail }),
+        body: JSON.stringify({
+          email:  this.selectedEmail,
+          appIds: selectedIds.length ? selectedIds : undefined,
+          name:   newName || undefined,
+        }),
       });
 
-      // If server responded with a plain JSON error (e.g. no avatar saved)
       if (!resp.ok || !resp.headers.get('content-type')?.includes('text/event-stream')) {
         const body = await resp.json().catch(() => ({}));
         throw new Error(body.error || `HTTP ${resp.status}`);
@@ -746,9 +763,12 @@ export class TrueStudioManager {
           okCount   = (evt.ok ? okCount + 1 : okCount);
           failCount = (evt.ok ? failCount   : failCount + 1);
           prog.setProgress(evt.index, evt.total);
-          // Show per-bot line: bot result + app icon result
-          const appNote = evt.appOk ? '(أيقونة ✓)' : evt.appError ? `(أيقونة ✗: ${evt.appError.slice(0,40)})` : '';
-          prog.logLine(evt.ok ? '✓' : '✗', evt.name, (evt.error ? evt.error.slice(0,60) : '') + (appNote ? ' ' + appNote : ''));
+          const skipNotes = [];
+          if (evt.skippedAvatar) skipNotes.push('صورة موجودة ✓');
+          if (evt.skippedBanner) skipNotes.push('بنر موجود ✓');
+          const appNote = evt.appOk ? '' : evt.appError ? `(App ✗: ${evt.appError.slice(0,40)})` : '';
+          const detail  = [evt.error?.slice(0,50), skipNotes.join(' · '), appNote].filter(Boolean).join(' ');
+          prog.logLine(evt.ok ? '✓' : '✗', evt.name, detail);
 
         } else if (evt.type === 'done') {
           prog.done(evt.okCount, evt.failCount);
@@ -758,13 +778,12 @@ export class TrueStudioManager {
         }
       };
 
-      // Stream read loop
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
         buf += decoder.decode(value, { stream: true });
         const parts = buf.split('\n');
-        buf = parts.pop();          // keep incomplete last chunk
+        buf = parts.pop();
         for (const line of parts) {
           const t = line.trim();
           if (t) try { parseLine(t); } catch (e) { prog.error(e.message || String(e)); break; }
@@ -777,6 +796,109 @@ export class TrueStudioManager {
       this._pfpAllRunning = false;
       this._libModal?.querySelectorAll('#ts-lib-pfp-all').forEach(b => { b.disabled = false; });
     }
+  }
+
+  // Returns flat list of all bots from the cached library (teams + personal)
+  _getAllLibraryBots() {
+    if (!this.library) return [];
+    const bots = [];
+    const seen = new Set();
+    const add = (a) => { if (a.isBot && !seen.has(a.id)) { seen.add(a.id); bots.push(a); } };
+    (this.library.personal || []).forEach(add);
+    (this.library.teams || []).forEach(t => (t.apps || []).forEach(add));
+    return bots;
+  }
+
+  // Multi-select bot picker modal — returns array of selected IDs, or null if cancelled
+  _openPfpBotPickerModal(bots) {
+    return new Promise((resolve) => {
+      document.querySelector('.ts-pfp-picker-overlay')?.remove();
+      const wrap = document.createElement('div');
+      wrap.className = 'ts-pfp-picker-overlay';
+
+      const rows = bots.map(b => {
+        const iconUrl = b.icon ? `https://cdn.discordapp.com/app-icons/${b.id}/${b.icon}.png?size=32` : null;
+        const initials = b.name?.slice(0, 2).toUpperCase() || '??';
+        const hasAvatar = !!b.botAvatar;
+        const hasBanner = !!b.botBanner;
+        return `
+          <label class="ts-pfp-pick-row" data-id="${escapeAttr(b.id)}">
+            <input type="checkbox" value="${escapeAttr(b.id)}" checked>
+            <span class="ts-pfp-pick-icon">
+              ${iconUrl
+                ? `<img src="${iconUrl}" alt="" onerror="this.style.display='none';this.nextSibling.style.display=''"><span style="display:none">${escapeHtml(initials)}</span>`
+                : `<span>${escapeHtml(initials)}</span>`}
+            </span>
+            <span class="ts-pfp-pick-name">${escapeHtml(b.name)}</span>
+            <span class="ts-pfp-pick-hints">
+              ${hasAvatar ? '<span class="ts-pfp-pick-has" title="عنده صورة">🖼</span>' : ''}
+              ${hasBanner ? '<span class="ts-pfp-pick-has" title="عنده بنر">🎨</span>' : ''}
+            </span>
+          </label>`;
+      }).join('');
+
+      wrap.innerHTML = `
+        <div class="ts-pfp-picker-card" role="dialog" aria-modal="true">
+          <div class="ts-pfp-picker-head">
+            <span>🖼 اختر البوتات</span>
+            <div class="ts-pfp-picker-sel-btns">
+              <button class="ts-btn" id="ts-pfp-pick-all">الكل</button>
+              <button class="ts-btn" id="ts-pfp-pick-none">لا شيء</button>
+            </div>
+          </div>
+          <div class="ts-pfp-picker-hint">🔵 صورة موجودة / بنر موجود ← لن يُغيَّر تلقائياً</div>
+          <div class="ts-pfp-pick-list">${rows}</div>
+          <div class="ts-pfp-picker-actions">
+            <button class="ts-btn mint" id="ts-pfp-pick-confirm">تأكيد</button>
+            <button class="ts-btn" id="ts-pfp-pick-cancel">إلغاء</button>
+          </div>
+        </div>`;
+
+      document.body.appendChild(wrap);
+      requestAnimationFrame(() => wrap.classList.add('open'));
+
+      const getChecked = () => [...wrap.querySelectorAll('input[type=checkbox]:checked')].map(c => c.value);
+      wrap.querySelector('#ts-pfp-pick-all').addEventListener('click', () => wrap.querySelectorAll('input[type=checkbox]').forEach(c => c.checked = true));
+      wrap.querySelector('#ts-pfp-pick-none').addEventListener('click', () => wrap.querySelectorAll('input[type=checkbox]').forEach(c => c.checked = false));
+      wrap.querySelector('#ts-pfp-pick-cancel').addEventListener('click', () => { wrap.remove(); resolve(null); });
+      wrap.querySelector('#ts-pfp-pick-confirm').addEventListener('click', () => {
+        const ids = getChecked();
+        wrap.remove();
+        resolve(ids);
+      });
+    });
+  }
+
+  // Name input modal — returns entered name string (can be empty = ''), or null if cancelled
+  _openPfpNameModal() {
+    return new Promise((resolve) => {
+      document.querySelector('.ts-pfp-name-overlay')?.remove();
+      const wrap = document.createElement('div');
+      wrap.className = 'ts-pfp-name-overlay';
+      wrap.innerHTML = `
+        <div class="ts-pfp-name-card" role="dialog" aria-modal="true">
+          <div class="ts-pfp-name-title">📝 اسم البوت (الاسم الخارجي للتطبيق)</div>
+          <div class="ts-pfp-name-hint">سيُحدَّث اسم التطبيق فقط — اسم اليوزر (username) لن يتغير</div>
+          <input class="ts-pfp-name-input" id="ts-pfp-name-inp" type="text"
+            maxlength="32" placeholder="اتركه فارغاً لعدم تغيير الاسم" autocomplete="off" />
+          <div class="ts-pfp-name-actions">
+            <button class="ts-btn mint" id="ts-pfp-name-ok">متابعة</button>
+            <button class="ts-btn" id="ts-pfp-name-cancel">إلغاء</button>
+          </div>
+        </div>`;
+
+      document.body.appendChild(wrap);
+      requestAnimationFrame(() => wrap.classList.add('open'));
+      const inp = wrap.querySelector('#ts-pfp-name-inp');
+      inp.focus();
+
+      const confirm = () => { const v = inp.value.trim(); wrap.remove(); resolve(v); };
+      const cancel  = () => { wrap.remove(); resolve(null); };
+
+      wrap.querySelector('#ts-pfp-name-ok').addEventListener('click', confirm);
+      wrap.querySelector('#ts-pfp-name-cancel').addEventListener('click', cancel);
+      inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') confirm(); if (e.key === 'Escape') cancel(); });
+    });
   }
 
   _renderStatus(s, meta) {
