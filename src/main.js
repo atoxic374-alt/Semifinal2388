@@ -20,7 +20,6 @@ import { AntiPruneManager } from './components/AntiPruneManager.js';
 import { SearchManager } from './components/SearchManager.js';
 import { MassFriendManager } from './components/MassFriendManager.js';
 import { TrueStudioManager } from './components/TrueStudioManager.js';
-import { VoiceManager } from './components/VoiceManager.js';
 import { mountTaskBar } from './utils/taskBar.js';
 import { mountThemedSelect } from './utils/themedSelect.js';
 import { showInfoModal, showTestPreview } from './utils/ui.js';
@@ -186,7 +185,6 @@ window.antiPruneManager = new AntiPruneManager(document.getElementById('antiprun
 window.searchManager    = new SearchManager(document.getElementById('search-page'));
 window.massFriendManager = new MassFriendManager(document.getElementById('massfriend-page'));
 window.trueStudioManager = new TrueStudioManager(document.getElementById('ts-page'));
-window.voiceManager     = new VoiceManager(document.getElementById('voice-page'));
 
 // Mount the top-right features hamburger dropdown
 mountFeaturesMenu(document.querySelector('.window-controls'));
@@ -351,7 +349,6 @@ function switchPage(pageId) {
     case 'search':      window.searchManager.init();                  break;
     case 'massfriend':  window.massFriendManager.init();              break;
     case 'ts':          window.trueStudioManager.init();              break;
-    case 'voice':       window.voiceManager.init();                   break;
   }
 }
 
