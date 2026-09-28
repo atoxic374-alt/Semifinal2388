@@ -5440,6 +5440,7 @@ const ts = require('./lib/trueStudio');
       // ─────────────────────────────────────────────────────────
       // 2) Create bots (optional)
       // ─────────────────────────────────────────────────────────
+      let stopForMissingAccess = false;
       if (rules.createBots) {
         const d = ensureData();
         await ts.navigateTo({ client, page: 'https://discord.com/developers/applications' });
@@ -5695,6 +5696,11 @@ const ts = require('./lib/trueStudio');
               const msg = err?.message || String(err);
               s.failed += 1;
               tsLog('error', 'فشل ' + slot.name + ': ' + msg);
+              if (Number(err?.code) === 50001) {
+                stopForMissingAccess = true;
+                s.lastError = msg;
+                tsLog('warn', 'إيقاف بقية الدفعات: Discord رفض الوصول (50001)؛ لن تُعاد المحاولة تلقائياً.');
+              }
               if (err?.status === 401 || /Unauthorized/i.test(msg)) {
                 tsClearToken(currentEmail);
                 tsLog('error', 'تم إلغاء التوكن من Discord — توقف الجلسة. الحساب قد يكون مُعلَّقاً.');
@@ -5841,6 +5847,7 @@ const ts = require('./lib/trueStudio');
           writeData(d);
           pushTsEvent('ts_progress');
 
+          if (stopForMissingAccess) break;
           if (batchHad401) break;
           if (batchDurationMs > LONG_CREATE_REFRESH_MS && !s.pendingCaptcha && !s.cancelRequested) {
             await refreshDeveloperContext(`دفعة الإنشاء أخذت ${Math.ceil(batchDurationMs / 1000)}s`);
@@ -5861,7 +5868,7 @@ const ts = require('./lib/trueStudio');
         }
       }
 
-      finalizeTs();
+      finalizeTs(stopForMissingAccess);
     } catch (e) {
       s.lastError = e.message || String(e);
       tsLog('error', 'خطأ في الجلسة: ' + s.lastError);
